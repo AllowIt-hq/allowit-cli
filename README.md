@@ -9,7 +9,7 @@ Go, standard library only.
 `github.com/ackrate/allowit-cli` is private; installing needs authorized GitHub access. There is no public download.
 
 ```sh
-GOPRIVATE=github.com/ackrate/* go install github.com/ackrate/allowit-cli/cmd/allowit@VERSION   # release tag or commit
+GOPRIVATE=github.com/ackrate/* go install github.com/ackrate/allowit-cli/cmd/allowit@v0.1.0
 allowit version
 ```
 
