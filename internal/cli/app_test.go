@@ -428,6 +428,45 @@ func TestInvalidResultsAreUncertain(t *testing.T) {
 	}
 }
 
+// A retry that gets a definite refusal cannot undo the uncertainty of an
+// earlier attempt that the server processed.
+func TestDefiniteRetryAnswerAfterProcessedAttemptIsUncertain(t *testing.T) {
+	for _, gateway := range []bool{false, true} {
+		for _, code := range []int{400, 401, 409, 429} {
+			f, _ := newFake(t, localDev)
+			if !gateway {
+				f.locked(func() { f.dropFirst = 1 })
+			}
+			var hits int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasSuffix(r.URL.Path, "/transactions") {
+					f.ServeHTTP(w, r)
+					return
+				}
+				f.locked(func() { hits++ })
+				switch {
+				case hits > 1:
+					w.WriteHeader(code)
+					io.WriteString(w, `{"error":"refused"}`)
+				case gateway: // processed, then the gateway fails
+					f.ServeHTTP(httptest.NewRecorder(), r)
+					w.WriteHeader(502)
+				default: // processed, then the connection drops
+					f.ServeHTTP(w, r)
+				}
+			}))
+			r := runCLI(t, env(srv), "exec", policyID, "--amount", "1", "--action", "research", "--request-id", "order-0010")
+			srv.Close()
+			var n int
+			f.locked(func() { n = hits })
+			if r.code != exitUncertain || !strings.Contains(r.stderr, "HTTP "+fmt.Sprint(code)) || !strings.Contains(r.stderr, "earlier attempt that may have been processed") ||
+				!strings.Contains(r.stderr, "Retry only by rerunning the same command with --request-id order-0010") || f.clients() != 1 || n != 2 {
+				t.Fatalf("gateway=%v %d: clients=%d hits=%d %+v", gateway, code, f.clients(), n, r)
+			}
+		}
+	}
+}
+
 func TestUnexpectedHTTPAnswersToPostAreUncertain(t *testing.T) {
 	for _, code := range []int{201, 202, 204, 303, 307} {
 		f, _ := newFake(t, localDev)

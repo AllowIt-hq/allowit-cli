@@ -81,6 +81,16 @@ func (c *client) call(method, action string, body []byte, out any) error {
 		return errors.New("request is larger than the 64 KB limit")
 	}
 	var last error
+	// Once a POST attempt may have been processed, a definite failure of a
+	// retry (409, 429, 401, TLS...) no longer proves the request was not applied.
+	processed := false
+	final := func(err error) error {
+		var ue *uncertainError
+		if !processed || errors.As(err, &ue) {
+			return err
+		}
+		return &uncertainError{fmt.Errorf("%v (after an earlier attempt that may have been processed: %v)", err, last)}
+	}
 	for attempt := 0; attempt <= c.retries; attempt++ {
 		if attempt > 0 {
 			c.sleep(time.Duration(attempt) * time.Second)
@@ -89,13 +99,13 @@ func (c *client) call(method, action string, body []byte, out any) error {
 		if err != nil {
 			var ce *configError
 			if errors.As(err, &ce) {
-				return err
+				return final(err)
 			}
-			last = err
+			last, processed = err, method != "GET"
 			continue
 		}
 		if status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout {
-			last = &uncertainError{&apiError{status, errorMessage(data)}}
+			last, processed = &uncertainError{&apiError{status, errorMessage(data)}}, method != "GET"
 			continue
 		}
 		if status >= 300 && status < 400 {
@@ -104,14 +114,14 @@ func (c *client) call(method, action string, body []byte, out any) error {
 				// A POST may have been processed before the redirect.
 				return &uncertainError{err}
 			}
-			return &configError{err}
+			return final(&configError{err})
 		}
 		if status != http.StatusOK {
 			// 5xx and unexpected 2xx do not prove the request was refused.
 			if status >= 500 || status >= 200 && status < 300 {
 				return &uncertainError{&apiError{status, errorMessage(data)}}
 			}
-			return &apiError{status, errorMessage(data)}
+			return final(&apiError{status, errorMessage(data)})
 		}
 		d := json.NewDecoder(bytes.NewReader(data))
 		d.UseNumber()
