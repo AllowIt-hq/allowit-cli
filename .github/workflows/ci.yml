@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make test
+      - name: Build static Linux binary
+        run: make dist
+      - name: Check the binary is static and runs
+        run: |
+          file dist/allowit-linux-amd64 | grep -q 'statically linked'
+          ./dist/allowit-linux-amd64 version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: allowit-linux-amd64
+          path: dist/
+          retention-days: 14

@@ -1,0 +1,6 @@
+/dist/
+/allowit
+/allowit-*
+*.test
+*.out
+.env*
