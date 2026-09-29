@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const Version = "0.1.0"
+const Version = "0.1.1"
 
 const usage = `allowit sends actions through an AllowIt policy.
 
@@ -45,11 +45,14 @@ Request flags:
   --json               machine-readable output
 
 Exit codes: 0 passed/recorded/settled, 2 usage, 3 config or auth, 4 rejected,
-5 uncertain network result (rerun the identical command), 10 owner signature
-(or passed but not yet complete), 11 awaiting owner input, 12 pending, 20 denied.
+5 uncertain result (retry only as printed, with the same --request-id), 10 owner
+signature (or passed but not yet complete), 11 awaiting owner input, 12 pending,
+20 denied.
 
 Request IDs: give each intended operation its own --request-id and separate IDs
-for eval and exec; rerun with the same ID only to retry the same request.
+for eval and exec; rerun with the same ID only to retry the same request. After
+exit 5 never retry with a new ID: rerun with the printed --request-id, or check
+the printed server requestId with allowit status.
 `
 
 // App holds the process environment so tests can run commands in-process.
@@ -291,25 +294,49 @@ func (a App) request(kind string, args []string, out, errOut printer) (int, erro
 	}
 	body.RequestID = f.requestID
 	if body.RequestID == "" {
-		body.RequestID = requestID(kind, c.cfg, s, body)
+		body.RequestID = requestID(kind, c.cfg, body)
 	}
 	action := "judge"
 	if kind == "exec" {
 		action = "transactions"
 	}
+	// Print the ID before sending, so it survives even if this process does not.
 	errOut.printf("allowit: %s request %s (budget charge %s USDC)\n", kind, body.RequestID, body.Amount)
+	if kind == "exec" {
+		errOut.printf("allowit: if the result is unknown, retry only with --request-id %s\n", body.RequestID)
+	}
 	var r map[string]any
 	if err := c.call("POST", action, encodeJSON(body), &r); err != nil {
 		var un *uncertainError
 		if errors.As(err, &un) {
-			return 0, fmt.Errorf("%w\nThe request may have reached AllowIt. Rerun the identical command: it reuses request ID %s and cannot be applied twice", err, body.RequestID)
+			return 0, fmt.Errorf("%w\nThe request may have reached AllowIt. Do not retry with a new request ID. Retry only by rerunning the same command with --request-id %s: AllowIt applies a request ID at most once", err, body.RequestID)
 		}
 		return 0, err
 	}
-	if str(r["outcome"]) == "pending" {
-		if r, err = a.poll(c, str(r["requestId"]), *wait, r); err != nil {
-			return 0, err
+	// From here AllowIt has accepted the request: any failure to read its
+	// result is uncertain, never a rejection.
+	unknown := func(err error) error {
+		msg := fmt.Sprintf("%v\nAllowIt accepted %s request %s", err, kind, body.RequestID)
+		next := ""
+		if id := str(r["requestId"]); requestIDPattern.MatchString(id) {
+			msg += " (server requestId " + id + ")"
+			next = fmt.Sprintf("allowit status %s %s --wait 60s, or ", pos[0], id)
 		}
+		return &uncertainError{fmt.Errorf("%s, but its result is unknown. Do not retry with a new request ID. Check it with %srerun the same command with --request-id %s", msg, next, body.RequestID)}
+	}
+	if err := checkResult(r, kind, s.local()); err != nil {
+		return 0, unknown(err)
+	}
+	if str(r["outcome"]) == "pending" {
+		id := str(r["requestId"])
+		if !requestIDPattern.MatchString(id) {
+			return 0, unknown(errors.New("AllowIt returned a pending result without a valid requestId"))
+		}
+		next, err := a.poll(c, id, *wait, r, kind, s.local())
+		if err != nil {
+			return 0, unknown(err)
+		}
+		r = next
 	}
 	res := classify(r, kind)
 	if *asJSON {
@@ -343,13 +370,21 @@ func (a App) status(args []string, out printer) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// The network decides whether a completed result is a mock or on chain.
+	s, _, err := c.skill()
+	if err != nil {
+		return 0, err
+	}
 	var r map[string]any
 	if err := c.call("POST", "status", encodeJSON(map[string]string{"requestId": pos[1]}), &r); err != nil {
 		return 0, err
 	}
+	if err := checkStatus(r, pos[1], s.local()); err != nil {
+		return 0, &uncertainError{fmt.Errorf("%v\nThe state of request %s is unknown; check again with allowit status", err, pos[1])}
+	}
 	if o := str(r["outcome"]); o == "pending" || (o == "awaiting_input" || str(r["status"]) == "submitted" || str(r["status"]) == "ready") && *wait > 0 {
-		if r, err = a.poll(c, pos[1], *wait, r); err != nil {
-			return 0, err
+		if r, err = a.poll(c, pos[1], *wait, r, "status", s.local()); err != nil {
+			return 0, &uncertainError{fmt.Errorf("%v\nThe state of request %s is unknown; check again with allowit status", err, pos[1])}
 		}
 	}
 	res := classify(r, "status")
@@ -362,14 +397,23 @@ func (a App) status(args []string, out printer) (int, error) {
 	return res.Exit, nil
 }
 
-// poll re-reads a request until its state changes or wait elapses.
-func (a App) poll(c *client, id string, wait time.Duration, r map[string]any) (map[string]any, error) {
+// poll re-reads a request until its state changes or wait elapses. The request
+// is known to exist, so every failure here means its state is unknown.
+func (a App) poll(c *client, id string, wait time.Duration, r map[string]any, command string, local bool) (map[string]any, error) {
 	start := str(r["status"])
 	for elapsed := time.Duration(0); elapsed < wait; elapsed += a.PollInterval {
 		a.Sleep(a.PollInterval)
 		var next map[string]any
 		if err := c.call("POST", "status", encodeJSON(map[string]string{"requestId": id}), &next); err != nil {
+			return nil, fmt.Errorf("checking the request status failed: %v", err)
+		}
+		if err := checkStatus(next, id, local); err != nil {
 			return nil, err
+		}
+		if command != "status" {
+			if err := checkResult(next, command, local); err != nil {
+				return nil, err
+			}
 		}
 		r = next
 		if str(r["status"]) != start {
@@ -377,6 +421,17 @@ func (a App) poll(c *client, id string, wait time.Duration, r map[string]any) (m
 		}
 	}
 	return r, nil
+}
+
+// checkStatus validates a /status result for the request that was asked for.
+func checkStatus(r map[string]any, id string, local bool) error {
+	if err := checkResult(r, "status", local); err != nil {
+		return err
+	}
+	if got := str(r["requestId"]); got != "" && got != id {
+		return fmt.Errorf("AllowIt returned the status of a different request (%s)", got)
+	}
+	return nil
 }
 
 const maxWait = 10 * time.Minute

@@ -157,6 +157,102 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+func TestCheckResult(t *testing.T) {
+	valid := []struct {
+		r       map[string]any
+		command string
+		local   bool
+	}{
+		// The documented combinations, with and without the optional booleans and kind.
+		{map[string]any{"outcome": "fail", "status": "denied", "code": "BUDGET_EXCEEDED"}, "exec", true},
+		{map[string]any{"outcome": "fail", "status": "denied", "executed": false, "localRecorded": false, "kind": "judgment"}, "eval", false},
+		{map[string]any{"outcome": "pass", "status": "ready", "executed": false, "localRecorded": false}, "eval", true},
+		{map[string]any{"outcome": "pass", "status": "ready", "kind": "judgment"}, "status", false},
+		{map[string]any{"outcome": "pass", "status": "ready", "kind": "transaction", "executed": false}, "exec", false},
+		{map[string]any{"outcome": "pass", "status": "ready"}, "status", false},
+		{map[string]any{"outcome": "pass", "status": "recorded", "localRecorded": true, "executed": false, "kind": "transaction"}, "exec", true},
+		{map[string]any{"outcome": "pass", "status": "settled", "executed": true, "localRecorded": false, "kind": "transaction"}, "status", false},
+		{map[string]any{"outcome": "pass", "status": "submitted", "executed": false}, "exec", false},
+		{map[string]any{"outcome": "pending", "status": "evaluating", "requestId": "srv-1"}, "exec", false},
+		{map[string]any{"outcome": "awaiting_input", "status": "awaiting_input", "prompt": "?"}, "exec", true},
+	}
+	for _, c := range valid {
+		if err := checkResult(c.r, c.command, c.local); err != nil {
+			t.Errorf("%v %s: %v", c.r, c.command, err)
+		}
+	}
+	invalid := []struct {
+		r       map[string]any
+		command string
+		local   bool
+	}{
+		{nil, "exec", true},
+		{map[string]any{}, "status", false},
+		{map[string]any{"outcome": nil}, "exec", false},
+		{map[string]any{"outcome": "weird"}, "exec", false},
+		{map[string]any{"outcome": "pass", "status": 3}, "exec", false},
+		{map[string]any{"outcome": "pass", "localRecorded": "yes"}, "exec", true},
+		{map[string]any{"outcome": "fail", "executed": true}, "exec", false},
+		{map[string]any{"outcome": "fail", "status": "submitted"}, "status", false},
+		{map[string]any{"outcome": "pending", "status": "recorded"}, "exec", true},
+		{map[string]any{"outcome": "pass", "status": "denied"}, "exec", false},
+		{map[string]any{"outcome": "pass", "status": "settled", "executed": true}, "status", true},
+		{map[string]any{"outcome": "pass", "executed": true}, "exec", true},
+		{map[string]any{"outcome": "pass", "status": "recorded"}, "status", false},
+		{map[string]any{"outcome": "pass", "status": "settled", "localRecorded": true}, "status", true},
+		{map[string]any{"outcome": "pass", "status": "ready", "kind": "transaction"}, "eval", false},
+		{map[string]any{"outcome": "pass", "status": "ready", "kind": "judgment"}, "exec", false},
+		{map[string]any{"outcome": "pass", "status": "submitted", "kind": "judgment"}, "status", false},
+		{map[string]any{"outcome": "pass", "status": "recorded", "localRecorded": true}, "eval", true},
+		// Incomplete or contradictory known outcomes.
+		{map[string]any{"outcome": "pass"}, "eval", false},
+		{map[string]any{"outcome": "pass", "status": ""}, "exec", false},
+		{map[string]any{"outcome": "pass", "status": "evaluating"}, "exec", false},
+		{map[string]any{"outcome": "pass", "status": "awaiting_input"}, "exec", false},
+		{map[string]any{"outcome": "pass", "status": "something-new"}, "status", false},
+		{map[string]any{"outcome": "pending", "status": "denied"}, "exec", false},
+		{map[string]any{"outcome": "pending"}, "exec", false},
+		{map[string]any{"outcome": "awaiting_input", "status": "evaluating"}, "exec", false},
+		{map[string]any{"outcome": "fail"}, "exec", false},
+		{map[string]any{"outcome": "fail", "status": "evaluating"}, "exec", false},
+		{map[string]any{"outcome": "deny", "status": "denied"}, "exec", false},
+		{map[string]any{"outcome": "pass", "status": "settled", "executed": false}, "status", false},
+		{map[string]any{"outcome": "pass", "status": "settled"}, "status", false},
+		{map[string]any{"outcome": "pass", "status": "recorded", "localRecorded": false}, "exec", true},
+		{map[string]any{"outcome": "pass", "status": "recorded"}, "exec", true},
+		{map[string]any{"outcome": "pass", "status": "ready", "executed": true}, "exec", false},
+		{map[string]any{"outcome": "pass", "status": "ready", "localRecorded": true}, "exec", true},
+		{map[string]any{"outcome": "pass", "status": "submitted", "executed": true}, "status", false},
+		{map[string]any{"outcome": "pass", "status": "submitted"}, "exec", true},
+		{map[string]any{"outcome": "fail", "status": "denied", "executed": true}, "exec", false},
+		{map[string]any{"outcome": "pass", "status": "ready", "kind": "payout"}, "status", false},
+		{map[string]any{"outcome": "fail", "status": "denied", "kind": "payout"}, "exec", false},
+	}
+	for _, c := range invalid {
+		if err := checkResult(c.r, c.command, c.local); err == nil {
+			t.Errorf("%v %s local=%v accepted", c.r, c.command, c.local)
+		}
+	}
+}
+
+func TestRequestIDIgnoresServerState(t *testing.T) {
+	cfg := &Config{Owner: owner, Policy: policyID}
+	plan := func(amount string) *Body {
+		return &Body{Amount: amount, Token: "USDC", Action: "transferXLM", Recipient: stellarAccount, Execution: &Plan{Rail: "stellar", Asset: "XLM", Quantity: "5"}}
+	}
+	// A plan's charge follows the published test rate; the plan is the request.
+	if requestID("exec", cfg, plan("0.5")) != requestID("exec", cfg, plan("0.6")) {
+		t.Error("a published rate change changed the plan request ID")
+	}
+	budget := func(amount string) *Body { return &Body{Amount: amount, Token: "USDC", Action: "research"} }
+	if requestID("exec", cfg, budget("1")) == requestID("exec", cfg, budget("2")) {
+		t.Error("different USDC amounts share a request ID")
+	}
+	if requestID("exec", cfg, budget("1")) == requestID("eval", cfg, budget("1")) {
+		t.Error("eval shares the exec ID")
+	}
+}
+
 func TestRuntimeContextLimits(t *testing.T) {
 	deep := strings.Repeat(`{"a":`, 9) + "1" + strings.Repeat("}", 9)
 	if _, err := runtimeContext([]byte(deep)); err == nil {

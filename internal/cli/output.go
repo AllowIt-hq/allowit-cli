@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -38,10 +39,10 @@ func classify(r map[string]any, command string) result {
 		kind = "transaction"
 	}
 	switch {
-	case r["executed"] == true || status == "settled":
-		return result{"settled", exitOK, "The transfer is confirmed on chain."}
 	case r["localRecorded"] == true || status == "recorded":
 		return result{"recorded", exitOK, "Local dev: the action was recorded against the policy budget. No funds moved; a mock receipt is not proof of payment."}
+	case r["executed"] == true || status == "settled":
+		return result{"settled", exitOK, "The transfer is confirmed on chain."}
 	case outcome == "awaiting_input":
 		return result{"awaiting_input", exitAwaitingInput, "The owner must answer this question in AllowIt. Stop, report the prompt, then check again with `allowit status`."}
 	case outcome == "pending":
@@ -56,6 +57,68 @@ func classify(r map[string]any, command string) result {
 		return result{"owner_signature", exitOwnerSignature, "The policy passed. The owner must review and sign this transfer in AllowIt; nothing has been paid yet."}
 	}
 	return result{"ready", exitOwnerSignature, "The policy passed, but this request is not complete: nothing is confirmed as recorded or paid. Check again with `allowit status`."}
+}
+
+// knownStates lists the status each outcome may carry. Anything else is
+// incomplete or contradictory and is reported as uncertain.
+var knownStates = map[string]map[string]bool{
+	"pass":           {"ready": true, "submitted": true, "recorded": true, "settled": true},
+	"pending":        {"evaluating": true},
+	"awaiting_input": {"awaiting_input": true},
+	"fail":           {"denied": true},
+}
+
+// checkResult rejects a harness result the CLI cannot report with certainty:
+// a missing or unknown outcome or status, mistyped fields, or fields that
+// contradict each other, the command or the policy's network. Only a
+// consistent result may be reported as passed, recorded, settled or denied.
+func checkResult(r map[string]any, command string, local bool) error {
+	if r == nil {
+		return errors.New("AllowIt returned an empty result")
+	}
+	outcome, ok := r["outcome"].(string)
+	if !ok {
+		return errors.New("AllowIt returned a result without an outcome")
+	}
+	for _, k := range []string{"status", "kind", "requestId"} {
+		if v := r[k]; v != nil {
+			if _, ok := v.(string); !ok {
+				return fmt.Errorf("AllowIt returned a result with an invalid %s", k)
+			}
+		}
+	}
+	for _, k := range []string{"executed", "localRecorded"} {
+		if v := r[k]; v != nil {
+			if _, ok := v.(bool); !ok {
+				return fmt.Errorf("AllowIt returned a result with an invalid %s", k)
+			}
+		}
+	}
+	status, kind := str(r["status"]), str(r["kind"])
+	executed, recorded := r["executed"] == true, r["localRecorded"] == true
+	states, ok := knownStates[outcome]
+	switch {
+	case !ok:
+		return fmt.Errorf("AllowIt returned an unknown outcome %q", outcome)
+	case !states[status]:
+		return fmt.Errorf("AllowIt returned outcome %q with status %q", outcome, status)
+	// executed and localRecorded must agree with the status, never override it.
+	case executed != (status == "settled"):
+		return fmt.Errorf("AllowIt returned status %q with executed %v", status, r["executed"])
+	case recorded != (status == "recorded"):
+		return fmt.Errorf("AllowIt returned status %q with localRecorded %v", status, r["localRecorded"])
+	case local && (status == "settled" || status == "submitted"):
+		return errors.New("AllowIt reported an on-chain transaction for a Local dev policy")
+	case !local && status == "recorded":
+		return errors.New("AllowIt reported a mock recording for a wallet policy")
+	case kind != "" && kind != "judgment" && kind != "transaction":
+		return fmt.Errorf("AllowIt returned an unknown kind %q", kind)
+	case command == "eval" && kind == "transaction", command == "exec" && kind == "judgment":
+		return fmt.Errorf("AllowIt returned a %q result for %s", kind, command)
+	case (command == "eval" || kind == "judgment") && (status == "settled" || status == "recorded" || status == "submitted"):
+		return errors.New("AllowIt reported a spend for a permission check")
+	}
+	return nil
 }
 
 func str(v any) string {

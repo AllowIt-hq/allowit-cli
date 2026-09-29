@@ -39,6 +39,8 @@ type fakeHarness struct {
 	respond   func(action string, body map[string]any) map[string]any
 	dropFirst int // hang up after reading this many transaction bodies
 	hits      int
+	revision  int            // policy revision published by /skill (default 3)
+	rails     map[string]any // wallet rails published by /skill
 }
 type recorded struct {
 	Action string
@@ -144,7 +146,7 @@ func (f *fakeHarness) reply(w http.ResponseWriter, action string, res map[string
 func (f *fakeHarness) skill() map[string]any {
 	s := map[string]any{
 		"name": "AllowIt policy Research budget", "title": "Research budget", "policyId": policyID, "owner": owner, "status": "active",
-		"network": f.network, "revision": 3, "sourceHash": "abcdef0123456789abcdef", "language": "allowit-rust-v1",
+		"network": f.network, "revision": 3 + f.revision, "sourceHash": fmt.Sprintf("abcdef0123456789abcdef%d", f.revision), "language": "allowit-rust-v1",
 		"originalIntent": "Buy original research datasets.\n\nRevision request:\nNever above 5 USDC.",
 		"policy":         "pub async fn evaluate(ctx:&Context)->PolicyResult{Ok(())}",
 		"authorization":  "Bearer " + token, "accessUrl": "https://allowit.example/api/harness/x/y/skill.md?access_token=" + token,
@@ -157,6 +159,9 @@ func (f *fakeHarness) skill() map[string]any {
 	} else {
 		s["executionMode"] = "owner_signed"
 		s["capabilities"] = map[string]any{"rail": "solana", "assets": []any{"USDC"}, "rails": map[string]any{"solana": []any{"USDC"}}}
+		if f.rails != nil {
+			s["capabilities"].(map[string]any)["rails"] = f.rails
+		}
 	}
 	return s
 }
@@ -301,12 +306,137 @@ func TestUncertainFailureRetriesSameRequest(t *testing.T) {
 	}
 	f.locked(func() { f.dropFirst = 10 })
 	r = runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "2")
-	if r.code != exitUncertain || !strings.Contains(r.stderr, "Rerun the identical command") || !strings.Contains(r.stderr, "cli-exec-") {
+	_, last := f.last(t)
+	id := strings.Trim(string(last["requestId"]), `"`)
+	if r.code != exitUncertain || !strings.Contains(r.stderr, "Retry only by rerunning the same command with --request-id "+id) || !strings.Contains(r.stderr, "Do not retry with a new request ID") {
 		t.Fatal(r)
 	}
-	f.locked(func() { f.dropFirst = 0 })
+	// The ID is printed before the request is sent.
+	if !strings.HasPrefix(r.stderr, "allowit: exec request "+id) || !strings.Contains(r.stderr, "retry only with --request-id "+id) {
+		t.Fatal(r.stderr)
+	}
+	// The owner edits the policy before the retry: the derived ID must not change.
+	f.locked(func() { f.dropFirst, f.revision = 0, 1 })
 	if again := runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "2"); again.code != 0 || f.clients() != 2 {
-		t.Fatal("rerun after uncertain failure created another spend", again, f.clients())
+		t.Fatal("rerun after a policy revision created another spend", again, f.clients())
+	}
+	// So does the printed explicit retry.
+	if again := runCLI(t, env(srv), "exec", policyID, "--request-id", id, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "2"); again.code != 0 || f.clients() != 2 {
+		t.Fatal("explicit retry created another spend", again, f.clients())
+	}
+}
+
+// harnessWith serves f, except for the actions override answers.
+func harnessWith(t *testing.T, f *fakeHarness, override func(action string) (int, string, bool)) *httptest.Server {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		action := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		if code, body, ok := override(action); ok {
+			f.locked(func() { f.requests = append(f.requests, recorded{Action: action}) })
+			w.WriteHeader(code)
+			io.WriteString(w, body)
+			return
+		}
+		f.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestAcceptedExecWithUnreadableStatusIsUncertain(t *testing.T) {
+	for _, status := range []struct {
+		code int
+		body string
+	}{{400, `{"error":"Check the request fields and try again."}`}, {404, `{"error":"Request not found."}`}, {429, `{"error":"Slow down."}`}, {403, `{"error":"Forbidden."}`}, {200, `null`}, {200, `{}`}, {200, `{"outcome":"pass","status":"ready","requestId":"srv-other-99"}`}} {
+		f, _ := newFake(t, localDev)
+		f.respond = func(string, map[string]any) map[string]any {
+			return map[string]any{"outcome": "pending", "status": "evaluating", "requestId": "srv-pending-7"}
+		}
+		srv := harnessWith(t, f, func(action string) (int, string, bool) { return status.code, status.body, action == "status" })
+		for _, extra := range [][]string{nil, {"--json"}} {
+			r := runCLI(t, env(srv), append([]string{"exec", policyID, "--amount", "1", "--action", "research", "--request-id", "order-0007"}, extra...)...)
+			if r.code != exitUncertain || strings.Contains(r.stdout, "state:") || !strings.Contains(r.stderr, "AllowIt accepted exec request order-0007 (server requestId srv-pending-7)") ||
+				!strings.Contains(r.stderr, "allowit status "+policyID+" srv-pending-7") || !strings.Contains(r.stderr, "--request-id order-0007") || !strings.Contains(r.stderr, "Do not retry with a new request ID") {
+				t.Fatalf("%d %s: %+v", status.code, status.body, r)
+			}
+		}
+		if f.clients() != 1 {
+			t.Fatal("retry created a second request")
+		}
+	}
+	// Without a server requestId the pending result cannot be polled; the client ID remains.
+	f, srv := newFake(t, localDev)
+	f.respond = func(string, map[string]any) map[string]any {
+		return map[string]any{"outcome": "pending", "status": "evaluating"}
+	}
+	r := runCLI(t, env(srv), "exec", policyID, "--amount", "1", "--action", "research", "--request-id", "order-0008")
+	if r.code != exitUncertain || !strings.Contains(r.stderr, "without a valid requestId") || !strings.Contains(r.stderr, "--request-id order-0008") || strings.Contains(r.stderr, "allowit status") {
+		t.Fatal(r)
+	}
+}
+
+func TestInvalidResultsAreUncertain(t *testing.T) {
+	for _, c := range []struct {
+		network, cmd, body string
+	}{
+		{localDev, "exec", `null`},
+		{localDev, "exec", `{}`},
+		{localDev, "eval", `{}`},
+		{localDev, "exec", `{"outcome":"weird","requestId":"srv-x-12345678"}`},
+		{localDev, "exec", `{"outcome":1}`},
+		{localDev, "exec", `{"outcome":"pass","executed":"true"}`},
+		{localDev, "exec", `{"outcome":"fail","status":"recorded","localRecorded":true}`},
+		{localDev, "exec", `{"outcome":"fail","status":"ready"}`},
+		{localDev, "exec", `{"outcome":"pass","status":"denied"}`},
+		{localDev, "exec", `{"outcome":"pass","status":"settled","executed":true}`},
+		{localDev, "exec", `{"outcome":"pass","status":"recorded","localRecorded":true,"executed":true}`},
+		{"solana:devnet", "exec", `{"outcome":"pass","status":"recorded","localRecorded":true}`},
+		{"solana:devnet", "exec", `{"outcome":"pass","status":"ready","kind":"judgment"}`},
+		{"solana:devnet", "eval", `{"outcome":"pass","status":"ready","kind":"transaction"}`},
+		{"solana:devnet", "eval", `{"outcome":"pass","status":"settled","executed":true}`},
+		{"solana:devnet", "exec", `{"outcome":"pending","status":"settled","executed":true,"requestId":"srv-x-12345678"}`},
+		// Known outcomes with missing or contradicting state evidence.
+		{"solana:devnet", "exec", `{"outcome":"pass","status":"ready","executed":true}`},
+		{"solana:devnet", "eval", `{"outcome":"pass"}`},
+		{"solana:devnet", "exec", `{"outcome":"pass","status":"evaluating"}`},
+		{"solana:devnet", "exec", `{"outcome":"pending","status":"denied","requestId":"srv-x-12345678"}`},
+		{"solana:devnet", "exec", `{"outcome":"pass","status":"settled","executed":false}`},
+		{localDev, "exec", `{"outcome":"pass","status":"recorded","localRecorded":false}`},
+		{"solana:devnet", "exec", `{"outcome":"fail"}`},
+		{"solana:devnet", "exec", `{"outcome":"fail","status":"denied","kind":"payout"}`},
+	} {
+		f, _ := newFake(t, c.network)
+		srv := harnessWith(t, f, func(action string) (int, string, bool) {
+			return 200, c.body, action == "judge" || action == "transactions"
+		})
+		for _, extra := range [][]string{nil, {"--json"}} {
+			args := append([]string{c.cmd, policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "1"}, extra...)
+			r := runCLI(t, env(srv), args...)
+			if r.code != exitUncertain || r.stdout != "" || !strings.Contains(r.stderr, "but its result is unknown") {
+				t.Fatalf("%s %s %v: %+v", c.network, c.body, extra, r)
+			}
+		}
+	}
+	// The same checks apply to status results.
+	for _, body := range []string{`null`, `{}`, `{"outcome":"pass","status":"settled","executed":true}`, `{"outcome":"pass","status":"ready","requestId":"srv-other-99"}`} {
+		f, _ := newFake(t, localDev)
+		srv := harnessWith(t, f, func(action string) (int, string, bool) { return 200, body, action == "status" })
+		for _, extra := range [][]string{nil, {"--json"}} {
+			if r := runCLI(t, env(srv), append([]string{"status", policyID, "srv-status-1"}, extra...)...); r.code != exitUncertain || r.stdout != "" {
+				t.Fatal(body, r)
+			}
+		}
+	}
+}
+
+func TestUnexpectedHTTPAnswersToPostAreUncertain(t *testing.T) {
+	for _, code := range []int{201, 202, 204, 303, 307} {
+		f, _ := newFake(t, localDev)
+		srv := harnessWith(t, f, func(action string) (int, string, bool) {
+			return code, `{"outcome":"fail"}`, action == "transactions"
+		})
+		if r := runCLI(t, env(srv), "exec", policyID, "--amount", "1", "--action", "research", "--request-id", "order-0009"); r.code != exitUncertain || !strings.Contains(r.stderr, "--request-id order-0009") {
+			t.Fatal(code, r)
+		}
 	}
 }
 
@@ -388,6 +518,15 @@ func TestWalletPolicyRules(t *testing.T) {
 	_, body := f.last(t)
 	if _, has := body["execution"]; has || string(body["amount"]) != `"2.5"` || string(body["merchant"]) != `"research.example"` {
 		t.Fatal(body)
+	}
+	// Even if the service advertises other assets, wallet requests carry no
+	// asset and are always USDC; anything else must not be sent as USDC.
+	f.locked(func() { f.rails = map[string]any{"solana": []any{"SOL", "USDC"}, "stellar": []any{"XLM", "USDC"}} })
+	before := len(f.sent())
+	for _, args := range [][]string{{"--rail", "solana", "--op", "transferSOL"}, {"--rail", "stellar", "--op", "transferUSDC"}} {
+		if r := runCLI(t, env(srv), append(append([]string{"exec", policyID}, args...), "--addr", solanaAccount, "--amount", "5")...); r.code != exitUsage || len(f.sent()) != before {
+			t.Fatal(args, r)
+		}
 	}
 }
 

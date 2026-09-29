@@ -9,7 +9,7 @@ Go, standard library only.
 `github.com/ackrate/allowit-cli` is private; installing needs authorized GitHub access. There is no public download.
 
 ```sh
-GOPRIVATE=github.com/ackrate/* go install github.com/ackrate/allowit-cli/cmd/allowit@v0.1.0
+GOPRIVATE=github.com/ackrate/* go install github.com/ackrate/allowit-cli/cmd/allowit@v0.1.1
 allowit version
 ```
 
@@ -61,7 +61,7 @@ allowit status POLICY REQUEST_ID [--wait 60s]
 
 | Flag | Meaning |
 |---|---|
-| `--rail solana\|stellar`, `--op transferSOL\|transferXLM\|transferUSDC` | Transfer on a rail. Local dev: Solana SOL/USDC, Stellar XLM/USDC (mock plan). Wallet networks: `--rail solana --op transferUSDC` only. |
+| `--rail solana\|stellar`, `--op transferSOL\|transferXLM\|transferUSDC` | Transfer on a rail. Local dev: Solana SOL/USDC, Stellar XLM/USDC (mock plan). Wallet networks: `--rail solana --op transferUSDC` only (enforced by the CLI, whatever the service advertises). |
 | `--addr` | Recipient (Solana base58 or Stellar G/M/C strkey), checked offline and again by the server. |
 | `--amount` | Asset quantity as an exact decimal (USDC amount without `--op`). |
 | `--action`, `--merchant` | Policy action label (default: the op) and optional merchant. |
@@ -74,7 +74,14 @@ allowit status POLICY REQUEST_ID [--wait 60s]
 
 **Budget charge.** For Local dev plans the CLI computes the USDC charge the server requires, exactly (`math/big`): `ceil_to_0.000001(quantity × rate) + Σ maxCostUSDC`, with the fixed test rates published by the server's `/skill` response (SOL 100, XLM 0.1, USDC 1).
 
-**Request IDs.** Give every intended operation its own `--request-id`, and use different IDs for `eval` and `exec` (e.g. `dataset-001-eval`, `dataset-001-exec`). To retry the same request, rerun it unchanged with the same ID: the server returns the stored result instead of applying it again, and rejects the ID if any detail changed. Without `--request-id` the ID is a hash of the owner, policy, revision, source hash, command and exact request, so an accidental retry is safe but a deliberate identical second purchase collapses into the first. Network failures and 502/503/504 are retried twice with the same body. If the outcome is still unknown the CLI exits 5 and prints the ID — rerun the identical command.
+**Request IDs.** Give every intended operation its own `--request-id`, and use different IDs for `eval` and `exec` (e.g. `dataset-001-eval`, `dataset-001-exec`). To retry the same request, rerun it unchanged with the same ID: the server returns the stored result instead of applying it again, and rejects the ID if any detail changed. Without `--request-id` the ID is a hash of the owner, policy, command and exact request (for Local dev plans, the plan rather than the rate-derived charge), so an accidental retry is safe but a deliberate identical second purchase collapses into the first. Server state such as the policy revision, source hash or test rates is not part of the ID, so it does not change if the owner edits the policy between attempts. The CLI prints the ID on stderr before sending (`allowit: exec request ID …`). Network failures and 502/503/504 are retried twice with the same body.
+
+**Uncertain results (exit 5).** The request may have been applied. Never retry with a new request ID. The CLI prints the exact next step:
+
+- If no answer arrived, rerun the same command with the printed `--request-id ID`. AllowIt returns the stored result instead of applying it again. If the details changed since (e.g. a new test rate changed the charge), AllowIt refuses the reused ID (exit 4) rather than spending twice.
+- If AllowIt accepted the request but its result could not be read (a failed or invalid `/status` answer while waiting, or an empty, unknown or self-contradictory result), the CLI prints both the client ID and the server `requestId`. Check it with `allowit status POLICY SERVER_REQUEST_ID --wait 60s`, or rerun with `--request-id CLIENT_ID`.
+
+A result is reported only when it is one of the known combinations: `pass` with status `ready`, `submitted`, `recorded` (with `localRecorded: true`) or `settled` (with `executed: true`); `pending`/`evaluating`; `awaiting_input`/`awaiting_input`; `fail`/`denied`. `executed` and `localRecorded`, when present, must agree with the status. `kind`, when present, must be `judgment` or `transaction` and match the command; without it, `status` never reports `ready` as complete. Anything else is reported as uncertain, never as denied or complete. That includes a missing status, `pass` with `evaluating`, `pending` with `denied`, `ready` with `executed: true`, an on-chain status on Local dev, a mock recording on a wallet network, a spend for `eval`/`judgment`, and a `/status` answer for a different request. Non-200 2xx answers and redirects to `judge`/`transactions`/`status` are also uncertain.
 
 **Context.** `--context` must be a single JSON object of at most 16 KB, depth 8 and 128 values, with no repeated keys and no top-level `allowitExecution` (AllowIt supplies that field). The server enforces the same limits.
 
@@ -91,9 +98,9 @@ allowit status POLICY REQUEST_ID [--wait 60s]
 | 12 | `pending` | Still evaluating after `--wait`. |
 | 20 | `denied` | The policy refused; the reason is printed. |
 | 2 | usage | Invalid flags or input; nothing sent. |
-| 3 | config/auth | Bad configuration, policy mismatch, untrusted TLS, redirect, HTTP 401/403. |
-| 4 | rejected | Server rejected the request (400/404/409/429); its message is printed. |
-| 5 | uncertain | Network or server failure; rerun the identical command. |
+| 3 | config/auth | Bad configuration, policy mismatch, untrusted TLS, redirect on `GET /skill`, HTTP 401/403 before a request is accepted. |
+| 4 | rejected | Server rejected the request (400/404/409/429) before accepting it; its message is printed. |
+| 5 | uncertain | Network or server failure, or an accepted request whose result could not be read; follow the printed retry (same `--request-id`) or `allowit status` command. |
 
 `status` uses the server's `kind`: a ready `judgment` is `passed`, a ready `transaction` is `owner_signature`. All fields the server returns (reason, prompt, `decisionCode`, `workflowNodeId`, revision, source hash, receipt steps) are printed.
 

@@ -99,10 +99,16 @@ func (c *client) call(method, action string, body []byte, out any) error {
 			continue
 		}
 		if status >= 300 && status < 400 {
-			return &configError{fmt.Errorf("AllowIt answered with a redirect (HTTP %d); check ALLOWIT_URL", status)}
+			err := fmt.Errorf("AllowIt answered with a redirect (HTTP %d); check ALLOWIT_URL", status)
+			if method != "GET" {
+				// A POST may have been processed before the redirect.
+				return &uncertainError{err}
+			}
+			return &configError{err}
 		}
 		if status != http.StatusOK {
-			if status >= 500 {
+			// 5xx and unexpected 2xx do not prove the request was refused.
+			if status >= 500 || status >= 200 && status < 300 {
 				return &uncertainError{&apiError{status, errorMessage(data)}}
 			}
 			return &apiError{status, errorMessage(data)}

@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -176,6 +175,10 @@ func buildBody(kind string, f requestFlags, s *Skill, stdin io.Reader) (*Body, e
 		// Wallet policies: owner-signed USDC transfers without an execution plan.
 		if planOnly {
 			return nil, usagef("--memo, --data, --before and --after are available only for Local dev policies")
+		}
+		// The request carries no asset, so anything else would silently become USDC.
+		if f.rail != "solana" || asset != "USDC" {
+			return nil, usagef("wallet policies accept only --rail solana --op transferUSDC")
 		}
 		if _, err := usdcUnits(f.amount); err != nil {
 			return nil, usagef("--amount: %v", err)
@@ -392,13 +395,20 @@ func encodeJSON(v any) []byte {
 	return bytes.TrimRight(buf.Bytes(), "\n")
 }
 
-// requestID derives a stable client request ID from everything that defines the
-// request, so an identical retry reuses it and any change produces a new one.
-func requestID(kind string, cfg *Config, s *Skill, b *Body) string {
+// requestID derives a stable client request ID from what the caller asked for,
+// so an identical retry reuses it and any change produces a new one. Server
+// state (policy revision, source hash, published test rates) is left out: a
+// retry after an unknown result must keep its ID even if the policy changed.
+// A plan's charge is derived from the published rates, so the plan itself
+// identifies the request instead.
+func requestID(kind string, cfg *Config, b *Body) string {
 	copy := *b
 	copy.RequestID = ""
+	if copy.Execution != nil {
+		copy.Amount = ""
+	}
 	h := sha256.New()
-	fmt.Fprintf(h, "allowit-cli/v1\n%s\n%s\n%s\n%s\n%s\n", cfg.Owner, cfg.Policy, strconv.Itoa(s.Revision), s.SourceHash, kind)
+	fmt.Fprintf(h, "allowit-cli/v2\n%s\n%s\n%s\n", cfg.Owner, cfg.Policy, kind)
 	h.Write(encodeJSON(copy))
 	return "cli-" + kind + "-" + hex.EncodeToString(h.Sum(nil))[:40]
 }
