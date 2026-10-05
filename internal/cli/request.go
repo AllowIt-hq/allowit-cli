@@ -92,7 +92,7 @@ func buildBody(kind string, f requestFlags, s *Skill, stdin io.Reader) (*Body, e
 		return nil, usagef("--amount is required")
 	}
 	if (f.rail == "") != (f.op == "") {
-		return nil, usagef("--rail and --op are used together")
+		return nil, usagef("--rail and --op are used together; omit both to send --amount as a plain USDC amount")
 	}
 	planOnly := f.memo != "" || f.data != "" || f.before != "" || f.after != ""
 	if f.rail == "" {

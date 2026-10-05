@@ -32,7 +32,8 @@ Commands:
 Request flags:
   --action NAME        required: the action the policy evaluates, e.g. transfer
   --rail solana|stellar --op transferSOL|transferXLM|transferUSDC --addr ADDRESS
-  --amount DECIMAL     asset quantity (USDC amount without --op)
+                       --rail and --op are always given together
+  --amount DECIMAL     USDC amount; with --rail and --op, the asset quantity
   --merchant NAME      optional merchant
   --context JSON       runtime context object: literal, @file or - for stdin
   --memo TEXT          mock plan memo (Local dev)

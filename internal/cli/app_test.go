@@ -833,6 +833,29 @@ func TestTLSWithCAFile(t *testing.T) {
 // --op is the transfer, never the policy action. A missing --action is refused
 // before anything is sent; explicit actions keep their exact request IDs, and
 // --action set to the op reproduces a 0.1.1 request (which defaulted to it).
+// Help says --rail and --op go together and what --amount means with and
+// without them; a lone --rail or --op is refused before sending.
+func TestRailOpAndAmountAreExplained(t *testing.T) {
+	r := runCLI(t, map[string]string{}, "help")
+	for _, want := range []string{"--rail and --op are always given together", "--amount DECIMAL     USDC amount; with --rail and --op, the asset quantity"} {
+		if r.code != exitOK || !strings.Contains(r.stdout, want) {
+			t.Fatalf("help lacks %q:\n%s", want, r.stdout)
+		}
+	}
+	f, srv := newFake(t, "solana:testnet")
+	for _, lone := range [][]string{{"--rail", "solana"}, {"--op", "transferUSDC"}} {
+		args := append([]string{"exec", policyID, "--addr", solanaAccount, "--amount", "0.05", "--action", "research"}, lone...)
+		if r := runCLI(t, env(srv), args...); r.code != exitUsage || len(f.sent()) != 0 || !strings.Contains(r.stderr, "--rail and --op are used together; omit both") {
+			t.Fatal(lone, r)
+		}
+	}
+	// Without both, --amount is the USDC amount of a plain wallet request.
+	runCLI(t, env(srv), "exec", policyID, "--addr", solanaAccount, "--amount", "0.05", "--action", "research")
+	if _, body := f.last(t); string(body["amount"]) != `"0.05"` || string(body["recipient"]) != `"`+solanaAccount+`"` || body["execution"] != nil {
+		t.Fatal(body)
+	}
+}
+
 func TestActionIsRequired(t *testing.T) {
 	f, srv := newFake(t, "solana:devnet")
 	transfer := []string{"exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "1"}

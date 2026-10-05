@@ -73,9 +73,9 @@ allowit exec POLICY --request-id pay-001-exec --rail solana --op transferUSDC --
 | Flag | Meaning |
 |---|---|
 | `--action` | **Required.** The action the policy evaluates, sent exactly as given (e.g. `transfer`, `research`). |
-| `--rail solana\|stellar`, `--op transferSOL\|transferXLM\|transferUSDC` | Transport only: the transfer on a rail. `--op` is never sent as the action. Local dev: the rails the service publishes (Solana SOL/USDC, Stellar XLM/USDC; mock plan). Wallet networks: `--rail solana --op transferUSDC` only (enforced by the CLI, whatever the service advertises). |
+| `--rail solana\|stellar`, `--op transferSOL\|transferXLM\|transferUSDC` | Transport only: the transfer on a rail. `--rail` and `--op` are always given together. `--op` is never sent as the action. Local dev: the rails the service publishes (Solana SOL/USDC, Stellar XLM/USDC; mock plan). Wallet networks: `--rail solana --op transferUSDC` only (enforced by the CLI, whatever the service advertises). |
 | `--addr` | Recipient (Solana base58 or Stellar G/M/C strkey), checked offline and again by the server. |
-| `--amount` | Asset quantity as an exact decimal (USDC amount without `--op`). |
+| `--amount` | Exact decimal. Without `--rail` and `--op`, the USDC amount. With them, the transferred asset's quantity: the USDC amount for `transferUSDC`, and for a Local dev SOL or XLM plan the quantity the CLI converts to the USDC charge. |
 | `--merchant` | Optional merchant. |
 | `--context JSON\|@file\|-` | Runtime context object. Forwarded as the exact JSON value; numbers are never converted. |
 | `--memo`, `--data TEXT\|@file` | Local dev plan memo and payload bytes (base64-encoded by the CLI). |
