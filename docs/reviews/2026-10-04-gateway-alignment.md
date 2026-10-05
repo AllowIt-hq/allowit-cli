@@ -16,7 +16,15 @@ The reviewer inspected the code and traced the parser but could not independentl
 
 - `make test`: Go vet and race tests.
 - `make dist`: static Linux amd64 distribution; host build reports `allowit 0.2.0-dev`.
-- `python3 integration/check.py --app-repo /path/to/AllowIt-app`: three named customer-workspace cases and four named typed-runtime cases; actual Go HTTP gateways and pinned Rust WASM evaluators, with artifact hashes checked.
+- Gateway integration: three named customer-workspace cases and four named typed-runtime cases; actual Go HTTP gateways and pinned Rust WASM evaluators, with artifact hashes checked. The current invocation is `make integration APP_REPO=/path/to/AllowIt-app`.
 - `git diff --check`.
 
 Backend commits and the repeatable procedure are in [the integration guide](../../integration/README.md). Wallet sessions and chain adapters in those tests are synthetic fixtures. This review and validation do not establish live wallet settlement, payment delivery, a deployed app integration or an npm release.
+
+## Go runner follow-up
+
+The owner requested Go throughout and authorized merging PR1. The integration runner is now Go using only its standard library; the earlier script was removed. It retains exact commit checks, SDK WASM hashing, temporary source archives and the seven named-case assertions. Archive extraction rejects traversal and links while accepting Git's PAX commit metadata.
+
+Independent Claude Code reviewer `07da008c-a25a-4044-80c4-3c746049ff97` used actual model `claude-opus-5-5`, verified from modelUsage on both passes. Initial review flagged PAX metadata handling; this was fixed and covered by a regression. Final verdict: "The PAX header finding is closed, and I found no other material issues."
+
+The reviewer inspected the current files; Codex executed `make test`, `make integration` (all seven cases), `make dist` and `git diff --check`, all successfully. CLI behavior, frontend and app server are unchanged by this follow-up.

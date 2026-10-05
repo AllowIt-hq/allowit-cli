@@ -9,7 +9,7 @@ test:
 
 # Requires a local app clone with the exact commits in integration/backends.json.
 integration:
-	python3 integration/check.py --app-repo "$(APP_REPO)"
+	$(GO) run ./integration --app-repo "$(APP_REPO)"
 
 # Static, reproducible Linux binary for the AllowIt agent sandbox.
 dist:

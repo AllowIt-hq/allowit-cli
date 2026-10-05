@@ -1,4 +1,4 @@
-// This file is overlaid onto an archived AllowIt-app checkout by check.py.
+// This file is overlaid onto an archived AllowIt-app checkout by the Go runner.
 // HTTP routes, policy persistence and the Rust WASM evaluator are real.
 // Wallet identities and chain adapters use that backend's synthetic test helpers.
 package app
@@ -78,7 +78,7 @@ func (a *alignmentCLI) raw(t *testing.T, code int, args ...string) map[string]an
 	t.Helper()
 	bin := os.Getenv("ALLOWIT_ALIGNMENT_BINARY")
 	if bin == "" {
-		t.Fatal("use integration/check.py")
+		t.Fatal("use go run ./integration --app-repo /path/to/AllowIt-app")
 	}
 	cmd := exec.Command(bin, args...)
 	cmd.Env = []string{"ALLOWIT_URL=" + a.server.URL, "ALLOWIT_TOKEN=" + a.h.token}
