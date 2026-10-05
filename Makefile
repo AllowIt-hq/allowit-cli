@@ -1,11 +1,15 @@
 GO ?= go
 LDFLAGS := -s -w -buildid=
 
-.PHONY: test dist clean
+.PHONY: test integration dist clean
 
 test:
 	$(GO) vet ./...
 	$(GO) test -race -count=1 ./...
+
+# Requires a local app clone with the exact commits in integration/backends.json.
+integration:
+	python3 integration/check.py --app-repo "$(APP_REPO)"
 
 # Static, reproducible Linux binary for the AllowIt agent sandbox.
 dist:

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -177,7 +178,7 @@ func TestCheckResult(t *testing.T) {
 		{map[string]any{"outcome": "awaiting_input", "status": "awaiting_input", "prompt": "?"}, "exec", true},
 	}
 	for _, c := range valid {
-		if err := checkResult(c.r, c.command, c.local); err != nil {
+		if err := checkResult(c.r, c.command, netOf(c.local)); err != nil {
 			t.Errorf("%v %s: %v", c.r, c.command, err)
 		}
 	}
@@ -229,9 +230,121 @@ func TestCheckResult(t *testing.T) {
 		{map[string]any{"outcome": "fail", "status": "denied", "kind": "payout"}, "exec", false},
 	}
 	for _, c := range invalid {
-		if err := checkResult(c.r, c.command, c.local); err == nil {
+		if err := checkResult(c.r, c.command, netOf(c.local)); err == nil {
 			t.Errorf("%v %s local=%v accepted", c.r, c.command, c.local)
 		}
+	}
+}
+
+func netOf(local bool) netKind {
+	if local {
+		return netLocal
+	}
+	return netWallet
+}
+
+// Without the network a result is still validated, but anything whose meaning
+// depends on it must not be reported as complete.
+func TestUnknownNetworkResults(t *testing.T) {
+	for _, c := range []struct {
+		r     map[string]any
+		needs bool
+	}{
+		{map[string]any{"outcome": "pending", "status": "evaluating"}, false},
+		{map[string]any{"outcome": "awaiting_input", "status": "awaiting_input"}, false},
+		{map[string]any{"outcome": "fail", "status": "denied"}, false},
+		{map[string]any{"outcome": "pass", "status": "ready", "kind": "judgment"}, false},
+		{map[string]any{"outcome": "pass", "status": "ready", "kind": "transaction"}, true},
+		{map[string]any{"outcome": "pass", "status": "ready"}, true},
+		{map[string]any{"outcome": "pass", "status": "submitted"}, true},
+		{map[string]any{"outcome": "pass", "status": "settled", "executed": true}, true},
+		{map[string]any{"outcome": "pass", "status": "recorded", "localRecorded": true}, true},
+	} {
+		if err := checkResult(c.r, "status", netUnknown); err != nil {
+			t.Errorf("%v: %v", c.r, err)
+		}
+		if needsNetwork(c.r) != c.needs {
+			t.Errorf("%v: needsNetwork %v", c.r, !c.needs)
+		}
+	}
+	// Self-contradictory results stay invalid without the network.
+	if checkResult(map[string]any{"outcome": "pass", "status": "settled", "localRecorded": true}, "status", netUnknown) == nil {
+		t.Error("contradiction accepted")
+	}
+}
+
+func TestPublishedRoutes(t *testing.T) {
+	cfg := &Config{Origin: "https://allowit.example", Owner: owner, Policy: policyID}
+	canonical := "/api/harness/" + owner + "/" + policyID + "/judge"
+	for _, raw := range []string{"https://allowit.example" + canonical, "HTTPS://AllowIt.Example" + canonical, canonical, "judge", "./judge", "../" + policyID + "/judge"} {
+		if !cfg.isRoute("judge", raw) {
+			t.Errorf("rejected %q", raw)
+		}
+	}
+	for _, raw := range []string{
+		"", "https://evil.example" + canonical, "//evil.example" + canonical, "http://allowit.example" + canonical,
+		"https://allowit.example:8443" + canonical, "https://user@allowit.example" + canonical,
+		canonical + "?x=1", canonical + "?", canonical + "#f", "transactions", "/api/harness/other/" + policyID + "/judge",
+		"../otherPolicy/judge", "/api/harness/" + owner + "/" + policyID + "/judge/", `\\evil.example\judge`, "javascript:judge",
+	} {
+		if cfg.isRoute("judge", raw) {
+			t.Errorf("accepted %q", raw)
+		}
+	}
+}
+
+func TestSkillCheck(t *testing.T) {
+	cfg := &Config{Origin: "https://allowit.example", Owner: owner, Policy: policyID}
+	contract := func(profile, execution string, version int) *Contract {
+		c := &Contract{Version: version, Profile: profile}
+		c.Capabilities.Execution = execution
+		return c
+	}
+	ok := []Skill{
+		{Network: "solana:devnet"},
+		{Network: "solana:mainnet", ExecutionMode: "owner_signed", Endpoints: map[string]string{"judge": "judge", "status": "/api/harness/" + owner + "/" + policyID + "/status"}},
+		{Network: localDev, ExecutionMode: "local", Owner: owner, PolicyID: policyID, Contract: contract("local_dev", "mock", 1)},
+		{Network: "solana:testnet", Contract: contract("solana_owner_signed", "owner_signed", 1), Endpoints: map[string]string{"preferences": "https://elsewhere.example/x"}},
+	}
+	for _, s := range ok {
+		if err := s.check(cfg); err != nil {
+			t.Errorf("%+v: %v", s, err)
+		}
+	}
+	bound := []Skill{
+		{Network: "solana:devnet", Owner: "someone_else"},
+		{Network: "solana:devnet", PolicyID: "otherPolicy"},
+		{Network: "solana:devnet", Endpoints: map[string]string{"transactions": "https://evil.example/api/harness/" + owner + "/" + policyID + "/transactions"}},
+		{Network: "solana:devnet", Endpoints: map[string]string{"status": "judge"}},
+	}
+	for _, s := range bound {
+		var ce *configError
+		if err := s.check(cfg); !errors.As(err, &ce) {
+			t.Errorf("%+v: %v", s, err)
+		}
+	}
+	unsupported := []Skill{
+		{},
+		{Network: "stellar:testnet"},
+		{Network: "solana:localnet", ExecutionMode: "owner_signed"},
+		{Network: "solana:devnet", ExecutionMode: "custodial"},
+		{Network: "solana:devnet", ExecutionMode: "local"},
+		{Network: localDev, ExecutionMode: "owner_signed"},
+		{Network: localDev, Contract: contract("solana_owner_signed", "", 1)},
+		{Network: "solana:devnet", Contract: contract("solana_custodial", "", 1)},
+		{Network: "solana:devnet", Contract: contract("solana_owner_signed", "mock", 1)},
+		{Network: "solana:devnet", Contract: contract("solana_owner_signed", "owner_signed", 2)},
+	}
+	for _, s := range unsupported {
+		var ue *unsupportedError
+		if err := s.check(cfg); !errors.As(err, &ue) {
+			t.Errorf("%+v: %v", s, err)
+		}
+	}
+	mismatch := Skill{Network: localDev, SourceHash: "aaaa", Contract: contract("local_dev", "mock", 1)}
+	mismatch.Contract.Binding.SourceHash = "bbbb"
+	if err := mismatch.check(cfg); err == nil {
+		t.Error("contract bound to another source accepted")
 	}
 }
 

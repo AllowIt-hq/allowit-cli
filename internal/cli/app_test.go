@@ -41,6 +41,10 @@ type fakeHarness struct {
 	hits      int
 	revision  int            // policy revision published by /skill (default 3)
 	rails     map[string]any // wallet rails published by /skill
+	editSkill func(map[string]any)
+	skillFail int    // answer GET /skill with this HTTP status
+	skillBody string // ... and this body
+	skillGets int
 }
 type recorded struct {
 	Action string
@@ -74,7 +78,17 @@ func (f *fakeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	action := strings.TrimPrefix(r.URL.Path, prefix)
 	w.Header().Set("Content-Type", "application/json")
 	if action == "skill" && r.Method == "GET" {
-		json.NewEncoder(w).Encode(f.skill())
+		f.skillGets++
+		if f.skillFail != 0 {
+			w.WriteHeader(f.skillFail)
+			io.WriteString(w, f.skillBody)
+			return
+		}
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		json.NewEncoder(w).Encode(f.skill(scheme + "://" + r.Host))
 		return
 	}
 	raw, _ := io.ReadAll(r.Body)
@@ -143,9 +157,15 @@ func (f *fakeHarness) reply(w http.ResponseWriter, action string, res map[string
 	json.NewEncoder(w).Encode(res)
 }
 
-func (f *fakeHarness) skill() map[string]any {
+// skill is the current backend's /skill shape (owner, policyId, absolute
+// endpoints, typed contract) unless editSkill changes it.
+func (f *fakeHarness) skill(base string) map[string]any {
+	endpoints := map[string]any{}
+	for _, a := range []string{"judge", "transactions", "status"} {
+		endpoints[a] = base + "/api/harness/" + owner + "/" + policyID + "/" + a
+	}
 	s := map[string]any{
-		"name": "AllowIt policy Research budget", "title": "Research budget", "policyId": policyID, "owner": owner, "status": "active",
+		"name":"AllowIt policy Research budget", "title": "Research budget", "policyId": policyID, "owner": owner, "status": "active",
 		"network": f.network, "revision": 3 + f.revision, "sourceHash": fmt.Sprintf("abcdef0123456789abcdef%d", f.revision), "language": "allowit-rust-v1",
 		"originalIntent": "Buy original research datasets.\n\nRevision request:\nNever above 5 USDC.",
 		"policy":         "pub async fn evaluate(ctx:&Context)->PolicyResult{Ok(())}",
@@ -153,17 +173,50 @@ func (f *fakeHarness) skill() map[string]any {
 		"budget":   map[string]any{"allocation": "10", "spent": "0.5"},
 		"workflow": []any{map[string]any{"kind": "cap", "label": "Cap spending at 10 USDC", "description": "Hard limit"}},
 	}
+	s["endpoints"] = endpoints
+	binding := map[string]any{"sourceHash": s["sourceHash"], "irHash": "fedcba9876543210fedcba", "registryVersion": "1", "requirements": map[string]any{"version": 1, "features": []any{}, "context_u64_keys": []any{}}}
 	if f.network == localDev {
+		rails := map[string]any{"solana": []any{"SOL", "USDC"}, "stellar": []any{"XLM", "USDC"}}
+		rates, decimals := map[string]any{"SOL": "100", "XLM": "0.1", "USDC": "1"}, map[string]any{"SOL": 9, "XLM": 7, "USDC": 6}
 		s["executionMode"] = "local"
-		s["capabilities"] = map[string]any{"mode": "mock", "rails": map[string]any{"solana": []any{"SOL", "USDC"}, "stellar": []any{"XLM", "USDC"}}, "fixedTestRatesUSDC": map[string]any{"SOL": "100", "XLM": "0.1", "USDC": "1"}, "assetDecimals": map[string]any{"SOL": 9, "XLM": 7, "USDC": 6}, "callsRequireOwnerApproval": true}
+		s["capabilities"] = map[string]any{"mode": "mock", "rails": rails, "fixedTestRatesUSDC": rates, "assetDecimals": decimals, "callsRequireOwnerApproval": true}
+		s["contract"] = map[string]any{"version": 1, "profile": "local_dev", "interface": "http", "binding": binding, "contextU64Keys": []any{},
+			"capabilities": map[string]any{"protocol": "http_json", "execution": "mock", "rails": rails, "executionPlans": true, "memoData": true, "contractCalls": true, "fixedTestRatesUSDC": rates, "assetDecimals": decimals, "ownerAnswerRequiredForCalls": true}}
 	} else {
-		s["executionMode"] = "owner_signed"
-		s["capabilities"] = map[string]any{"rail": "solana", "assets": []any{"USDC"}, "rails": map[string]any{"solana": []any{"USDC"}}}
+		rails := map[string]any{"solana": []any{"USDC"}}
 		if f.rails != nil {
-			s["capabilities"].(map[string]any)["rails"] = f.rails
+			rails = f.rails
 		}
+		s["executionMode"] = "owner_signed"
+		s["capabilities"] = map[string]any{"rail": "solana", "assets": []any{"USDC"}, "rails": rails, "execution": "owner_signed"}
+		s["contract"] = map[string]any{"version": 1, "profile": "solana_owner_signed", "interface": "http", "binding": binding, "contextU64Keys": []any{},
+			"capabilities": map[string]any{"protocol": "http_json", "execution": "owner_signed", "rails": rails, "recipientRequired": true, "ownerSignatureRequired": true}}
+	}
+	if f.editSkill != nil {
+		f.editSkill(s)
 	}
 	return s
+}
+
+// legacySkill is the pre-contract shape: no endpoints or contract.
+func legacySkill(s map[string]any) {
+	delete(s, "endpoints")
+	delete(s, "contract")
+	delete(s, "owner")
+}
+
+// customerSkill is the customer-workspace server's shape: name, network,
+// executionMode and relative endpoints; no title, policyId, owner,
+// capabilities or contract.
+func customerSkill(s map[string]any) {
+	keep := map[string]bool{"name": true, "network": true, "executionMode": true, "status": true, "budget": true}
+	for k := range s {
+		if !keep[k] {
+			delete(s, k)
+		}
+	}
+	s["name"] = "Customer research"
+	s["endpoints"] = map[string]any{"judge": "/api/harness/" + owner + "/" + policyID + "/judge", "transactions": "transactions", "status": "./status"}
 }
 
 func (f *fakeHarness) locked(fn func()) {
@@ -214,7 +267,7 @@ func env(srv *httptest.Server) map[string]string {
 func TestExecStellarMockPlanSendsExactRequest(t *testing.T) {
 	f, srv := newFake(t, localDev)
 	ctx := `{ "decision": "Buy dataset", "price": 1.10000000000000000001, "note": "<b>&</b>" }`
-	r := runCLI(t, env(srv), "exec", policyID, "--rail", "stellar", "--op", "transferXLM", "--addr", stellarAccount, "--amount", "5", "--data", `{"license":"ds-1"}`, "--memo", "Dataset license", "--context", ctx)
+	r := runCLI(t, env(srv), "exec", policyID, "--rail", "stellar", "--op", "transferXLM", "--addr", stellarAccount, "--amount", "5", "--action", "research", "--data", `{"license":"ds-1"}`, "--memo", "Dataset license", "--context", ctx)
 	if r.code != 0 || !strings.Contains(r.stdout, "state: recorded") || !strings.Contains(r.stdout, "No funds moved") {
 		t.Fatalf("%d\n%s\n%s", r.code, r.stdout, r.stderr)
 	}
@@ -225,7 +278,7 @@ func TestExecStellarMockPlanSendsExactRequest(t *testing.T) {
 	if string(body["context"]) != `{"decision":"Buy dataset","price":1.10000000000000000001,"note":"<b>&</b>"}` {
 		t.Fatal("context changed:", string(body["context"]))
 	}
-	if string(body["amount"]) != `"0.5"` || string(body["action"]) != `"transferXLM"` || string(body["recipient"]) != `"`+stellarAccount+`"` {
+	if string(body["amount"]) != `"0.5"` || string(body["action"]) != `"research"` || string(body["recipient"]) != `"`+stellarAccount+`"` {
 		t.Fatal(body)
 	}
 	var plan Plan
@@ -246,14 +299,14 @@ func TestSolanaPlanWithCallsChargesCallCosts(t *testing.T) {
 	if action != "judge" || string(body["amount"]) != `"0.75"` || !strings.Contains(string(body["execution"]), `"args":{"ref":"x-1"}`) {
 		t.Fatal(action, body)
 	}
-	if r := runCLI(t, env(srv), "eval", policyID, "--rail", "solana", "--op", "transferSOL", "--addr", solanaAccount, "--amount", "0.005", "--after", after, "--budget", "0.5"); r.code != exitUsage {
+	if r := runCLI(t, env(srv), "eval", policyID, "--rail", "solana", "--op", "transferSOL", "--addr", solanaAccount, "--amount", "0.005", "--after", after, "--action", "research", "--budget", "0.5"); r.code != exitUsage || !strings.Contains(r.stderr, "--budget 0.5 does not match") {
 		t.Fatal("budget mismatch accepted", r)
 	}
 }
 
 func TestIdempotentRequestIDs(t *testing.T) {
 	f, srv := newFake(t, localDev)
-	args := []string{policyID, "--rail", "stellar", "--op", "transferUSDC", "--addr", stellarAccount, "--amount", "1", "--context", `{"a":1}`}
+	args := []string{policyID, "--rail", "stellar", "--op", "transferUSDC", "--addr", stellarAccount, "--amount", "1", "--action", "research", "--context", `{"a":1}`}
 	id := func() string { _, b := f.last(t); return string(b["requestId"]) }
 	runCLI(t, env(srv), append([]string{"exec"}, args...)...)
 	first := id()
@@ -281,7 +334,7 @@ func TestIdempotentRequestIDs(t *testing.T) {
 		t.Fatal("explicit ID ignored")
 	}
 	// Reusing an explicit ID for different details is refused by the server.
-	conflict := runCLI(t, env(srv), "exec", policyID, "--request-id", "order-0001", "--rail", "stellar", "--op", "transferUSDC", "--addr", stellarAccount, "--amount", "2")
+	conflict := runCLI(t, env(srv), "exec", policyID, "--request-id", "order-0001", "--rail", "stellar", "--op", "transferUSDC", "--addr", stellarAccount, "--amount", "2", "--action", "research")
 	if conflict.code != exitRejected || !strings.Contains(conflict.stderr, "already used") {
 		t.Fatal(conflict)
 	}
@@ -290,7 +343,7 @@ func TestIdempotentRequestIDs(t *testing.T) {
 func TestUncertainFailureRetriesSameRequest(t *testing.T) {
 	f, srv := newFake(t, localDev)
 	f.locked(func() { f.dropFirst = 1 })
-	r := runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "1")
+	r := runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "1", "--action", "transfer")
 	if r.code != 0 || f.clients() != 1 {
 		t.Fatalf("retry was not idempotent: %d %d\n%s", r.code, f.clients(), r.stderr)
 	}
@@ -305,7 +358,7 @@ func TestUncertainFailureRetriesSameRequest(t *testing.T) {
 		t.Fatal("retry changed the request", len(sent), ids)
 	}
 	f.locked(func() { f.dropFirst = 10 })
-	r = runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "2")
+	r = runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "2", "--action", "transfer")
 	_, last := f.last(t)
 	id := strings.Trim(string(last["requestId"]), `"`)
 	if r.code != exitUncertain || !strings.Contains(r.stderr, "Retry only by rerunning the same command with --request-id "+id) || !strings.Contains(r.stderr, "Do not retry with a new request ID") {
@@ -317,11 +370,11 @@ func TestUncertainFailureRetriesSameRequest(t *testing.T) {
 	}
 	// The owner edits the policy before the retry: the derived ID must not change.
 	f.locked(func() { f.dropFirst, f.revision = 0, 1 })
-	if again := runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "2"); again.code != 0 || f.clients() != 2 {
+	if again := runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "2", "--action", "transfer"); again.code != 0 || f.clients() != 2 {
 		t.Fatal("rerun after a policy revision created another spend", again, f.clients())
 	}
 	// So does the printed explicit retry.
-	if again := runCLI(t, env(srv), "exec", policyID, "--request-id", id, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "2"); again.code != 0 || f.clients() != 2 {
+	if again := runCLI(t, env(srv), "exec", policyID, "--request-id", id, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "2", "--action", "transfer"); again.code != 0 || f.clients() != 2 {
 		t.Fatal("explicit retry created another spend", again, f.clients())
 	}
 }
@@ -355,7 +408,7 @@ func TestAcceptedExecWithUnreadableStatusIsUncertain(t *testing.T) {
 		for _, extra := range [][]string{nil, {"--json"}} {
 			r := runCLI(t, env(srv), append([]string{"exec", policyID, "--amount", "1", "--action", "research", "--request-id", "order-0007"}, extra...)...)
 			if r.code != exitUncertain || strings.Contains(r.stdout, "state:") || !strings.Contains(r.stderr, "AllowIt accepted exec request order-0007 (server requestId srv-pending-7)") ||
-				!strings.Contains(r.stderr, "allowit status "+policyID+" srv-pending-7") || !strings.Contains(r.stderr, "--request-id order-0007") || !strings.Contains(r.stderr, "Do not retry with a new request ID") {
+				!strings.Contains(r.stderr, "allowit status --wait 60s -- "+policyID+" srv-pending-7") || !strings.Contains(r.stderr, "--request-id order-0007") || !strings.Contains(r.stderr, "Do not retry with a new request ID") {
 				t.Fatalf("%d %s: %+v", status.code, status.body, r)
 			}
 		}
@@ -409,7 +462,7 @@ func TestInvalidResultsAreUncertain(t *testing.T) {
 			return 200, c.body, action == "judge" || action == "transactions"
 		})
 		for _, extra := range [][]string{nil, {"--json"}} {
-			args := append([]string{c.cmd, policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "1"}, extra...)
+			args := append([]string{c.cmd, policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "1", "--action", "transfer"}, extra...)
 			r := runCLI(t, env(srv), args...)
 			if r.code != exitUncertain || r.stdout != "" || !strings.Contains(r.stderr, "but its result is unknown") {
 				t.Fatalf("%s %s %v: %+v", c.network, c.body, extra, r)
@@ -541,13 +594,13 @@ func TestPendingIsPolledThroughStatus(t *testing.T) {
 
 func TestWalletPolicyRules(t *testing.T) {
 	f, srv := newFake(t, "solana:mainnet")
-	if r := runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "1", "--data", "x"); r.code != exitUsage {
+	if r := runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "1", "--action", "transfer", "--data", "x"); r.code != exitUsage || !strings.Contains(r.stderr, "only for Local dev") {
 		t.Fatal("mock data accepted on wallet network", r)
 	}
-	if r := runCLI(t, env(srv), "exec", policyID, "--rail", "stellar", "--op", "transferXLM", "--addr", stellarAccount, "--amount", "1"); r.code != exitUsage {
+	if r := runCLI(t, env(srv), "exec", policyID, "--rail", "stellar", "--op", "transferXLM", "--addr", stellarAccount, "--amount", "1", "--action", "transfer"); r.code != exitUsage || !strings.Contains(r.stderr, "not available") {
 		t.Fatal("stellar accepted on wallet network", r)
 	}
-	if r := runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--amount", "1"); r.code != exitUsage {
+	if r := runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--amount", "1", "--action", "transfer"); r.code != exitUsage || !strings.Contains(r.stderr, "Solana address") {
 		t.Fatal("wallet exec without recipient", r)
 	}
 	r := runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "2.5", "--action", "research", "--merchant", "research.example")
@@ -563,7 +616,7 @@ func TestWalletPolicyRules(t *testing.T) {
 	f.locked(func() { f.rails = map[string]any{"solana": []any{"SOL", "USDC"}, "stellar": []any{"XLM", "USDC"}} })
 	before := len(f.sent())
 	for _, args := range [][]string{{"--rail", "solana", "--op", "transferSOL"}, {"--rail", "stellar", "--op", "transferUSDC"}} {
-		if r := runCLI(t, env(srv), append(append([]string{"exec", policyID}, args...), "--addr", solanaAccount, "--amount", "5")...); r.code != exitUsage || len(f.sent()) != before {
+		if r := runCLI(t, env(srv), append(append([]string{"exec", policyID}, args...), "--addr", solanaAccount, "--amount", "5", "--action", "transfer")...); r.code != exitUsage || len(f.sent()) != before || strings.Contains(r.stderr, "--action is required") {
 			t.Fatal(args, r)
 		}
 	}
@@ -582,10 +635,10 @@ func TestLocalValidationBeforeNetwork(t *testing.T) {
 		{"--rail", "solana", "--op", "transferSOL", "--addr", solanaAccount, "--amount", "1", "--after", `[{"type":"contract_call","contract":"` + solanaAccount + `","method":"m","args":{},"maxCostUSDC":"0","rpc":"http://x"}]`},
 		{"--rail", "solana", "--op", "transferSOL", "--addr", solanaAccount, "--amount", "1", "--data", strings.Repeat("x", 1025)},
 		{"--rail", "solana", "--amount", "1"},
-		{"--amount", "1"},
+		{"--amount", "1.0000001"},
 	} {
 		before := len(f.sent())
-		if r := runCLI(t, env(srv), append([]string{"exec", policyID}, args...)...); r.code != exitUsage || len(f.sent()) != before {
+		if r := runCLI(t, env(srv), append([]string{"exec", policyID, "--action", "research"}, args...)...); r.code != exitUsage || len(f.sent()) != before {
 			t.Fatalf("%v: %d %s", args, r.code, r.stderr)
 		}
 	}
@@ -708,7 +761,7 @@ func TestMalformedJSONInputsAndResponses(t *testing.T) {
 	_, srv := newFake(t, localDev)
 	call := `{"type":"contract_call","contract":"` + solanaAccount + `","method":"m","args":{},"maxCostUSDC":"0"}`
 	for _, after := range []string{"[" + call + "] ]", "[" + call + "] x", "[" + call + "][]", call} {
-		if r := runCLI(t, env(srv), "eval", policyID, "--rail", "solana", "--op", "transferSOL", "--addr", solanaAccount, "--amount", "1", "--after", after); r.code != exitUsage {
+		if r := runCLI(t, env(srv), "eval", policyID, "--rail", "solana", "--op", "transferSOL", "--addr", solanaAccount, "--amount", "1", "--action", "research", "--after", after); r.code != exitUsage || !strings.Contains(r.stderr, "--after must be") {
 			t.Fatal(after, r)
 		}
 	}
@@ -773,6 +826,291 @@ func TestTLSWithCAFile(t *testing.T) {
 	os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600)
 	e["ALLOWIT_CA_FILE"] = ca
 	if r := runCLI(t, e, "show", policyID); r.code != 0 {
+		t.Fatal(r)
+	}
+}
+
+// --op is the transfer, never the policy action. A missing --action is refused
+// before anything is sent; explicit actions keep their exact request IDs, and
+// --action set to the op reproduces a 0.1.1 request (which defaulted to it).
+func TestActionIsRequired(t *testing.T) {
+	f, srv := newFake(t, "solana:devnet")
+	transfer := []string{"exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "1"}
+	r := runCLI(t, env(srv), transfer...)
+	if r.code != exitUsage || len(f.sent()) != 0 || !strings.Contains(r.stderr, "--action is required") || !strings.Contains(r.stderr, "--action transferUSDC") {
+		t.Fatal(r)
+	}
+	// Request IDs derived by allowit 0.1.1 for the same requests.
+	for _, c := range []struct {
+		network string
+		args    []string
+		action  string
+		id      string
+	}{
+		{"solana:devnet", append(transfer, "--action", "transferUSDC"), "transferUSDC", "cli-exec-5723433f047e41429165aa32f3767cef452bd40a"},
+		{"solana:devnet", append(transfer, "--action", "transfer"), "transfer", "cli-exec-6f6f72f46421e896d6c2ed5ce68d3e7195a4187c"},
+		{"solana:devnet", []string{"eval", policyID, "--amount", "2.5", "--action", "research"}, "research", "cli-eval-5e694a94a381d458d88f6afe39a602eff1cc76c7"},
+		{localDev, []string{"exec", policyID, "--rail", "stellar", "--op", "transferXLM", "--addr", stellarAccount, "--amount", "5", "--action", "transferXLM"}, "transferXLM", "cli-exec-7c6195d63526749fef258655da56bb1b1df1deaf"},
+	} {
+		f, srv := newFake(t, c.network)
+		r := runCLI(t, env(srv), c.args...)
+		_, body := f.last(t)
+		if r.code == exitUsage || string(body["requestId"]) != `"`+c.id+`"` || string(body["action"]) != `"`+c.action+`"` {
+			t.Fatalf("%v: %+v %s", c.args, r, body["requestId"])
+		}
+	}
+}
+
+// The customer-workspace server publishes name, network, executionMode and
+// relative endpoints only. The CLI works with it and shows what is missing.
+func TestCustomerSkillShape(t *testing.T) {
+	f, srv := newFake(t, "solana:devnet")
+	f.editSkill = customerSkill
+	s := runCLI(t, env(srv), "show", policyID)
+	for _, want := range []string{"AllowIt policy: Customer research\n", "Policy:     " + policyID + " (from ALLOWIT_TOKEN; AllowIt did not report the policy ID)", "solana:devnet (every transfer needs the owner's wallet signature)", "Rails:      solana (USDC)"} {
+		if s.code != 0 || !strings.Contains(s.stdout, want) {
+			t.Fatalf("missing %q in %+v", want, s)
+		}
+	}
+	if strings.Contains(s.stdout, "revision 0") || strings.Contains(s.stdout, "Original request") {
+		t.Fatal(s.stdout)
+	}
+	r := runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "1", "--action", "transfer", "--request-id", "customer-0001")
+	if r.code != exitOwnerSignature || !strings.Contains(r.stdout, "state: owner_signature") {
+		t.Fatal(r)
+	}
+	action, body := f.last(t)
+	if action != "transactions" || string(body["action"]) != `"transfer"` || string(body["amount"]) != `"1"` || string(body["recipient"]) != `"`+solanaAccount+`"` || body["execution"] != nil {
+		t.Fatal(action, body)
+	}
+	if r := runCLI(t, env(srv), "eval", policyID, "--amount", "1", "--action", "research", "--request-id", "customer-0002"); r.code != 0 || !strings.Contains(r.stdout, "state: passed") {
+		t.Fatal(r)
+	}
+	if st := runCLI(t, env(srv), "status", policyID, "srv-0-abcdefgh"); st.code != exitOwnerSignature || strings.Contains(st.stderr, "unavailable") {
+		t.Fatal(st)
+	}
+
+	// Local dev without published rails or rates: plain requests only.
+	f, srv = newFake(t, localDev)
+	f.editSkill = customerSkill
+	if s := runCLI(t, env(srv), "show", policyID); s.code != 0 || !strings.Contains(s.stdout, "mock execution") || !strings.Contains(s.stdout, "Rails:      none published") {
+		t.Fatal(s)
+	}
+	if r := runCLI(t, env(srv), "exec", policyID, "--rail", "stellar", "--op", "transferXLM", "--addr", stellarAccount, "--amount", "5", "--action", "research"); r.code != exitUsage || len(f.sent()) != 0 || !strings.Contains(r.stderr, "published no rails") {
+		t.Fatal(r)
+	}
+	if r := runCLI(t, env(srv), "exec", policyID, "--amount", "1", "--action", "research"); r.code != 0 || !strings.Contains(r.stdout, "state: recorded") {
+		t.Fatal(r)
+	}
+}
+
+// Services from before the typed contract omit endpoints, owner and contract.
+func TestLegacySkillShape(t *testing.T) {
+	for _, network := range []string{localDev, "solana:devnet"} {
+		f, srv := newFake(t, network)
+		f.editSkill = legacySkill
+		if s := runCLI(t, env(srv), "show", policyID); s.code != 0 || !strings.Contains(s.stdout, "Research budget") || !strings.Contains(s.stdout, "revision 3") {
+			t.Fatal(s)
+		}
+		r := runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "1", "--action", "transfer")
+		if network == localDev && r.code != 0 || network != localDev && r.code != exitOwnerSignature {
+			t.Fatal(network, r)
+		}
+	}
+}
+
+// A description naming another owner, policy or route, or an unknown network
+// or profile, stops every command before judge or transactions; the bearer
+// token never goes anywhere but the configured canonical route.
+func TestSkillMetadataRefusedBeforeSending(t *testing.T) {
+	var leaked int
+	var mu sync.Mutex
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		leaked++
+		mu.Unlock()
+		w.Write([]byte(`{"outcome":"pass","status":"settled","executed":true}`))
+	}))
+	defer other.Close()
+	set := func(k string, v any) func(map[string]any) { return func(s map[string]any) { s[k] = v } }
+	contract := func(k string, v any) func(map[string]any) {
+		return func(s map[string]any) { s["contract"].(map[string]any)[k] = v }
+	}
+	route := "/api/harness/" + owner + "/" + policyID + "/"
+	for _, c := range []struct {
+		name  string
+		edit  func(map[string]any)
+		bound bool // identity or route: status stops too
+	}{
+		{"owner", set("owner", "someone_else"), true},
+		{"policy", set("policyId", "otherPolicy"), true},
+		{"origin", set("endpoints", map[string]any{"transactions": other.URL + route + "transactions"}), true},
+		{"path", set("endpoints", map[string]any{"judge": "../otherPolicy/judge"}), true},
+		{"query", set("endpoints", map[string]any{"status": route + "status?debug=1"}), true},
+		{"network", set("network", "stellar:testnet"), false},
+		{"no network", func(s map[string]any) { delete(s, "network") }, false},
+		{"mode", set("executionMode", "custodial"), false},
+		{"mode for network", set("executionMode", "local"), false},
+		{"profile", contract("profile", "solana_custodial"), false},
+		{"version", contract("version", 2), false},
+		{"binding", contract("binding", map[string]any{"sourceHash": "0000000000000000"}), false},
+		{"unreadable", set("endpoints", map[string]any{"judge": map[string]any{"url": "judge"}}), false},
+	} {
+		f, srv := newFake(t, "solana:devnet")
+		f.editSkill = c.edit
+		f.locked(func() { f.byServer["srv-deny-0001"] = map[string]any{"outcome": "fail", "status": "denied", "requestId": "srv-deny-0001"} })
+		for _, args := range [][]string{
+			{"show", policyID},
+			{"eval", policyID, "--amount", "1", "--action", "research"},
+			{"exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "1", "--action", "transfer"},
+		} {
+			if r := runCLI(t, env(srv), args...); r.code != exitConfig || r.stdout != "" || len(f.sent()) != 0 {
+				t.Fatalf("%s %v: %+v", c.name, args, r)
+			}
+		}
+		st := runCLI(t, env(srv), "status", policyID, "srv-deny-0001")
+		if c.bound && (st.code != exitConfig || len(f.sent()) != 0) || !c.bound && (st.code != exitDenied || !strings.Contains(st.stderr, "policy description is unavailable")) {
+			t.Fatalf("%s status: %+v", c.name, st)
+		}
+	}
+	if leaked != 0 {
+		t.Fatal("a request reached a published endpoint on another origin")
+	}
+}
+
+// When the policy description is refused (e.g. HTTP 409 from typed skill
+// assembly) status still reads the request through the canonical route.
+// Results whose meaning depends on the network are uncertain, never complete.
+func TestStatusRecoversWithoutPolicyDescription(t *testing.T) {
+	results := map[string]struct {
+		res   map[string]any
+		state string
+		code  int
+	}{
+		"srv-pend-0001": {map[string]any{"outcome": "pending", "status": "evaluating"}, "pending", exitPending},
+		"srv-input-001": {map[string]any{"outcome": "awaiting_input", "status": "awaiting_input", "prompt": "Approve the dataset?"}, "awaiting_input", exitAwaitingInput},
+		"srv-deny-0001": {map[string]any{"outcome": "fail", "status": "denied", "reason": "Over the cap."}, "denied", exitDenied},
+		"srv-judge-001": {map[string]any{"outcome": "pass", "status": "ready", "kind": "judgment"}, "passed", exitOK},
+		"srv-ready-001": {map[string]any{"outcome": "pass", "status": "ready", "kind": "transaction"}, "", exitUncertain},
+		"srv-old-00001": {map[string]any{"outcome": "pass", "status": "ready"}, "", exitUncertain},
+		"srv-subm-0001": {map[string]any{"outcome": "pass", "status": "submitted", "kind": "transaction"}, "", exitUncertain},
+		"srv-sett-0001": {map[string]any{"outcome": "pass", "status": "settled", "executed": true, "kind": "transaction"}, "", exitUncertain},
+		"srv-rec-00001": {map[string]any{"outcome": "pass", "status": "recorded", "localRecorded": true, "kind": "transaction"}, "", exitUncertain},
+	}
+	for _, fail := range []struct {
+		code int
+		body string
+	}{
+		{409, `{"error":"An agent skill cannot be issued for this policy (UNRESOLVED_CONTEXT_KEYS): the policy reads request values whose names are computed during evaluation."}`},
+		{400, `{"error":"Create a new agent skill from the app to refresh its endpoints."}`},
+		{500, `{"error":"boom"}`},
+		{200, ""}, // a description with an unsupported network
+	} {
+		f, srv := newFake(t, "solana:devnet")
+		if fail.code == 200 {
+			f.editSkill = func(s map[string]any) { s["network"] = "solana:localnet" }
+		} else {
+			f.skillFail, f.skillBody = fail.code, fail.body
+		}
+		f.locked(func() {
+			for id, c := range results {
+				res := map[string]any{"requestId": id}
+				for k, v := range c.res {
+					res[k] = v
+				}
+				f.byServer[id] = res
+			}
+		})
+		for id, c := range results {
+			for _, extra := range [][]string{nil, {"--json"}} {
+				r := runCLI(t, env(srv), append([]string{"status", policyID, id}, extra...)...)
+				ok := r.code == c.code && strings.Contains(r.stderr, "policy description is unavailable")
+				if c.code == exitUncertain {
+					ok = ok && r.stdout == "" && strings.Contains(r.stderr, "network could not be established") && strings.Contains(r.stderr, "Nothing is confirmed")
+				} else if extra == nil {
+					ok = ok && strings.Contains(r.stdout, "state: "+c.state)
+				} else {
+					var out map[string]any
+					ok = ok && json.Unmarshal([]byte(r.stdout), &out) == nil && out["state"] == c.state
+				}
+				if !ok {
+					t.Fatalf("skill %d, %s %v: %+v", fail.code, id, extra, r)
+				}
+			}
+		}
+		for _, q := range f.sent() {
+			if q.Action != "status" {
+				t.Fatal("status sent", q.Action)
+			}
+		}
+	}
+	// Authentication failures are never downgraded into a status read.
+	for _, code := range []int{401, 403} {
+		f, srv := newFake(t, "solana:devnet")
+		f.skillFail, f.skillBody = code, `{"error":"Harness access expired or was revoked."}`
+		if r := runCLI(t, env(srv), "status", policyID, "srv-deny-0001"); r.code != exitConfig || len(f.sent()) != 0 {
+			t.Fatal(code, r)
+		}
+	}
+}
+
+// Waiting without the network: a request that completes while polled is
+// still uncertain, and status never resends the request.
+func TestStatusWaitWithoutNetworkStaysUncertain(t *testing.T) {
+	f, srv := newFake(t, "solana:devnet")
+	f.skillFail, f.skillBody = 409, `{"error":"An agent skill cannot be issued for this policy (UNKNOWN_PROFILE): no profile."}`
+	f.locked(func() {
+		f.byServer["srv-pending-2"] = map[string]any{"outcome": "pending", "status": "evaluating", "kind": "transaction", "requestId": "srv-pending-2"}
+	})
+	go func() {
+		for {
+			f.mu.Lock()
+			if len(f.requests) > 0 {
+				res := f.byServer["srv-pending-2"]
+				res["outcome"], res["status"], res["executed"] = "pass", "settled", true
+				f.mu.Unlock()
+				return
+			}
+			f.mu.Unlock()
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	r := runCLI(t, env(srv), "status", policyID, "srv-pending-2", "--wait", "5s")
+	if r.code != exitUncertain || r.stdout != "" || !strings.Contains(r.stderr, `status "settled"`) {
+		t.Fatal(r)
+	}
+	for _, q := range f.sent() {
+		if q.Action != "status" {
+			t.Fatal("status sent", q.Action)
+		}
+	}
+}
+
+// A typed contract's capability flags gate plan features; the published
+// context keys and binding are shown.
+func TestTypedContractCapabilities(t *testing.T) {
+	f, srv := newFake(t, localDev)
+	after := `[{"type":"contract_call","contract":"` + solanaAccount + `","method":"m","args":{},"maxCostUSDC":"0"}]`
+	plan := []string{"exec", policyID, "--rail", "solana", "--op", "transferSOL", "--addr", solanaAccount, "--amount", "0.01", "--action", "research"}
+	f.editSkill = func(s map[string]any) {
+		c := s["contract"].(map[string]any)
+		c["capabilities"].(map[string]any)["contractCalls"] = false
+		c["contextU64Keys"] = []any{"dataset_units", "price_cents"}
+	}
+	if r := runCLI(t, env(srv), append(plan, "--after", after)...); r.code != exitUsage || len(f.sent()) != 0 || !strings.Contains(r.stderr, "--before or --after") {
+		t.Fatal(r)
+	}
+	if r := runCLI(t, env(srv), plan...); r.code != 0 {
+		t.Fatal(r)
+	}
+	if s := runCLI(t, env(srv), "show", policyID); !strings.Contains(s.stdout, `Context:    the policy may read these --context fields as non-negative integers: "dataset_units", "price_cents"`) || !strings.Contains(s.stdout, "Binding:    IR fedcba987654") {
+		t.Fatal(s.stdout)
+	}
+	f.locked(func() {
+		f.editSkill = func(s map[string]any) { s["contract"].(map[string]any)["capabilities"].(map[string]any)["executionPlans"] = false }
+	})
+	before := len(f.sent())
+	if r := runCLI(t, env(srv), plan...); r.code != exitUsage || len(f.sent()) != before || !strings.Contains(r.stderr, "does not accept execution plans") {
 		t.Fatal(r)
 	}
 }

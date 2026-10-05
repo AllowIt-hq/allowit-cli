@@ -4,6 +4,8 @@
 
 Go, standard library only.
 
+This branch is the untagged `0.2.0-dev` candidate. Build from this checkout to use its gateway compatibility fixes. The tagged `v0.1.1` installation below remains the earlier release.
+
 ## Install
 
 `github.com/ackrate/allowit-cli` is private; installing needs authorized GitHub access. There is no public download.
@@ -57,14 +59,24 @@ allowit exec POLICY --request-id dataset-001-exec --rail stellar --op transferXL
 allowit status POLICY REQUEST_ID [--wait 60s]
 ```
 
+Gateway-generated policy and request IDs can begin with `-`. Use `--` before the remaining identifiers, for example `allowit status --wait 60s -- POLICY REQUEST_ID` or `allowit exec --amount 1 --action transfer --addr ADDRESS -- POLICY`. For compatibility with the gateway's generated skills, `--` protects the remaining identifier slots (one policy, or policy plus request for `status`); flags may follow those slots too.
+
+A plain USDC transfer under the customer-workspace policy template, whose actions are `transfer` and `research`:
+
+```sh
+allowit eval POLICY --request-id pay-001-eval --rail solana --op transferUSDC --addr SOLANA_ADDRESS --amount 1 --action transfer
+allowit exec POLICY --request-id pay-001-exec --rail solana --op transferUSDC --addr SOLANA_ADDRESS --amount 1 --action transfer
+```
+
 `eval` calls `/judge`: it checks permission and never spends or reserves budget. `exec` calls `/transactions`.
 
 | Flag | Meaning |
 |---|---|
-| `--rail solana\|stellar`, `--op transferSOL\|transferXLM\|transferUSDC` | Transfer on a rail. Local dev: Solana SOL/USDC, Stellar XLM/USDC (mock plan). Wallet networks: `--rail solana --op transferUSDC` only (enforced by the CLI, whatever the service advertises). |
+| `--action` | **Required.** The action the policy evaluates, sent exactly as given (e.g. `transfer`, `research`). |
+| `--rail solana\|stellar`, `--op transferSOL\|transferXLM\|transferUSDC` | Transport only: the transfer on a rail. `--op` is never sent as the action. Local dev: the rails the service publishes (Solana SOL/USDC, Stellar XLM/USDC; mock plan). Wallet networks: `--rail solana --op transferUSDC` only (enforced by the CLI, whatever the service advertises). |
 | `--addr` | Recipient (Solana base58 or Stellar G/M/C strkey), checked offline and again by the server. |
 | `--amount` | Asset quantity as an exact decimal (USDC amount without `--op`). |
-| `--action`, `--merchant` | Policy action label (default: the op) and optional merchant. |
+| `--merchant` | Optional merchant. |
 | `--context JSON\|@file\|-` | Runtime context object. Forwarded as the exact JSON value; numbers are never converted. |
 | `--memo`, `--data TEXT\|@file` | Local dev plan memo and payload bytes (base64-encoded by the CLI). |
 | `--before`, `--after JSON\|@file` | Local dev contract calls: `[{"type":"contract_call","contract":"...","method":"...","args":{},"maxCostUSDC":"0"}]`. |
@@ -74,6 +86,8 @@ allowit status POLICY REQUEST_ID [--wait 60s]
 
 **Budget charge.** For Local dev plans the CLI computes the USDC charge the server requires, exactly (`math/big`): `ceil_to_0.000001(quantity × rate) + Σ maxCostUSDC`, with the fixed test rates published by the server's `/skill` response (SOL 100, XLM 0.1, USDC 1).
 
+**`--action` is required.** allowit 0.1.1 defaulted the action to the `--op` value (`transferUSDC`), which made a transport name look like the policy's action. The CLI now refuses a request without `--action` before sending anything (exit 2). Explicit actions produce the same body and the same derived request ID as before. To retry a request that 0.1.1 sent without `--action`, add `--action` set to its op (e.g. `--action transferUSDC`) and keep every other flag: that is the identical request, with the identical derived ID.
+
 **Request IDs.** Give every intended operation its own `--request-id`, and use different IDs for `eval` and `exec` (e.g. `dataset-001-eval`, `dataset-001-exec`). To retry the same request, rerun it unchanged with the same ID: the server returns the stored result instead of applying it again, and rejects the ID if any detail changed. Without `--request-id` the ID is a hash of the owner, policy, command and exact request (for Local dev plans, the plan rather than the rate-derived charge), so an accidental retry is safe but a deliberate identical second purchase collapses into the first. Server state such as the policy revision, source hash or test rates is not part of the ID, so it does not change if the owner edits the policy between attempts. The CLI prints the ID on stderr before sending: `allowit: exec request <ID> (budget charge <AMOUNT> USDC)`, then for `exec`, `allowit: if the result is unknown, retry only with --request-id <ID>`. Network failures and 502/503/504 are retried twice with the same body.
 
 **Uncertain results (exit 5).** The request may have been applied. Never retry with a new request ID. The CLI prints the exact next step:
@@ -81,7 +95,19 @@ allowit status POLICY REQUEST_ID [--wait 60s]
 - If no answer arrived, rerun the same command with the printed `--request-id ID`. AllowIt returns the stored result instead of applying it again. If the details changed since (e.g. a new test rate changed the charge), AllowIt refuses the reused ID (exit 4) rather than spending twice.
 - If AllowIt accepted the request but its result could not be read (a failed or invalid `/status` answer while waiting, or an empty, unknown or self-contradictory result), the CLI prints both the client ID and the server `requestId`. Check it with `allowit status POLICY SERVER_REQUEST_ID --wait 60s`, or rerun with `--request-id CLIENT_ID`.
 
-A result is reported only when it is one of the known combinations: `pass` with status `ready`, `submitted`, `recorded` (with `localRecorded: true`) or `settled` (with `executed: true`); `pending`/`evaluating`; `awaiting_input`/`awaiting_input`; `fail`/`denied`. `executed` and `localRecorded`, when present, must agree with the status. `kind`, when present, must be `judgment` or `transaction` and match the command; without it, `status` never reports `ready` as complete. Anything else is reported as uncertain, never as denied or complete. That includes a missing status, `pass` with `evaluating`, `pending` with `denied`, `ready` with `executed: true`, an on-chain status on Local dev, a mock recording on a wallet network, a spend for `eval`/`judgment`, and a `/status` answer for a different request. Non-200 2xx answers and redirects to `judge`/`transactions`/`status` are also uncertain.
+A result is reported only when it is one of the known combinations: `pass` with status `ready`, `submitted`, `recorded` (with `localRecorded: true`) or `settled` (with `executed: true`); `pending`/`evaluating`; `awaiting_input`/`awaiting_input`; `fail`/`denied`. `executed` and `localRecorded`, when present, must agree with the status. `kind`, when present, must be `judgment` or `transaction` and match the command; without it, `status` never reports `ready` as complete. Anything else is reported as uncertain, never as denied or complete. That includes a missing status, `pass` with `evaluating`, `pending` with `denied`, `ready` with `executed: true`, an on-chain status on Local dev, a mock recording on a wallet network, a spend for `eval`/`judgment`, and a `/status` answer for a different request or without its `requestId`. Non-200 2xx answers and redirects to `judge`/`transactions`/`status` are also uncertain.
+
+**Policy description.** Every command first reads `GET …/skill` and checks it before anything is sent to `judge` or `transactions`:
+
+- `owner` and `policyId`, when published, must match `ALLOWIT_TOKEN`.
+- `endpoints.judge`, `.transactions`, `.status` and `.skill`, when published, must name exactly the canonical route `ALLOWIT_URL/api/harness/{owner}/{policy}/{action}`. Relative URLs are resolved against the skill URL. Another origin, scheme, port, path, query or fragment is refused (exit 3). The CLI never sends to a published endpoint: requests and the bearer token go only to the canonical route on `ALLOWIT_URL`.
+- `network` is required and must be `local:dev` (mock execution) or `solana:devnet`, `solana:testnet` or `solana:mainnet` (owner-signed USDC transfers). Any other network is refused, never treated as a wallet network.
+- `executionMode` (`local` / `owner_signed`), `capabilities.mode` / `capabilities.execution` and the typed `contract.profile` (`local_dev` / `solana_owner_signed`) and `contract.capabilities.execution` (`mock` / `owner_signed`), when published, must match the network. Unknown values, a `contract.version` other than 1, or a contract bound to a different `sourceHash` are refused (exit 3).
+- Rails, test rates and plan support come from `contract.capabilities`, then the legacy `capabilities`. A wallet policy that publishes no rails still allows the one transfer its profile defines (`--rail solana --op transferUSDC`). A Local dev policy that publishes none accepts only plain USDC requests. When a typed contract sets `executionPlans`, `memoData` or `contractCalls` to false, the matching flags are refused.
+
+Fields a service omits (`title`, `policyId`, `owner`, `endpoints`, `capabilities`, `contract`) are accepted as omitted. `show` uses `name` when there is no `title`, and prints the token's policy ID marked as not reported by AllowIt.
+
+**Status without a policy description.** `status` only reads a stored request, so it continues when `/skill` fails for a reason other than authentication: a typed-skill assembly refusal (HTTP 409), another non-auth HTTP error, a network failure, or an unreadable or unsupported description. It prints `allowit: the policy description is unavailable (...)` on stderr and reads `…/status` on the canonical route. HTTP 401/403, a redirect, or a description that names another owner, policy or route still stop it (exit 3). Without the network, these are reported normally because they mean the same on every network: `pending`, `awaiting_input`, `denied` and a `ready` judgment (`passed`). `recorded`, `submitted`, `settled`, and a `ready` transaction or a `ready` result without a `kind` could be either a mock recording or a wallet transfer. Those exit 5 with stdout empty and nothing reported as confirmed, including after `--wait`. `status` never resends `judge` or `transactions`.
 
 **Context.** `--context` must be a single JSON object of at most 16 KB, depth 8 and 128 values, with no repeated keys and no top-level `allowitExecution` (AllowIt supplies that field). The server enforces the same limits.
 
@@ -98,16 +124,38 @@ A result is reported only when it is one of the known combinations: `pass` with 
 | 12 | `pending` | Still evaluating after `--wait`. |
 | 20 | `denied` | The policy refused; the reason is printed. |
 | 2 | usage | Invalid flags or input; nothing sent. |
-| 3 | config/auth | Bad configuration, policy mismatch, untrusted TLS, redirect on `GET /skill`, HTTP 401/403 before a request is accepted. |
+| 3 | config/auth/unsupported | Bad configuration, policy mismatch, untrusted TLS, redirect on `GET /skill`, HTTP 401/403 before a request is accepted, or a policy description that names another owner, policy or route, or an unknown network, profile or contract version. Nothing was sent to `judge` or `transactions`. |
 | 4 | rejected | Server rejected the request (400/404/409/429) before accepting it; its message is printed. |
 | 5 | uncertain | Network or server failure, or an accepted request whose result could not be read; follow the printed retry (same `--request-id`) or `allowit status` command. |
 
-`status` uses the server's `kind`: a ready `judgment` is `passed`, a ready `transaction` is `owner_signature`. All fields the server returns (reason, prompt, `decisionCode`, `workflowNodeId`, revision, source hash, receipt steps) are printed.
+`status` requires the returned `requestId` to match the requested ID and uses the server's `kind`: a ready `judgment` is `passed`, a ready `transaction` is `owner_signature`. All fields the server returns (reason, prompt, `decisionCode`, `workflowNodeId`, revision, source hash, receipt steps) are printed.
 
 The configured token is redacted in full from all output, whatever its length. Its secret part must be 16–128 URL-safe characters.
 
 ## API used
 
 `GET /api/harness/{owner}/{policy}/skill`, `POST …/judge`, `POST …/transactions`, `POST …/status`, with `Authorization: Bearer owner.policy.secret`. See `AllowIt-app/server/app/policy_requests.go` for validation.
+
+## Server compatibility
+
+The agent interface is exactly these four commands. Policy creation, editing, allocation and owner approval stay in the AllowIt web app; the token cannot answer owner questions, sign or change the policy.
+
+| Server | `/skill` shape | CLI behaviour |
+|---|---|---|
+| AllowIt backend with typed skill assembly (`server/app/skill.go`, `skill_contract.go`) | `title`, `policyId`, `owner`, absolute `endpoints`, `executionMode`, legacy `capabilities`, typed `contract` (profile, binding, capabilities, `contextU64Keys`). Results carry `kind`, `revision`, `sourceHash`. A policy whose skill cannot be assembled gets HTTP 409. | All checks above apply. `show` also prints the IR binding and the integer `context` fields the policy may read. On a 409, `show`/`eval`/`exec` stop with exit 4; `status` still reads existing requests. |
+| Customer-workspace frontend server (AllowIt-app PR6) | `name`, `network`, `executionMode`, relative `endpoints`; no `title`, `policyId`, `owner`, `capabilities` or `contract`. Results omit `kind`, `revision` and `sourceHash`. | Supported as described: relative endpoints must resolve to the canonical routes and the network must be supported. A wallet policy allows `--rail solana --op transferUSDC` or plain USDC requests with `--action transfer` or `--action research`. Without `kind`, a `ready` status result is reported as `ready` (exit 10, not complete), never as passed or awaiting signature. |
+| Older backends | No `endpoints`, `owner` or `contract`. | Supported as before, except that `--action` is now required. |
+
+The CLI reports the server's states. It has not been exercised against live wallet settlement, and no paid service is delivered through this interface.
+
+**Remaining backend handoff work** (none of it is in this CLI):
+
+- Customer server: publish `policyId`, `owner`, absolute canonical `endpoints`, and the typed `contract` (profile, binding, capabilities) in `/skill`. Return `kind` in results so a ready `status` can be classified.
+- Preserve the tested `executionMode` values (`local` and `owner_signed`); a new execution profile needs an explicit CLI implementation.
+- Customer UI: explicit allocation activation, capability handoff, and the owner review and transaction path. Until those exist, `exec` on a wallet policy stops at `owner_signature`.
+- Wiring the frontend server to the standalone SDK/engine is later work. The engine's `/v1` API takes trusted service credentials and signed owner bindings, so a harness token must never be sent to it. The adapter must also keep `eval` non-reserving, request identity, revisions, owner continuations and settlement evidence.
+- The app's SKILL.md CLI adapter documents allowit `0.1.1`; update `cliVersion` there when this release is tagged.
+
+The [pinned integration checks](integration/README.md) exercise both actual Go gateways and their Rust SDK runtimes without editing the app checkout. Run `make integration APP_REPO=/path/to/AllowIt-app` in addition to `make test` when both backend commits are available locally.
 
 Skill format: [Agent Skills specification](https://agentskills.io/specification) and [best practices](https://agentskills.io/skill-creation/best-practices).
