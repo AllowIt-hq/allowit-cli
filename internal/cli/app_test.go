@@ -178,7 +178,7 @@ func (f *fakeHarness) skill(base string) map[string]any {
 		endpoints[a] = base + "/api/harness/" + owner + "/" + policyID + "/" + a
 	}
 	s := map[string]any{
-		"name":"AllowIt policy Research budget", "title": "Research budget", "policyId": policyID, "owner": owner, "status": "active",
+		"name": "AllowIt policy Research budget", "title": "Research budget", "policyId": policyID, "owner": owner, "status": "active",
 		"network": f.network, "revision": 3 + f.revision, "sourceHash": fmt.Sprintf("abcdef0123456789abcdef%d", f.revision), "language": "allowit-rust-v1",
 		"originalIntent": "Buy original research datasets.\n\nRevision request:\nNever above 5 USDC.",
 		"policy":         "pub async fn evaluate(ctx:&Context)->PolicyResult{Ok(())}",
@@ -364,6 +364,80 @@ func TestIdempotentRequestIDs(t *testing.T) {
 	st := runCLI(t, env(srv), "status", "--wait", "0s", "--", policyID, "order-0001")
 	if st.code != 0 || !strings.Contains(st.stdout, "state: recorded") || !strings.Contains(st.stdout, "clientRequestId: order-0001") {
 		t.Fatal("status by client ID", st)
+	}
+}
+
+func TestReplayMetadataSurvivesPolling(t *testing.T) {
+	for _, mode := range []string{"derived", "explicit", "automatic-resend"} {
+		for _, complete := range []bool{false, true} {
+			for _, asJSON := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/complete=%t/json=%t", mode, complete, asJSON), func(t *testing.T) {
+					f, _ := newFake(t, localDev)
+					const id = "srv-replay-polling-1"
+					const created = "2026-10-05T00:00:00Z"
+					f.respond = func(string, map[string]any) map[string]any {
+						return map[string]any{"outcome": "pending", "status": "evaluating", "requestId": id, "createdAt": created}
+					}
+					polls := 0
+					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if strings.HasSuffix(r.URL.Path, "/status") {
+							f.locked(func() {
+								polls++
+								// Actual status responses contain neither replay field.
+								res := map[string]any{"outcome": "pending", "status": "evaluating", "requestId": id}
+								if complete {
+									res["outcome"], res["status"], res["localRecorded"] = "pass", "recorded", true
+								}
+								f.byServer[id] = res
+							})
+						}
+						f.ServeHTTP(w, r)
+					}))
+					t.Cleanup(srv.Close)
+					args := []string{"exec", policyID, "--amount", "1", "--action", "research"}
+					if mode == "explicit" {
+						args = append(args, "--request-id", "replay-polling-1")
+					}
+					if mode == "automatic-resend" {
+						f.locked(func() { f.dropFirst = 1 })
+					} else if first := runCLI(t, env(srv), append(append([]string{}, args...), "--wait", "0s")...); first.code != exitPending {
+						t.Fatal(first)
+					}
+					args = append(args, "--wait", "1ms")
+					if asJSON {
+						args = append(args, "--json")
+					}
+					got := runCLI(t, env(srv), args...)
+					state, exit := "pending", exitPending
+					if complete {
+						state, exit = "recorded", exitOK
+					}
+					storedState := state
+					if mode == "derived" {
+						state, exit = "replayed", exitReplayed
+					}
+					if got.code != exit || f.clients() != 1 {
+						t.Fatalf("wrong replay classification or duplicate request: %+v", got)
+					}
+					f.locked(func() {
+						if polls != 1 {
+							t.Fatalf("expected one status read, got %d", polls)
+						}
+					})
+					if asJSON {
+						var result map[string]any
+						if json.Unmarshal([]byte(got.stdout), &result) != nil || result["state"] != state || result["replayed"] != true || result["createdAt"] != created {
+							t.Fatal(got)
+						}
+						if mode == "derived" && result["replayedState"] != storedState {
+							t.Fatal(got)
+						}
+					} else if !strings.Contains(got.stdout, "state: "+state) || !strings.Contains(got.stdout, "replayed: true") || !strings.Contains(got.stdout, "nothing new was submitted") {
+						t.Fatal(got)
+					}
+				})
+			}
+		}
 	}
 }
 
@@ -761,7 +835,9 @@ func TestServerTextIsScrubbed(t *testing.T) {
 func TestShortTokenIsNeverPrinted(t *testing.T) {
 	var out, errOut bytes.Buffer
 	for _, args := range [][]string{{"a.b.c"}, {"show", "a.b.c"}, {"status", "a.b.c", "a.b.c.request"}, {"exec", "a.b.c", "--context", "a.b.c"}} {
-		code := App{Getenv: func(k string) string { return map[string]string{"ALLOWIT_TOKEN": "a.b.c", "ALLOWIT_URL": "https://allowit.example"}[k] }, Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errOut}.Run(args)
+		code := App{Getenv: func(k string) string {
+			return map[string]string{"ALLOWIT_TOKEN": "a.b.c", "ALLOWIT_URL": "https://allowit.example"}[k]
+		}, Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errOut}.Run(args)
 		if code == 0 || strings.Contains(out.String()+errOut.String(), "a.b.c") {
 			t.Fatalf("%v: %d %q %q", args, code, out.String(), errOut.String())
 		}
@@ -1042,7 +1118,9 @@ func TestSkillMetadataRefusedBeforeSending(t *testing.T) {
 	} {
 		f, srv := newFake(t, "solana:devnet")
 		f.editSkill = c.edit
-		f.locked(func() { f.byServer["srv-deny-0001"] = map[string]any{"outcome": "fail", "status": "denied", "requestId": "srv-deny-0001"} })
+		f.locked(func() {
+			f.byServer["srv-deny-0001"] = map[string]any{"outcome": "fail", "status": "denied", "requestId": "srv-deny-0001"}
+		})
 		for _, args := range [][]string{
 			{"show", policyID},
 			{"eval", policyID, "--amount", "1", "--action", "research"},
@@ -1191,7 +1269,9 @@ func TestTypedContractCapabilities(t *testing.T) {
 		t.Fatal(s.stdout)
 	}
 	f.locked(func() {
-		f.editSkill = func(s map[string]any) { s["contract"].(map[string]any)["capabilities"].(map[string]any)["executionPlans"] = false }
+		f.editSkill = func(s map[string]any) {
+			s["contract"].(map[string]any)["capabilities"].(map[string]any)["executionPlans"] = false
+		}
 	})
 	before := len(f.sent())
 	if r := runCLI(t, env(srv), plan...); r.code != exitUsage || len(f.sent()) != before || !strings.Contains(r.stderr, "does not accept execution plans") {
