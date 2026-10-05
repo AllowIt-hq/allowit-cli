@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -32,7 +33,8 @@ Commands:
 Request flags:
   --action NAME        required: the action the policy evaluates, e.g. transfer
   --rail solana|stellar --op transferSOL|transferXLM|transferUSDC --addr ADDRESS
-  --amount DECIMAL     asset quantity (USDC amount without --op)
+                       --rail and --op are always given together
+  --amount DECIMAL     USDC amount; with --rail and --op, the asset quantity
   --merchant NAME      optional merchant
   --context JSON       runtime context object: literal, @file or - for stdin
   --memo TEXT          mock plan memo (Local dev)
@@ -46,14 +48,16 @@ Request flags:
 
 Exit codes: 0 passed/recorded/settled, 2 usage, 3 config, auth or unsupported
 policy description, 4 rejected,
-5 uncertain result (retry only as printed, with the same --request-id), 10 owner
-signature (or passed but not yet complete), 11 awaiting owner input, 12 pending,
-20 denied.
+5 uncertain result (retry only as printed, with the same --request-id; also a
+--request-id already used with other details, or a request status cannot find),
+6 replayed (a derived request ID matched an identical earlier request: nothing
+new was submitted), 10 owner signature (or passed but not yet complete),
+11 awaiting owner input, 12 pending, 20 denied.
 
 Request IDs: give each intended operation its own --request-id and separate IDs
 for eval and exec; rerun with the same ID only to retry the same request. After
 exit 5 never retry with a new ID: rerun with the printed --request-id, or check
-the printed server requestId with allowit status.
+it with allowit status, which accepts the server requestId or your --request-id.
 `
 
 // App holds the process environment so tests can run commands in-process.
@@ -338,7 +342,7 @@ func (a App) request(kind string, args []string, out, errOut printer) (int, erro
 	fs := flag.NewFlagSet(kind, flag.ContinueOnError)
 	var f requestFlags
 	for name, target := range map[string]*string{"rail": &f.rail, "op": &f.op, "addr": &f.addr, "amount": &f.amount, "action": &f.action, "merchant": &f.merchant, "context": &f.context, "memo": &f.memo, "data": &f.data, "before": &f.before, "after": &f.after, "request-id": &f.requestID, "budget": &f.budget} {
-		fs.StringVar(target, name, "", "")
+		fs.Var(&onceString{target: target}, name, "")
 	}
 	asJSON := fs.Bool("json", false, "")
 	wait := fs.Duration("wait", 60*time.Second, "")
@@ -395,8 +399,15 @@ func (a App) request(kind string, args []string, out, errOut printer) (int, erro
 		if errors.As(err, &un) {
 			return 0, fmt.Errorf("%w\nThe request may have reached AllowIt. Do not retry with a new request ID. Retry only by rerunning the same command with --request-id %s: AllowIt applies a request ID at most once", err, body.RequestID)
 		}
+		// 409: this ID already names a request with other details, which
+		// may have been applied. That is never "nothing happened".
+		var ae *apiError
+		if errors.As(err, &ae) && ae.Status == http.StatusConflict {
+			return 0, &uncertainError{fmt.Errorf("%v\nA request with --request-id %s already exists with different details and may have been applied. Read it with: allowit status --wait 0s -- %s %s\nUse a new --request-id only for a different intended operation", err, body.RequestID, pos[0], body.RequestID)}
+		}
 		return 0, err
 	}
+	resent := c.resent
 	// From here AllowIt has accepted the request: any failure to read its
 	// result is uncertain, never a rejection.
 	unknown := func(err error) error {
@@ -423,6 +434,9 @@ func (a App) request(kind string, args []string, out, errOut printer) (int, erro
 		r = next
 	}
 	res := classify(r, kind)
+	// A derived ID that this invocation did not itself resend matched an
+	// earlier, separate run of the same command.
+	res = replayResult(r, res, f.requestID == "" && !resent, body.RequestID)
 	if *asJSON {
 		r["state"], r["clientRequestId"], r["budgetChargeUSDC"], r["exitCode"] = res.State, body.RequestID, body.Amount, res.Exit
 		out.json(r)
@@ -431,6 +445,22 @@ func (a App) request(kind string, args []string, out, errOut printer) (int, erro
 		out.printf("budgetChargeUSDC: %s\n", body.Amount)
 	}
 	return res.Exit, nil
+}
+
+// replayResult reports an earlier request's stored result. With an explicit
+// --request-id that is the documented retry and keeps its state and exit
+// code; a derived ID only matched an identical earlier request, so it gets
+// its own state and exit code: nothing new was submitted.
+func replayResult(r map[string]any, res result, derived bool, id string) result {
+	if r["replayed"] != true {
+		return res
+	}
+	if !derived {
+		res.Note += " This is the stored result of an earlier request with this --request-id; nothing new was submitted."
+		return res
+	}
+	r["replayedState"] = res.State
+	return result{"replayed", exitReplayed, fmt.Sprintf("An identical earlier request (derived request ID %s) already has this result; nothing new was submitted. Its state was %s. For another intended operation pass a new --request-id.", id, res.State)}
 }
 
 func (a App) status(args []string, out, errOut printer) (int, error) {
@@ -460,15 +490,17 @@ func (a App) status(args []string, out, errOut printer) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	var r map[string]any
-	if err := c.call("POST", "status", encodeJSON(map[string]string{"requestId": pos[1]}), &r); err != nil {
+	r, err := c.lookup(pos[0], pos[1])
+	if err != nil {
 		return 0, err
 	}
+	// Later reads use the server's ID, whichever ID found the request.
+	id := str(r["requestId"])
 	if err := checkStatus(r, pos[1], net); err != nil {
 		return 0, &uncertainError{fmt.Errorf("%v\nThe state of request %s is unknown; check again with allowit status", err, pos[1])}
 	}
 	if o := str(r["outcome"]); o == "pending" || (o == "awaiting_input" || str(r["status"]) == "submitted" || str(r["status"]) == "ready") && *wait > 0 {
-		if r, err = a.poll(c, pos[1], *wait, r, "status", net); err != nil {
+		if r, err = a.poll(c, id, *wait, r, "status", net); err != nil {
 			return 0, &uncertainError{fmt.Errorf("%v\nThe state of request %s is unknown; check again with allowit status", err, pos[1])}
 		}
 	}
@@ -518,10 +550,28 @@ func checkStatus(r map[string]any, id string, net netKind) error {
 	}
 	if got := str(r["requestId"]); got == "" {
 		return errors.New("AllowIt returned a status without its requestId")
-	} else if got != id {
+	} else if got != id && str(r["clientRequestId"]) != id {
 		return fmt.Errorf("AllowIt returned the status of a different request (%s)", got)
 	}
 	return nil
+}
+
+// lookup reads a request by the server requestId, then by the client
+// --request-id. A request that neither finds may still be in flight, so the
+// miss is uncertain, never a rejection.
+func (c *client) lookup(policy, id string) (map[string]any, error) {
+	var r map[string]any
+	err := c.call("POST", "status", encodeJSON(map[string]string{"requestId": id}), &r)
+	var ae *apiError
+	if !errors.As(err, &ae) || ae.Status != http.StatusNotFound {
+		return r, err
+	}
+	r = nil
+	err = c.call("POST", "status", encodeJSON(map[string]string{"clientRequestId": id}), &r)
+	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+		return nil, &uncertainError{fmt.Errorf("AllowIt has no request %s for this policy yet. If an exec with --request-id %s may have been sent, rerun that identical command: AllowIt applies a request ID at most once", id, id)}
+	}
+	return r, err
 }
 
 const maxWait = 10 * time.Minute

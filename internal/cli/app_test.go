@@ -99,18 +99,24 @@ func (f *fakeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Execution *Plan           `json:"execution"`
 		Context   json.RawMessage `json:"context"`
 		RequestID string          `json:"requestId"`
+		ClientID  string          `json:"clientRequestId"`
 		Amount    string          `json:"amount"`
 		Token     string          `json:"token"`
 		Action    string          `json:"action"`
 		Merchant  string          `json:"merchant"`
 		Recipient string          `json:"recipient"`
 	}
-	if d.Decode(&body) != nil {
+	if d.Decode(&body) != nil || body.ClientID != "" && action != "status" {
 		http.Error(w, `{"error":"Check the request fields and try again."}`, 400)
 		return
 	}
 	if action == "status" {
 		res, ok := f.byServer[body.RequestID]
+		if body.ClientID != "" {
+			var prev stored
+			prev, ok = f.byClient[body.ClientID]
+			res = prev.result
+		}
 		if !ok {
 			http.Error(w, `{"error":"Request not found."}`, 404)
 			return
@@ -128,7 +134,11 @@ func (f *fakeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"That requestId was already used for different request details."}`, 409)
 			return
 		}
-		f.reply(w, action, prev.result)
+		replay := map[string]any{"replayed": true}
+		for k, v := range prev.result {
+			replay[k] = v
+		}
+		f.reply(w, action, replay)
 		return
 	}
 	var generic map[string]any
@@ -142,6 +152,9 @@ func (f *fakeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	f.byClient[body.RequestID] = stored{key, res}
 	f.byServer[str(res["requestId"])] = res
+	if _, ok := res["requestId"]; ok && f.respond == nil {
+		res["clientRequestId"] = body.RequestID
+	}
 	f.reply(w, action, res)
 }
 
@@ -313,8 +326,10 @@ func TestIdempotentRequestIDs(t *testing.T) {
 	// Whitespace-only differences in the context are the same request.
 	again := append([]string{"exec"}, args...)
 	again[len(again)-1] = `{ "a": 1 }`
-	if r := runCLI(t, env(srv), again...); r.code != 0 || id() != first {
-		t.Fatal("identical retry used a new request ID", r)
+	// A derived ID only matches an identical earlier request: the CLI says
+	// nothing new was submitted instead of reporting a fresh success.
+	if r := runCLI(t, env(srv), again...); r.code != exitReplayed || id() != first || !strings.Contains(r.stdout, "state: replayed") || !strings.Contains(r.stdout, "replayedState: recorded") || !strings.Contains(r.stdout, "nothing new was submitted") {
+		t.Fatal("identical retry used a new request ID or looked new", r)
 	}
 	if f.clients() != 1 {
 		t.Fatal("retry created a second request")
@@ -333,10 +348,52 @@ func TestIdempotentRequestIDs(t *testing.T) {
 	if explicit.code != 0 || id() != `"order-0001"` {
 		t.Fatal("explicit ID ignored")
 	}
-	// Reusing an explicit ID for different details is refused by the server.
+	// Rerunning with the explicit ID is the documented retry: it keeps the
+	// stored state and exit code and says nothing new was submitted.
+	retry := runCLI(t, env(srv), append([]string{"exec", "--request-id", "order-0001"}, args...)...)
+	if retry.code != 0 || !strings.Contains(retry.stdout, "state: recorded") || !strings.Contains(retry.stdout, "replayed: true") || !strings.Contains(retry.stdout, "nothing new was submitted") {
+		t.Fatal("explicit retry", retry)
+	}
+	// Reusing an explicit ID for different details: that request may have been
+	// applied, so this is uncertain (never "rejected") and points at status.
 	conflict := runCLI(t, env(srv), "exec", policyID, "--request-id", "order-0001", "--rail", "stellar", "--op", "transferUSDC", "--addr", stellarAccount, "--amount", "2", "--action", "research")
-	if conflict.code != exitRejected || !strings.Contains(conflict.stderr, "already used") {
+	if conflict.code != exitUncertain || !strings.Contains(conflict.stderr, "already used") || !strings.Contains(conflict.stderr, "allowit status --wait 0s -- "+policyID+" order-0001") {
 		t.Fatal(conflict)
+	}
+	// status finds that request by the client ID it was sent with.
+	st := runCLI(t, env(srv), "status", "--wait", "0s", "--", policyID, "order-0001")
+	if st.code != 0 || !strings.Contains(st.stdout, "state: recorded") || !strings.Contains(st.stdout, "clientRequestId: order-0001") {
+		t.Fatal("status by client ID", st)
+	}
+}
+
+// L6: a repeated request flag is refused before anything is sent.
+func TestRepeatedRequestFlagIsRefused(t *testing.T) {
+	f, srv := newFake(t, "solana:devnet")
+	r := runCLI(t, env(srv), "exec", policyID, "--addr", solanaAccount, "--amount", "1", "--action", "research", "--amount", "900")
+	if r.code != exitUsage || len(f.sent()) != 0 || !strings.Contains(r.stderr, "may be given only once") {
+		t.Fatal(r)
+	}
+}
+
+// L5: server text cannot print lines that read as result fields.
+func TestServerTextCannotSpoofFields(t *testing.T) {
+	f, srv := newFake(t, "solana:devnet")
+	f.respond = func(string, map[string]any) map[string]any {
+		return map[string]any{"outcome": "fail", "status": "denied", "kind": "transaction", "requestId": "srv-deny-12345", "reason": "No.\nstate: settled\nexecuted: true"}
+	}
+	r := runCLI(t, env(srv), "exec", policyID, "--addr", solanaAccount, "--amount", "1", "--action", "research")
+	if r.code != exitDenied || strings.Count("\n"+r.stdout, "\nstate: ") != 1 || strings.Contains(r.stdout, "\nexecuted: true") || !strings.Contains(r.stdout, `reason: "No.\nstate: settled\nexecuted: true"`) {
+		t.Fatal(r)
+	}
+}
+
+// Info: an explicit default port names the same origin.
+func TestDefaultPortIsTheSameOrigin(t *testing.T) {
+	for raw, want := range map[string]string{"https://allowit.example:443": "https://allowit.example", "http://127.0.0.1:80": "http://127.0.0.1", "http://[::1]:80": "http://[::1]", "https://allowit.example:8443": "https://allowit.example:8443"} {
+		if got, err := parseOrigin(raw); err != nil || got != want {
+			t.Fatal(raw, got, err)
+		}
 	}
 }
 
@@ -344,8 +401,10 @@ func TestUncertainFailureRetriesSameRequest(t *testing.T) {
 	f, srv := newFake(t, localDev)
 	f.locked(func() { f.dropFirst = 1 })
 	r := runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "1", "--action", "transfer")
-	if r.code != 0 || f.clients() != 1 {
-		t.Fatalf("retry was not idempotent: %d %d\n%s", r.code, f.clients(), r.stderr)
+	// The CLI's own resend after a lost answer is a retry, not a replay of an
+	// earlier operation: it reports the stored state, not "replayed".
+	if r.code != 0 || f.clients() != 1 || !strings.Contains(r.stdout, "state: settled") && !strings.Contains(r.stdout, "state: recorded") && !strings.Contains(r.stdout, "state: owner_signature") {
+		t.Fatalf("retry was not idempotent: %d %d\n%s\n%s", r.code, f.clients(), r.stdout, r.stderr)
 	}
 	ids := map[string]bool{}
 	sent := f.sent()
@@ -369,8 +428,10 @@ func TestUncertainFailureRetriesSameRequest(t *testing.T) {
 		t.Fatal(r.stderr)
 	}
 	// The owner edits the policy before the retry: the derived ID must not change.
+	// Without --request-id the CLI cannot tell a retry from a second identical
+	// operation, so it reports the stored result as replayed (exit 6).
 	f.locked(func() { f.dropFirst, f.revision = 0, 1 })
-	if again := runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "2", "--action", "transfer"); again.code != 0 || f.clients() != 2 {
+	if again := runCLI(t, env(srv), "exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "2", "--action", "transfer"); again.code != exitReplayed || !strings.Contains(again.stdout, "replayedState: ") || f.clients() != 2 {
 		t.Fatal("rerun after a policy revision created another spend", again, f.clients())
 	}
 	// So does the printed explicit retry.
@@ -587,7 +648,7 @@ func TestPendingIsPolledThroughStatus(t *testing.T) {
 	if json.Unmarshal([]byte(st.stdout), &out) != nil || out["state"] != "recorded" || st.code != 0 {
 		t.Fatal(st)
 	}
-	if nf := runCLI(t, env(srv), "status", policyID, "srv-missing-1"); nf.code != exitRejected || !strings.Contains(nf.stderr, "Request not found") {
+	if nf := runCLI(t, env(srv), "status", policyID, "srv-missing-1"); nf.code != exitUncertain || !strings.Contains(nf.stderr, "rerun that identical command") {
 		t.Fatal(nf)
 	}
 }
@@ -715,8 +776,8 @@ func TestEchoedCredentialIsRedactedEverywhere(t *testing.T) {
 		return map[string]any{"outcome": "pass", "status": "ready", "kind": "judgment", "requestId": "srv-echo-1", "reason": "echo " + token + " " + secret, "nested": map[string]any{"x": []any{secret}}}
 	}
 	for _, args := range [][]string{
-		{"eval", policyID, "--amount", "1", "--action", "research", "--json"},
-		{"eval", policyID, "--amount", "1", "--action", "research"},
+		{"eval", policyID, "--amount", "1", "--action", "research", "--request-id", "echo-eval-0001", "--json"},
+		{"eval", policyID, "--amount", "1", "--action", "research", "--request-id", "echo-eval-0001"},
 		{"status", policyID, "srv-echo-1", "--json"},
 		{"show", policyID, "--json"},
 		{"show", policyID, "--json", "--source"},
@@ -833,6 +894,29 @@ func TestTLSWithCAFile(t *testing.T) {
 // --op is the transfer, never the policy action. A missing --action is refused
 // before anything is sent; explicit actions keep their exact request IDs, and
 // --action set to the op reproduces a 0.1.1 request (which defaulted to it).
+// Help says --rail and --op go together and what --amount means with and
+// without them; a lone --rail or --op is refused before sending.
+func TestRailOpAndAmountAreExplained(t *testing.T) {
+	r := runCLI(t, map[string]string{}, "help")
+	for _, want := range []string{"--rail and --op are always given together", "--amount DECIMAL     USDC amount; with --rail and --op, the asset quantity"} {
+		if r.code != exitOK || !strings.Contains(r.stdout, want) {
+			t.Fatalf("help lacks %q:\n%s", want, r.stdout)
+		}
+	}
+	f, srv := newFake(t, "solana:testnet")
+	for _, lone := range [][]string{{"--rail", "solana"}, {"--op", "transferUSDC"}} {
+		args := append([]string{"exec", policyID, "--addr", solanaAccount, "--amount", "0.05", "--action", "research"}, lone...)
+		if r := runCLI(t, env(srv), args...); r.code != exitUsage || len(f.sent()) != 0 || !strings.Contains(r.stderr, "--rail and --op are used together; omit both") {
+			t.Fatal(lone, r)
+		}
+	}
+	// Without both, --amount is the USDC amount of a plain wallet request.
+	runCLI(t, env(srv), "exec", policyID, "--addr", solanaAccount, "--amount", "0.05", "--action", "research")
+	if _, body := f.last(t); string(body["amount"]) != `"0.05"` || string(body["recipient"]) != `"`+solanaAccount+`"` || body["execution"] != nil {
+		t.Fatal(body)
+	}
+}
+
 func TestActionIsRequired(t *testing.T) {
 	f, srv := newFake(t, "solana:devnet")
 	transfer := []string{"exec", policyID, "--rail", "solana", "--op", "transferUSDC", "--addr", solanaAccount, "--amount", "1"}

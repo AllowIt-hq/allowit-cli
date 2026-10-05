@@ -92,7 +92,7 @@ func buildBody(kind string, f requestFlags, s *Skill, stdin io.Reader) (*Body, e
 		return nil, usagef("--amount is required")
 	}
 	if (f.rail == "") != (f.op == "") {
-		return nil, usagef("--rail and --op are used together")
+		return nil, usagef("--rail and --op are used together; omit both to send --amount as a plain USDC amount")
 	}
 	planOnly := f.memo != "" || f.data != "" || f.before != "" || f.after != ""
 	if f.rail == "" {
@@ -378,4 +378,28 @@ func contains(list []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// onceString is a string flag that refuses a second value, so a repeated
+// request flag (for example --amount 1 ... --amount 900) cannot silently
+// replace the first.
+type onceString struct {
+	target *string
+	set    bool
+}
+
+func (o *onceString) String() string {
+	if o == nil || o.target == nil {
+		return ""
+	}
+	return *o.target
+}
+
+func (o *onceString) Set(v string) error {
+	if o.set {
+		return errors.New("may be given only once")
+	}
+	o.set = true
+	*o.target = v
+	return nil
 }
