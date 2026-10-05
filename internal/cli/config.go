@@ -64,7 +64,14 @@ func parseOrigin(raw string) (string, error) {
 	default:
 		return "", errors.New("ALLOWIT_URL must use https")
 	}
-	return scheme + "://" + strings.ToLower(u.Host), nil
+	host := strings.ToLower(u.Host)
+	if port := u.Port(); scheme == "https" && port == "443" || scheme == "http" && port == "80" {
+		host = strings.ToLower(u.Hostname())
+		if strings.Contains(host, ":") {
+			host = "[" + host + "]"
+		}
+	}
+	return scheme + "://" + host, nil
 }
 
 func loopback(host string) bool {

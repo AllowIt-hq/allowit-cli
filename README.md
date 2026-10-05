@@ -92,8 +92,12 @@ allowit exec POLICY --request-id pay-001-exec --rail solana --op transferUSDC --
 
 **Uncertain results (exit 5).** The request may have been applied. Never retry with a new request ID. The CLI prints the exact next step:
 
-- If no answer arrived, rerun the same command with the printed `--request-id ID`. AllowIt returns the stored result instead of applying it again. If the details changed since (e.g. a new test rate changed the charge), AllowIt refuses the reused ID (exit 4) rather than spending twice.
-- If AllowIt accepted the request but its result could not be read (a failed or invalid `/status` answer while waiting, or an empty, unknown or self-contradictory result), the CLI prints both the client ID and the server `requestId`. Check it with `allowit status POLICY SERVER_REQUEST_ID --wait 60s`, or rerun with `--request-id CLIENT_ID`.
+- If no answer arrived, rerun the same command with the printed `--request-id ID`. AllowIt returns the stored result instead of applying it again, marked `replayed: true`. If the details changed since (e.g. a new test rate changed the charge), AllowIt refuses the reused ID rather than spending twice; that request may already have been applied, so the CLI exits 5 and prints the `allowit status` command that reads it by your `--request-id`.
+- If AllowIt accepted the request but its result could not be read (a failed or invalid `/status` answer while waiting, or an empty, unknown or self-contradictory result), the CLI prints both the client ID and the server `requestId`. Check it with `allowit status --wait 60s -- POLICY ID` (the server `requestId` or your `--request-id`), or rerun with `--request-id CLIENT_ID`. A `status` that finds no request by either ID exits 5: an exec may still be in flight, so rerun that identical exec instead of choosing a new ID.
+
+**Replays (exit 6).** AllowIt marks a stored result returned for a reused request ID with `replayed: true`. With an explicit `--request-id` that is the documented retry: the CLI keeps the stored state and exit code and notes that nothing new was submitted. With a derived ID (no `--request-id`), a separate run of an identical command only matched the earlier request, so the CLI reports `state: replayed` (exit 6) with the stored state as `replayedState`; nothing new was submitted. Pass a new `--request-id` for each intended operation.
+
+**Flags and output.** A request flag given twice is refused (exit 2). Server text that spans lines is printed as one quoted value, so it cannot add lines that read as fields.
 
 A result is reported only when it is one of the known combinations: `pass` with status `ready`, `submitted`, `recorded` (with `localRecorded: true`) or `settled` (with `executed: true`); `pending`/`evaluating`; `awaiting_input`/`awaiting_input`; `fail`/`denied`. `executed` and `localRecorded`, when present, must agree with the status. `kind`, when present, must be `judgment` or `transaction` and match the command; without it, `status` never reports `ready` as complete. Anything else is reported as uncertain, never as denied or complete. That includes a missing status, `pass` with `evaluating`, `pending` with `denied`, `ready` with `executed: true`, an on-chain status on Local dev, a mock recording on a wallet network, a spend for `eval`/`judgment`, and a `/status` answer for a different request or without its `requestId`. Non-200 2xx answers and redirects to `judge`/`transactions`/`status` are also uncertain.
 
@@ -125,10 +129,11 @@ Fields a service omits (`title`, `policyId`, `owner`, `endpoints`, `capabilities
 | 20 | `denied` | The policy refused; the reason is printed. |
 | 2 | usage | Invalid flags or input; nothing sent. |
 | 3 | config/auth/unsupported | Bad configuration, policy mismatch, untrusted TLS, redirect on `GET /skill`, HTTP 401/403 before a request is accepted, or a policy description that names another owner, policy or route, or an unknown network, profile or contract version. Nothing was sent to `judge` or `transactions`. |
-| 4 | rejected | Server rejected the request (400/404/409/429) before accepting it; its message is printed. |
-| 5 | uncertain | Network or server failure, or an accepted request whose result could not be read; follow the printed retry (same `--request-id`) or `allowit status` command. |
+| 4 | rejected | Server rejected the request (400/429) before accepting it; its message is printed. |
+| 5 | uncertain | Network or server failure, an accepted request whose result could not be read, a `--request-id` already used with other details (HTTP 409), or a `status` that finds no request; follow the printed retry (same `--request-id`) or `allowit status` command. |
+| 6 | `replayed` | exec/eval without `--request-id` matched an identical earlier request; nothing new was submitted. `replayedState` is its stored state. |
 
-`status` requires the returned `requestId` to match the requested ID and uses the server's `kind`: a ready `judgment` is `passed`, a ready `transaction` is `owner_signature`. All fields the server returns (reason, prompt, `decisionCode`, `workflowNodeId`, revision, source hash, receipt steps) are printed.
+`status` reads by the server `requestId`, then by the client `--request-id` (`clientRequestId`); the returned request must carry the requested ID as one of them. It uses the server's `kind`: a ready `judgment` is `passed`, a ready `transaction` is `owner_signature`. All fields the server returns (reason, prompt, `decisionCode`, `workflowNodeId`, revision, source hash, receipt steps) are printed.
 
 The configured token is redacted in full from all output, whatever its length. Its secret part must be 16–128 URL-safe characters.
 

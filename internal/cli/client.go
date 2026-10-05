@@ -45,6 +45,9 @@ type client struct {
 	timeout time.Duration
 	retries int
 	sleep   func(time.Duration)
+	// resent: the last call's answer came from resending a POST after an
+	// attempt that may have been processed.
+	resent bool
 }
 
 func newClient(cfg *Config, timeout time.Duration, sleep func(time.Duration)) (*client, error) {
@@ -81,6 +84,7 @@ func (c *client) call(method, action string, body []byte, out any) error {
 	// Once a POST attempt may have been processed, a definite failure of a
 	// retry (409, 429, 401, TLS...) no longer proves the request was not applied.
 	processed := false
+	c.resent = false
 	final := func(err error) error {
 		var ue *uncertainError
 		if !processed || errors.As(err, &ue) {
@@ -125,6 +129,7 @@ func (c *client) call(method, action string, body []byte, out any) error {
 		if err := d.Decode(out); err != nil || d.Decode(new(any)) != io.EOF {
 			return &uncertainError{errors.New("AllowIt returned a response that is not valid JSON")}
 		}
+		c.resent = processed
 		return nil
 	}
 	var ue *uncertainError
@@ -177,7 +182,7 @@ func errorMessage(data []byte) string {
 		Error string `json:"error"`
 	}
 	if json.Unmarshal(data, &v) == nil && v.Error != "" {
-		return v.Error
+		return oneLine(v.Error)
 	}
 	return "no error message"
 }

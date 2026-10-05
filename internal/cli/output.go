@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -16,6 +17,7 @@ const (
 	exitConfig         = 3
 	exitRejected       = 4
 	exitUncertain      = 5
+	exitReplayed       = 6
 	exitOwnerSignature = 10
 	exitAwaitingInput  = 11
 	exitPending        = 12
@@ -220,12 +222,21 @@ func (p printer) printResult(r map[string]any, res result, clientID string) {
 	}
 }
 
+// oneLine quotes a value that spans lines, so server text cannot add lines
+// that read as fields (for example "state: settled").
+func oneLine(s string) string {
+	if strings.ContainsAny(s, "\r\n\u0085  ") {
+		return strconv.Quote(s)
+	}
+	return s
+}
+
 func (p printer) field(key string, v any) {
 	switch x := v.(type) {
 	case nil:
 	case string:
 		if x != "" {
-			p.printf("%s: %s\n", key, x)
+			p.printf("%s: %s\n", key, oneLine(x))
 		}
 	case map[string]any:
 		keys := make([]string, 0, len(x))
@@ -248,7 +259,7 @@ func (p printer) field(key string, v any) {
 			parts[i] = s
 		}
 		if simple {
-			p.printf("%s: %s\n", key, strings.Join(parts, "; "))
+			p.printf("%s: %s\n", key, oneLine(strings.Join(parts, "; ")))
 			return
 		}
 		for i, item := range x {
