@@ -1,0 +1,14 @@
+[
+  {
+    "name": "customer-workspace",
+    "revision": "61a21670a67c78694e4dd634900075d074a01784",
+    "source": "https://github.com/ackrate/AllowIt-app/pull/6",
+    "tests": ["harness_test.go", "customer_test.go"]
+  },
+  {
+    "name": "typed-skill-runtime",
+    "revision": "325a1367844e1cd7bee37196b1b6429d77f5d5f0",
+    "source": "local reviewed feat/rust-policy-runtime branch",
+    "tests": ["harness_test.go", "runtime_test.go"]
+  }
+]

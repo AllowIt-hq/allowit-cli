@@ -33,7 +33,8 @@ type uncertainError struct{ Err error }
 func (e *uncertainError) Error() string { return e.Err.Error() }
 
 // configError means nothing was processed because the connection itself is
-// misconfigured (TLS trust, redirect).
+// misconfigured (TLS trust, redirect), or AllowIt described a different
+// policy, owner or route than the configured ones.
 type configError struct{ Err error }
 
 func (e *configError) Error() string { return e.Err.Error() }
@@ -68,10 +69,6 @@ func newClient(cfg *Config, timeout time.Duration, sleep func(time.Duration)) (*
 		retries: 2,
 		sleep:   sleep,
 	}, nil
-}
-
-func (c *client) endpoint(action string) string {
-	return c.cfg.Origin + "/api/harness/" + c.cfg.Owner + "/" + c.cfg.Policy + "/" + action
 }
 
 // call performs one harness request. Transport failures and gateway errors are
@@ -144,7 +141,7 @@ func (c *client) once(method, action string, body []byte) (int, []byte, error) {
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.endpoint(action), reader)
+	req, err := http.NewRequestWithContext(ctx, method, c.cfg.route(action), reader)
 	if err != nil {
 		return 0, nil, &configError{errors.New("could not build the AllowIt request")}
 	}

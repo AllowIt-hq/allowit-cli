@@ -14,57 +14,6 @@ import (
 	"strings"
 )
 
-const localDev = "local:dev"
-
-// Skill is the subset of GET /skill the CLI relies on.
-type Skill struct {
-	Title          string `json:"title"`
-	Name           string `json:"name"`
-	PolicyID       string `json:"policyId"`
-	Status         string `json:"status"`
-	Network        string `json:"network"`
-	Revision       int    `json:"revision"`
-	SourceHash     string `json:"sourceHash"`
-	Language       string `json:"language"`
-	OriginalIntent string `json:"originalIntent"`
-	ExecutionMode  string `json:"executionMode"`
-	ExpiresAt      string `json:"expiresAt"`
-	Policy         string `json:"policy"`
-	Budget         *struct {
-		Allocation string `json:"allocation"`
-		Spent      string `json:"spent"`
-	} `json:"budget"`
-	Allocation *struct {
-		Amount string `json:"amount"`
-	} `json:"allocation"`
-	Capabilities struct {
-		Mode                      string              `json:"mode"`
-		Rail                      string              `json:"rail"`
-		Assets                    []string            `json:"assets"`
-		Rails                     map[string][]string `json:"rails"`
-		Rates                     map[string]string   `json:"fixedTestRatesUSDC"`
-		Decimals                  map[string]int      `json:"assetDecimals"`
-		CallsRequireOwnerApproval bool                `json:"callsRequireOwnerApproval"`
-	} `json:"capabilities"`
-	Workflow []struct {
-		Kind        string `json:"kind"`
-		Label       string `json:"label"`
-		Description string `json:"description"`
-	} `json:"workflow"`
-}
-
-func (s *Skill) rails() map[string][]string {
-	if len(s.Capabilities.Rails) > 0 {
-		return s.Capabilities.Rails
-	}
-	if s.Capabilities.Rail != "" {
-		return map[string][]string{s.Capabilities.Rail: s.Capabilities.Assets}
-	}
-	return map[string][]string{"solana": {"USDC"}}
-}
-
-func (s *Skill) local() bool { return s.Network == localDev }
-
 // Plan and Call mirror the server's ExecutionPlan v1 exactly.
 type Plan struct {
 	Rail     string `json:"rail"`
@@ -115,9 +64,16 @@ func usagef(format string, a ...any) error {
 	return &usageError{fmt.Sprintf(format, a...)}
 }
 
+// actionRequired explains why --op no longer supplies the action, and how to
+// resend a 0.1.1 request (which defaulted the action to the op) unchanged.
+const actionRequired = "--action is required: it is the action the policy evaluates (e.g. --action transfer or --action research); --op only selects the transfer. To retry a request sent without --action by allowit 0.1.1, add --action with its --op value (e.g. --action transferUSDC) and keep every other flag: that is the same request and request ID"
+
 // buildBody turns flags into the exact server request. kind is "eval" or "exec".
 func buildBody(kind string, f requestFlags, s *Skill, stdin io.Reader) (*Body, error) {
 	b := &Body{Token: "USDC", Action: f.action, Merchant: f.merchant}
+	if b.Action == "" {
+		return nil, usagef("%s", actionRequired)
+	}
 	if len(b.Action) > 100 || len(b.Merchant) > 200 {
 		return nil, usagef("--action is limited to 100 bytes and --merchant to 200 bytes")
 	}
@@ -144,9 +100,6 @@ func buildBody(kind string, f requestFlags, s *Skill, stdin io.Reader) (*Body, e
 		if planOnly {
 			return nil, usagef("--memo, --data, --before and --after need --rail and --op")
 		}
-		if b.Action == "" {
-			return nil, usagef("--action is required without --op")
-		}
 		if _, err := usdcUnits(f.amount); err != nil {
 			return nil, usagef("--amount: %v", err)
 		}
@@ -161,15 +114,16 @@ func buildBody(kind string, f requestFlags, s *Skill, stdin io.Reader) (*Body, e
 		return nil, usagef("--op must look like transferSOL, transferXLM or transferUSDC")
 	}
 	asset := m[1]
-	assets, ok := s.rails()[f.rail]
+	rails := s.rails()
+	if len(rails) == 0 {
+		return nil, usagef("AllowIt published no rails for this policy; send a plain USDC request with --amount and --action, without --rail and --op")
+	}
+	assets, ok := rails[f.rail]
 	if !ok {
-		return nil, usagef("--rail %q is not available for this policy (%s)", f.rail, describeRails(s.rails()))
+		return nil, usagef("--rail %q is not available for this policy (%s)", f.rail, describeRails(rails))
 	}
 	if !contains(assets, asset) {
 		return nil, usagef("%s is not available on %s (%s)", asset, f.rail, strings.Join(assets, ", "))
-	}
-	if b.Action == "" {
-		b.Action = f.op
 	}
 	if !s.local() {
 		// Wallet policies: owner-signed USDC transfers without an execution plan.
@@ -186,6 +140,9 @@ func buildBody(kind string, f requestFlags, s *Skill, stdin io.Reader) (*Body, e
 		b.Amount = f.amount
 		b.Recipient = f.addr
 		return b, checkWallet(kind, b, s)
+	}
+	if err := s.planSupport(f.memo != "" || f.data != "", f.before != "" || f.after != ""); err != nil {
+		return nil, usagef("%v", err)
 	}
 	if f.addr == "" {
 		return nil, usagef("--addr is required with --rail")
@@ -211,11 +168,12 @@ func buildBody(kind string, f requestFlags, s *Skill, stdin io.Reader) (*Body, e
 	if plan.After, err = readCalls("--after", f.after, f.rail, stdin); err != nil {
 		return nil, err
 	}
-	rate, ok := s.Capabilities.Rates[asset]
+	rates, published := s.rates()
+	rate, ok := rates[asset]
 	if !ok {
 		return nil, usagef("the service did not publish a rate for %s", asset)
 	}
-	decimals, ok := s.Capabilities.Decimals[asset]
+	decimals, ok := published[asset]
 	if !ok {
 		decimals = defaultDecimals[asset]
 	}

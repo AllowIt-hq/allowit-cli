@@ -72,7 +72,8 @@ var knownStates = map[string]map[string]bool{
 // a missing or unknown outcome or status, mistyped fields, or fields that
 // contradict each other, the command or the policy's network. Only a
 // consistent result may be reported as passed, recorded, settled or denied.
-func checkResult(r map[string]any, command string, local bool) error {
+// With netUnknown the network checks cannot run; see needsNetwork.
+func checkResult(r map[string]any, command string, net netKind) error {
 	if r == nil {
 		return errors.New("AllowIt returned an empty result")
 	}
@@ -107,9 +108,9 @@ func checkResult(r map[string]any, command string, local bool) error {
 		return fmt.Errorf("AllowIt returned status %q with executed %v", status, r["executed"])
 	case recorded != (status == "recorded"):
 		return fmt.Errorf("AllowIt returned status %q with localRecorded %v", status, r["localRecorded"])
-	case local && (status == "settled" || status == "submitted"):
+	case net == netLocal && (status == "settled" || status == "submitted"):
 		return errors.New("AllowIt reported an on-chain transaction for a Local dev policy")
-	case !local && status == "recorded":
+	case net == netWallet && status == "recorded":
 		return errors.New("AllowIt reported a mock recording for a wallet policy")
 	case kind != "" && kind != "judgment" && kind != "transaction":
 		return fmt.Errorf("AllowIt returned an unknown kind %q", kind)
@@ -119,6 +120,20 @@ func checkResult(r map[string]any, command string, local bool) error {
 		return errors.New("AllowIt reported a spend for a permission check")
 	}
 	return nil
+}
+
+// needsNetwork reports whether a valid result means something different on
+// Local dev and on a wallet network: a recording, a transfer, or a ready
+// transaction (owner signature on a wallet network). Pending, owner input,
+// denied and a passed judgment mean the same everywhere.
+func needsNetwork(r map[string]any) bool {
+	switch str(r["status"]) {
+	case "recorded", "settled", "submitted":
+		return true
+	case "ready":
+		return str(r["kind"]) != "judgment"
+	}
+	return false
 }
 
 func str(v any) string {

@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const Version = "0.1.1"
+const Version = "0.2.0-dev"
 
 const usage = `allowit sends actions through an AllowIt policy.
 
@@ -30,9 +30,9 @@ Commands:
   allowit version
 
 Request flags:
+  --action NAME        required: the action the policy evaluates, e.g. transfer
   --rail solana|stellar --op transferSOL|transferXLM|transferUSDC --addr ADDRESS
   --amount DECIMAL     asset quantity (USDC amount without --op)
-  --action NAME        policy action label (default: the --op value)
   --merchant NAME      optional merchant
   --context JSON       runtime context object: literal, @file or - for stdin
   --memo TEXT          mock plan memo (Local dev)
@@ -44,7 +44,8 @@ Request flags:
   --wait DURATION      how long to wait for a pending evaluation (default 60s)
   --json               machine-readable output
 
-Exit codes: 0 passed/recorded/settled, 2 usage, 3 config or auth, 4 rejected,
+Exit codes: 0 passed/recorded/settled, 2 usage, 3 config, auth or unsupported
+policy description, 4 rejected,
 5 uncertain result (retry only as printed, with the same --request-id), 10 owner
 signature (or passed but not yet complete), 11 awaiting owner input, 12 pending,
 20 denied.
@@ -90,7 +91,7 @@ func (a App) Run(args []string) int {
 	case "eval", "exec":
 		code, err = a.request(args[0], args[1:], out, errOut)
 	case "status":
-		code, err = a.status(args[1:], out)
+		code, err = a.status(args[1:], out, errOut)
 	case "version", "--version":
 		out.printf("allowit %s\n", Version)
 		return exitOK
@@ -112,9 +113,12 @@ func exitCode(err error) int {
 	var ce *configError
 	var ae *apiError
 	var un *uncertainError
+	var us *unsupportedError
 	switch {
 	case errors.As(err, &ue):
 		return exitUsage
+	case errors.As(err, &us):
+		return exitConfig
 	case errors.As(err, &un):
 		return exitUncertain
 	case errors.As(err, &ae):
@@ -128,21 +132,51 @@ func exitCode(err error) int {
 	return exitConfig
 }
 
-// parse accepts flags and positional arguments in any order.
+// parse accepts flags and positional arguments in any order. The gateway's
+// generated commands use -- before a dash-prefixed policy and put flags after
+// it. Protect the command's remaining identifier slots, then resume flags.
 func parse(fs *flag.FlagSet, args []string) ([]string, error) {
 	fs.SetOutput(io.Discard)
-	var positional []string
-	for {
-		if err := fs.Parse(args); err != nil {
-			return nil, usagef("%v", err)
-		}
-		rest := fs.Args()
-		if len(rest) == 0 {
-			return positional, nil
-		}
-		positional = append(positional, rest[0])
-		args = rest[1:]
+	identifiers := 1
+	if fs.Name() == "status" {
+		identifiers = 2
 	}
+	var positional []string
+	for len(args) > 0 {
+		var literal []string
+		for i := 0; i < len(args); i++ {
+			arg := args[i]
+			if arg == "--" {
+				literal, args = args[i+1:], args[:i]
+				break
+			}
+			if !strings.HasPrefix(arg, "-") || arg == "-" {
+				continue
+			}
+			name, _, inline := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
+			if f := fs.Lookup(name); f != nil && !inline {
+				b, boolean := f.Value.(interface{ IsBoolFlag() bool })
+				if !boolean || !b.IsBoolFlag() {
+					i++ // A string flag may itself have "--" as its value.
+				}
+			}
+		}
+		for len(args) > 0 {
+			if err := fs.Parse(args); err != nil {
+				return nil, usagef("%v", err)
+			}
+			rest := fs.Args()
+			if len(rest) == 0 {
+				break
+			}
+			positional = append(positional, rest[0])
+			args = rest[1:]
+		}
+		n := min(max(identifiers-len(positional), 0), len(literal))
+		positional = append(positional, literal[:n]...)
+		args = literal[n:]
+	}
+	return positional, nil
 }
 
 // setup loads configuration and binds the positional POLICY to the token.
@@ -161,6 +195,9 @@ func (a App) setup(policy string) (*client, error) {
 	return c, nil
 }
 
+// skill reads and validates the policy description; nothing is sent to judge
+// or transactions unless it names this owner, policy and origin and a
+// supported network.
 func (c *client) skill() (*Skill, map[string]any, error) {
 	var raw map[string]any
 	if err := c.call("GET", "skill", nil, &raw); err != nil {
@@ -168,9 +205,31 @@ func (c *client) skill() (*Skill, map[string]any, error) {
 	}
 	var s Skill
 	if err := remarshal(raw, &s); err != nil {
-		return nil, nil, &uncertainError{errors.New("AllowIt returned an unexpected policy description")}
+		return nil, nil, unsupportedf("AllowIt returned a policy description this CLI cannot read: %v", err)
+	}
+	if err := s.check(c.cfg); err != nil {
+		return nil, nil, err
 	}
 	return &s, raw, nil
+}
+
+// statusNetwork returns the policy's network for status, or netUnknown when
+// the description is unavailable for a reason that does not stop a status
+// read: an assembly refusal (HTTP 409), another non-auth HTTP error, an
+// unreadable or unsupported description, or a failed GET. Auth failures and a
+// description naming another policy, owner or route still stop.
+func (c *client) statusNetwork(errOut printer) (netKind, error) {
+	s, _, err := c.skill()
+	if err == nil {
+		return s.net(), nil
+	}
+	var ae *apiError
+	var ce *configError
+	if errors.As(err, &ce) || errors.As(err, &ae) && (ae.Status == 401 || ae.Status == 403) {
+		return netUnknown, err
+	}
+	errOut.printf("allowit: the policy description is unavailable (%v); reading the status without the policy's network\n", err)
+	return netUnknown, nil
 }
 
 func (a App) show(args []string, out, errOut printer) (int, error) {
@@ -201,13 +260,25 @@ func (a App) show(args []string, out, errOut printer) (int, error) {
 		out.json(raw)
 		return exitOK, nil
 	}
-	showPolicy(out, s, *source)
+	showPolicy(out, s, c.cfg.Policy, *source)
 	return exitOK, nil
 }
 
-func showPolicy(p printer, s *Skill, source bool) {
-	p.printf("AllowIt policy: %s\n", s.Title)
-	p.printf("Policy:     %s (revision %d, source %s)\n", s.PolicyID, s.Revision, short(s.SourceHash))
+// showPolicy prints what AllowIt published; fields a service omits are left
+// out or marked, never shown empty.
+func showPolicy(p printer, s *Skill, policy string, source bool) {
+	p.printf("AllowIt policy: %s\n", s.title())
+	switch {
+	case s.PolicyID == "":
+		p.printf("Policy:     %s (from ALLOWIT_TOKEN; AllowIt did not report the policy ID)\n", policy)
+	case s.Revision > 0 || s.SourceHash != "":
+		p.printf("Policy:     %s (revision %d, source %s)\n", s.PolicyID, s.Revision, short(s.SourceHash))
+	default:
+		p.printf("Policy:     %s\n", s.PolicyID)
+	}
+	if c := s.Contract; c != nil && c.Binding.IRHash != "" {
+		p.printf("Binding:    IR %s, registry %s\n", short(c.Binding.IRHash), c.Binding.RegistryVersion)
+	}
 	if s.local() {
 		p.printf("Network:    %s (mock execution; no wallet, no funds move)\n", s.Network)
 	} else {
@@ -224,12 +295,23 @@ func showPolicy(p printer, s *Skill, source bool) {
 	} else if s.Allocation != nil {
 		p.printf("Budget:     %s USDC allocated\n", s.Allocation.Amount)
 	}
-	p.printf("Rails:      %s\n", describeRails(s.rails()))
-	if len(s.Capabilities.Rates) > 0 {
-		p.printf("Test rates: %s (USDC per unit; fixed, not market prices)\n", describeRates(s.Capabilities.Rates))
+	if rails := s.rails(); len(rails) > 0 {
+		p.printf("Rails:      %s\n", describeRails(rails))
+	} else {
+		p.printf("Rails:      none published (plain USDC requests with --amount and --action only)\n")
 	}
-	if s.Capabilities.CallsRequireOwnerApproval {
+	if rates, _ := s.rates(); s.local() && len(rates) > 0 {
+		p.printf("Test rates: %s (USDC per unit; fixed, not market prices)\n", describeRates(rates))
+	}
+	if s.local() && s.callsNeedOwner() {
 		p.printf("Calls:      contract calls in --before/--after always need the owner's approval\n")
+	}
+	if c := s.Contract; c != nil && len(c.ContextU64Keys) > 0 {
+		keys := make([]string, len(c.ContextU64Keys))
+		for i, k := range c.ContextU64Keys {
+			keys[i] = fmt.Sprintf("%q", k)
+		}
+		p.printf("Context:    the policy may read these --context fields as non-negative integers: %s\n", strings.Join(keys, ", "))
 	}
 	if len(s.Workflow) > 0 {
 		p.printf("Checks:\n")
@@ -241,9 +323,11 @@ func showPolicy(p printer, s *Skill, source bool) {
 			p.printf("  %d. %s\n", i+1, line)
 		}
 	}
-	p.printf("Original request:\n")
-	for _, line := range strings.Split(strings.TrimSpace(s.OriginalIntent), "\n") {
-		p.printf("  %s\n", line)
+	if intent := strings.TrimSpace(s.OriginalIntent); intent != "" {
+		p.printf("Original request:\n")
+		for _, line := range strings.Split(intent, "\n") {
+			p.printf("  %s\n", line)
+		}
 	}
 	if source {
 		p.printf("\nPolicy source (%s):\n%s\n", s.Language, s.Policy)
@@ -263,7 +347,7 @@ func (a App) request(kind string, args []string, out, errOut printer) (int, erro
 		return 0, err
 	}
 	if len(pos) != 1 {
-		return 0, usagef("usage: allowit %s POLICY --rail RAIL --op OP --addr ADDRESS --amount QUANTITY [--context JSON]", kind)
+		return 0, usagef("usage: allowit %s POLICY --action ACTION [--rail RAIL --op OP] --addr ADDRESS --amount QUANTITY [--context JSON]", kind)
 	}
 	if err := checkWait(*wait); err != nil {
 		return 0, err
@@ -320,11 +404,11 @@ func (a App) request(kind string, args []string, out, errOut printer) (int, erro
 		next := ""
 		if id := str(r["requestId"]); requestIDPattern.MatchString(id) {
 			msg += " (server requestId " + id + ")"
-			next = fmt.Sprintf("allowit status %s %s --wait 60s, or ", pos[0], id)
+			next = fmt.Sprintf("allowit status --wait 60s -- %s %s, or ", pos[0], id)
 		}
 		return &uncertainError{fmt.Errorf("%s, but its result is unknown. Do not retry with a new request ID. Check it with %srerun the same command with --request-id %s", msg, next, body.RequestID)}
 	}
-	if err := checkResult(r, kind, s.local()); err != nil {
+	if err := checkResult(r, kind, s.net()); err != nil {
 		return 0, unknown(err)
 	}
 	if str(r["outcome"]) == "pending" {
@@ -332,7 +416,7 @@ func (a App) request(kind string, args []string, out, errOut printer) (int, erro
 		if !requestIDPattern.MatchString(id) {
 			return 0, unknown(errors.New("AllowIt returned a pending result without a valid requestId"))
 		}
-		next, err := a.poll(c, id, *wait, r, kind, s.local())
+		next, err := a.poll(c, id, *wait, r, kind, s.net())
 		if err != nil {
 			return 0, unknown(err)
 		}
@@ -349,7 +433,7 @@ func (a App) request(kind string, args []string, out, errOut printer) (int, erro
 	return res.Exit, nil
 }
 
-func (a App) status(args []string, out printer) (int, error) {
+func (a App) status(args []string, out, errOut printer) (int, error) {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "")
 	wait := fs.Duration("wait", 0, "")
@@ -371,7 +455,8 @@ func (a App) status(args []string, out printer) (int, error) {
 		return 0, err
 	}
 	// The network decides whether a completed result is a mock or on chain.
-	s, _, err := c.skill()
+	// Status is a read, so it goes ahead without it; see needsNetwork.
+	net, err := c.statusNetwork(errOut)
 	if err != nil {
 		return 0, err
 	}
@@ -379,13 +464,16 @@ func (a App) status(args []string, out printer) (int, error) {
 	if err := c.call("POST", "status", encodeJSON(map[string]string{"requestId": pos[1]}), &r); err != nil {
 		return 0, err
 	}
-	if err := checkStatus(r, pos[1], s.local()); err != nil {
+	if err := checkStatus(r, pos[1], net); err != nil {
 		return 0, &uncertainError{fmt.Errorf("%v\nThe state of request %s is unknown; check again with allowit status", err, pos[1])}
 	}
 	if o := str(r["outcome"]); o == "pending" || (o == "awaiting_input" || str(r["status"]) == "submitted" || str(r["status"]) == "ready") && *wait > 0 {
-		if r, err = a.poll(c, pos[1], *wait, r, "status", s.local()); err != nil {
+		if r, err = a.poll(c, pos[1], *wait, r, "status", net); err != nil {
 			return 0, &uncertainError{fmt.Errorf("%v\nThe state of request %s is unknown; check again with allowit status", err, pos[1])}
 		}
+	}
+	if net == netUnknown && needsNetwork(r) {
+		return 0, &uncertainError{fmt.Errorf("AllowIt reported outcome %q with status %q for request %s, but the policy's network could not be established, so the CLI cannot tell a Local dev mock recording from a wallet transfer. Nothing is confirmed as recorded, signed or paid. Check again with allowit status once allowit show works", str(r["outcome"]), str(r["status"]), pos[1])}
 	}
 	res := classify(r, "status")
 	if *asJSON {
@@ -399,7 +487,7 @@ func (a App) status(args []string, out printer) (int, error) {
 
 // poll re-reads a request until its state changes or wait elapses. The request
 // is known to exist, so every failure here means its state is unknown.
-func (a App) poll(c *client, id string, wait time.Duration, r map[string]any, command string, local bool) (map[string]any, error) {
+func (a App) poll(c *client, id string, wait time.Duration, r map[string]any, command string, net netKind) (map[string]any, error) {
 	start := str(r["status"])
 	for elapsed := time.Duration(0); elapsed < wait; elapsed += a.PollInterval {
 		a.Sleep(a.PollInterval)
@@ -407,11 +495,11 @@ func (a App) poll(c *client, id string, wait time.Duration, r map[string]any, co
 		if err := c.call("POST", "status", encodeJSON(map[string]string{"requestId": id}), &next); err != nil {
 			return nil, fmt.Errorf("checking the request status failed: %v", err)
 		}
-		if err := checkStatus(next, id, local); err != nil {
+		if err := checkStatus(next, id, net); err != nil {
 			return nil, err
 		}
 		if command != "status" {
-			if err := checkResult(next, command, local); err != nil {
+			if err := checkResult(next, command, net); err != nil {
 				return nil, err
 			}
 		}
@@ -424,11 +512,13 @@ func (a App) poll(c *client, id string, wait time.Duration, r map[string]any, co
 }
 
 // checkStatus validates a /status result for the request that was asked for.
-func checkStatus(r map[string]any, id string, local bool) error {
-	if err := checkResult(r, "status", local); err != nil {
+func checkStatus(r map[string]any, id string, net netKind) error {
+	if err := checkResult(r, "status", net); err != nil {
 		return err
 	}
-	if got := str(r["requestId"]); got != "" && got != id {
+	if got := str(r["requestId"]); got == "" {
+		return errors.New("AllowIt returned a status without its requestId")
+	} else if got != id {
 		return fmt.Errorf("AllowIt returned the status of a different request (%s)", got)
 	}
 	return nil
