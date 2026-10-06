@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/ackrate/AllowIt-sdk",
-  "commit": "e57b458a596827599e90bd8e9d283d71e00e7ffa",
+  "commit": "daeedb775007499bd1834441fb9d847d1269b762",
   "crate": "native-rust",
   "files": {
     "Cargo.lock": "9db53ba03334edc68fb6ffc6f886f706ea6c2ee1b163d4fb147b717a4fb22da2",
