@@ -2,9 +2,14 @@ name: Native binaries
 
 on:
   workflow_dispatch:
+  pull_request:
 
 permissions:
   contents: read
+
+concurrency:
+  group: native-binaries-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
