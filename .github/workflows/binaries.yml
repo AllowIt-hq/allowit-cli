@@ -50,8 +50,8 @@ jobs:
         run: |
           cd "$RUNNER_TEMP"
           cp '${{ github.workspace }}/dist/${{ matrix.asset }}' ./allowit
-          env -i PATH=/usr/bin:/bin ./allowit version
-          env -i PATH=/usr/bin:/bin ALLOWIT_POLICY_DIR="$RUNNER_TEMP/native-policy" ./allowit policy generate 'Spend up to 5 test tokens per day' --json > generated.json
+          env -i PATH= ./allowit version
+          env -i PATH= ALLOWIT_POLICY_DIR="$RUNNER_TEMP/native-policy" ./allowit policy generate 'Spend up to 5 test tokens per day' --json > generated.json
           python3 - <<'PY'
           import json
           from pathlib import Path
