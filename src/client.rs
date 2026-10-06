@@ -126,9 +126,14 @@ impl Client {
                     final_error(e, processed, &last)
                 });
             }
-            let value = serde_json::from_slice(&data).map_err(|_| {
+            let value: Value = serde_json::from_slice(&data).map_err(|_| {
                 Error::uncertain("AllowIt returned a response that is not valid JSON")
             })?;
+            if !value.is_object() && !value.is_null() {
+                return Err(Error::uncertain(
+                    "AllowIt returned a response that is not valid JSON",
+                ));
+            }
             self.resent = processed;
             return Ok(value);
         }

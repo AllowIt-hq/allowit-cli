@@ -138,7 +138,9 @@ func TestAlignmentAgentLifecycle(t *testing.T) {
 	if retry["requestId"] != transaction["requestId"] {
 		t.Fatal("retry created a new request")
 	}
-	a.run(t, 4, alignmentArgs("exec", h.p.ID, "alignment-exec-001", "5", h.owner)...)
+	// A changed-body replay may already have applied the original operation.
+	// Both current Go and Rust clients classify that HTTP 409 as uncertain.
+	a.run(t, 5, alignmentArgs("exec", h.p.ID, "alignment-exec-001", "5", h.owner)...)
 	status := a.run(t, 10, "status", h.p.ID, q.ID)
 	if status["requestId"] != q.ID || status["executed"] != false {
 		t.Fatal(status)

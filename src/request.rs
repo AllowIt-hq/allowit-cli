@@ -315,12 +315,15 @@ pub(crate) fn build_body(kind: &str, f: &Flags, s: &Skill, stdin: &mut dyn Read)
         .get(asset)
         .map(text)
         .ok_or_else(|| Error::usage(format!("the service did not publish a rate for {asset}")))?;
-    let precision = decimals[asset].as_i64().unwrap_or(match asset {
-        "SOL" => 9,
-        "XLM" => 7,
-        "USDC" => 6,
-        _ => 0,
-    });
+    let precision = decimals
+        .get(asset)
+        .map(|v| v.as_i64().unwrap_or_default())
+        .unwrap_or(match asset {
+            "SOL" => 9,
+            "XLM" => 7,
+            "USDC" => 6,
+            _ => 0,
+        });
     b.amount = charge(
         amount,
         rate,
@@ -345,12 +348,7 @@ fn read_calls(name: &str, value: &str, rail: &str, stdin: &mut dyn Read) -> Resu
         return Ok(Vec::new());
     }
     let raw = read_value(value, stdin, 32 << 10).map_err(|e| prefix(e, name))?;
-    let mut calls: Vec<Call> = if raw
-        .iter()
-        .copied()
-        .skip_while(u8::is_ascii_whitespace)
-        .eq(b"null".iter().copied())
-    {
+    let mut calls: Vec<Call> = if std::str::from_utf8(&raw).unwrap_or_default().trim() == "null" {
         Vec::new()
     } else {
         serde_json::from_slice(&raw).map_err(|_| {

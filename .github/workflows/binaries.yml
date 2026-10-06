@@ -1,0 +1,67 @@
+name: Native binaries
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            asset: allowit-linux-amd64
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            asset: allowit-darwin-arm64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            asset: allowit-darwin-amd64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --target '${{ matrix.target }}'
+          rustup default 1.98.0
+      - name: Install Linux static build tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools perl make
+          echo CC_x86_64_unknown_linux_musl=musl-gcc >> "$GITHUB_ENV"
+      - name: Build locked binary
+        run: cargo build --locked --release --target '${{ matrix.target }}'
+      - name: Package and checksum
+        run: |
+          mkdir -p dist
+          cp 'target/${{ matrix.target }}/release/allowit' 'dist/${{ matrix.asset }}'
+          cd dist
+          shasum -a 256 '${{ matrix.asset }}' > '${{ matrix.asset }}.sha256'
+      - name: Verify static Linux binary
+        if: runner.os == 'Linux'
+        run: file 'dist/${{ matrix.asset }}' | grep -Eq 'statically linked|static-pie linked'
+      - name: Run without Node or a source checkout
+        run: |
+          cd "$RUNNER_TEMP"
+          cp '${{ github.workspace }}/dist/${{ matrix.asset }}' ./allowit
+          env -i PATH=/usr/bin:/bin ./allowit version
+          env -i PATH=/usr/bin:/bin ALLOWIT_POLICY_DIR="$RUNNER_TEMP/native-policy" ./allowit policy generate 'Spend up to 5 test tokens per day' --json > generated.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          policy = json.loads(Path('generated.json').read_text())
+          assert policy['dailyLimit'] == '5'
+          assert policy['network'] == 'solana:testnet'
+          assert policy['profile'] == 'solana-native-v1'
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/
+          retention-days: 30

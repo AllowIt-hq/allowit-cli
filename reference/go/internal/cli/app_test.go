@@ -30,6 +30,11 @@ const (
 
 // fakeHarness mimics the AllowIt harness routes: bearer binding, strict body
 // decoding, requestId idempotency (409 on changed details) and status lookups.
+// Foreign-process parity runs have no Go transport channel to establish the
+// fixture setup/response happens-before edge. Serialize fixture requests and
+// command boundaries explicitly, without changing assertions or responses.
+var fixtureBarrier sync.Mutex
+
 type fakeHarness struct {
 	mu        sync.Mutex
 	t         *testing.T
@@ -64,6 +69,8 @@ func newFake(t *testing.T, network string) (*fakeHarness, *httptest.Server) {
 }
 
 func (f *fakeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	fixtureBarrier.Lock()
+	defer fixtureBarrier.Unlock()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.hits++
@@ -264,6 +271,9 @@ type run struct {
 
 func runCLI(t *testing.T, env map[string]string, args ...string) run {
 	t.Helper()
+	fixtureBarrier.Lock()
+	fixtureBarrier.Unlock()
+	defer func() { fixtureBarrier.Lock(); fixtureBarrier.Unlock() }()
 	var out, errOut bytes.Buffer
 	app := App{Getenv: func(k string) string { return env[k] }, Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errOut, Sleep: func(time.Duration) {}, Timeout: 2 * time.Second, PollInterval: time.Millisecond}
 	code := 0

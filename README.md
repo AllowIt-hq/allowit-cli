@@ -27,6 +27,8 @@ make dist                             # static Linux/musl distribution
 
 `make dist` requires the `x86_64-unknown-linux-musl` target and a suitable musl linker. CI installs both and uploads `dist/allowit-linux-amd64` with its SHA-256. The lockfile pins the complete dependency graph. The old Go installation above remains available for the earlier tagged release.
 
+The manual **Native binaries** workflow builds Linux x64 (static musl), macOS Apple Silicon and macOS Intel, with checksums and a source-free smoke test whose PATH has no Node installation. It uploads private workflow artifacts; it does not publish a GitHub Release. Windows is not yet validated. These distribution checks must pass on the complete native lifecycle port before a release is accepted.
+
 The CLI is independent of the optional hosted-agent runtime. A host can install the same binary used by an external agent; this repository contains no sandbox launcher, supervisor or model proxy.
 
 ## Configure
