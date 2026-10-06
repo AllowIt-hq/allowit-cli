@@ -1,0 +1,30 @@
+[package]
+name = "allowit-cli"
+version = "0.3.0-dev"
+edition = "2024"
+rust-version = "1.85"
+license = "UNLICENSED"
+publish = false
+
+[[bin]]
+name = "allowit"
+path = "src/main.rs"
+
+[dependencies]
+allowit-native = { path = "vendor/allowit-native" }
+base64 = "0.22.1"
+bs58 = "0.5.1"
+data-encoding = "2.9.0"
+num-bigint = "0.4.6"
+num-traits = "0.2.19"
+regex = "1.11.1"
+reqwest = { version = "0.12.23", default-features = false, features = ["blocking", "native-tls-vendored"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.143", features = ["raw_value", "arbitrary_precision"] }
+sha2 = "0.10.9"
+url = "2.5.7"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

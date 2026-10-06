@@ -2,25 +2,39 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: cli-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: reference/go/go.mod
+      - name: Install Rust toolchain and static target
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component clippy,rustfmt --target x86_64-unknown-linux-musl
+          rustup default 1.98.0
+          sudo apt-get update
+          sudo apt-get install -y musl-tools perl make
+          echo CC_x86_64_unknown_linux_musl=musl-gcc >> "$GITHUB_ENV"
       - run: make test
+      - run: make parity
       - name: Build static Linux binary
         run: make dist
       - name: Check the binary is static and runs
         run: |
-          file dist/allowit-linux-amd64 | grep -q 'statically linked'
+          file dist/allowit-linux-amd64 | grep -Eq 'statically linked|static-pie linked'
           ./dist/allowit-linux-amd64 version
       - uses: actions/upload-artifact@v4
         with:
