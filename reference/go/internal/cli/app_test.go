@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -265,7 +266,28 @@ func runCLI(t *testing.T, env map[string]string, args ...string) run {
 	t.Helper()
 	var out, errOut bytes.Buffer
 	app := App{Getenv: func(k string) string { return env[k] }, Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errOut, Sleep: func(time.Duration) {}, Timeout: 2 * time.Second, PollInterval: time.Millisecond}
-	code := app.Run(args)
+	code := 0
+	if binary := os.Getenv("ALLOWIT_PARITY_BINARY"); binary != "" {
+		cmd := exec.Command(binary, args...)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = app.Stdin, app.Stdout, app.Stderr
+		for _, entry := range os.Environ() {
+			if !strings.HasPrefix(entry, "ALLOWIT_") {
+				cmd.Env = append(cmd.Env, entry)
+			}
+		}
+		for key, value := range env {
+			cmd.Env = append(cmd.Env, key+"="+value)
+		}
+		if err := cmd.Run(); err != nil {
+			if status, ok := err.(*exec.ExitError); ok {
+				code = status.ExitCode()
+			} else {
+				t.Fatal(err)
+			}
+		}
+	} else {
+		code = app.Run(args)
+	}
 	r := run{code, out.String(), errOut.String()}
 	if strings.Contains(r.stdout+r.stderr, secret) {
 		t.Fatalf("secret leaked in output:\n%s\n%s", r.stdout, r.stderr)

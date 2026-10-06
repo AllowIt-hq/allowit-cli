@@ -2,7 +2,7 @@
 
 `allowit` sends an agent's actions through an AllowIt policy. It is a thin, strict client for one policy's harness API; the policy itself (restricted Rust, evaluated by the shared SDK WASM on the AllowIt server) decides. The CLI cannot bypass the policy, the owner-input gate or the server's request schema.
 
-Go, standard library only.
+Rust. The Go implementation is retained under `reference/go/` as a differential test oracle; it is not the default command or distribution build.
 
 This branch is the untagged `0.3.0-dev` candidate. Build from this checkout to use its gateway compatibility fixes and the `allowit policy` owner lifecycle commands. The tagged `v0.1.1` installation below remains the earlier release.
 
@@ -15,17 +15,19 @@ GOPRIVATE=github.com/ackrate/* go install github.com/ackrate/allowit-cli/cmd/all
 allowit version
 ```
 
-Or build from a checkout:
+Or build the Rust candidate from a checkout (Rust 1.85 or later):
 
 ```sh
-make test                 # vet + race tests
-make dist                 # dist/allowit-linux-amd64 (+ .sha256), static, reproducible
-go build -o allowit ./cmd/allowit   # host binary
+cargo build --locked --release         # target/release/allowit
+make test                             # Rust tests + Go reference regressions
+make parity                           # original harness cases against Rust
+make integration APP_REPO=/path/to/AllowIt-app
+make dist                             # static Linux/musl distribution
 ```
 
-`make dist` builds with `CGO_ENABLED=0 -trimpath -ldflags="-s -w -buildid="`, so the same Go toolchain produces a byte-identical binary. CI uploads it as the `allowit-linux-amd64` artifact.
+`make dist` requires the `x86_64-unknown-linux-musl` target and a suitable musl linker. CI installs both and uploads `dist/allowit-linux-amd64` with its SHA-256. The lockfile pins the complete dependency graph. The old Go installation above remains available for the earlier tagged release.
 
-The hosted AllowIt agent VM has the CLI preinstalled: the app builds it from vendored source at deploy time and copies it into the sandbox. No GitHub credentials exist there.
+The CLI is independent of the optional hosted-agent runtime. A host can install the same binary used by an external agent; this repository contains no sandbox launcher, supervisor or model proxy.
 
 ## Configure
 
@@ -84,7 +86,7 @@ allowit exec POLICY --request-id pay-001-exec --rail solana --op transferUSDC --
 | `--budget` | Assert the computed USDC charge. |
 | `--json` | Machine-readable output. |
 
-**Budget charge.** For Local dev plans the CLI computes the USDC charge the server requires, exactly (`math/big`): `ceil_to_0.000001(quantity × rate) + Σ maxCostUSDC`, with the fixed test rates published by the server's `/skill` response (SOL 100, XLM 0.1, USDC 1).
+**Budget charge.** For Local dev plans the CLI computes the USDC charge the server requires, exactly (integer arithmetic): `ceil_to_0.000001(quantity × rate) + Σ maxCostUSDC`, with the fixed test rates published by the server's `/skill` response (SOL 100, XLM 0.1, USDC 1).
 
 **`--action` is required.** allowit 0.1.1 defaulted the action to the `--op` value (`transferUSDC`), which made a transport name look like the policy's action. The CLI now refuses a request without `--action` before sending anything (exit 2). Explicit actions produce the same body and the same derived request ID as before. To retry a request that 0.1.1 sent without `--action`, add `--action` set to its op (e.g. `--action transferUSDC`) and keep every other flag: that is the identical request, with the identical derived ID.
 
@@ -152,7 +154,7 @@ Decimals are plain digits with an optional fraction: no sign, exponent, separato
 
 `ALLOWIT_NODE` names the Node 22 executable (default `node`, found on `PATH`).
 
-**Invocation.** allowit runs `ALLOWIT_NODE SDK_CLI COMMAND [--json] [-- ARG...]` directly with `os/exec`, never through a shell. Positional arguments follow `--` exactly as given; `--json` comes before `--` when requested. The SDK CLI inherits allowit's stdin, stdout, stderr and environment, so its output (Rust source, skill, explorer links, prompts) reaches the terminal unaltered and is not scrubbed by allowit. allowit exits with the SDK CLI's exit status, and for a non-zero status also prints `allowit: policy COMMAND: the SDK CLI exited with status N` on stderr. A child killed by a signal gives 128 + the signal number. An interrupt from the terminal reaches the SDK CLI directly; allowit waits for it to exit. If the SDK CLI cannot be found or started, allowit exits 3.
+**Invocation.** allowit runs `ALLOWIT_NODE SDK_CLI COMMAND [--json] [-- ARG...]` directly with Rust `std::process::Command`, never through a shell. Positional arguments follow `--` exactly as given; `--json` comes before `--` when requested. The SDK CLI inherits allowit's stdin, stdout, stderr and environment, so its output (Rust source, skill, explorer links, prompts) reaches the terminal unaltered and is not scrubbed by allowit. allowit exits with the SDK CLI's exit status, and for a non-zero status also prints `allowit: policy COMMAND: the SDK CLI exited with status N` on stderr. A child killed by a signal gives 128 + the signal number. An interrupt from the terminal reaches the SDK CLI directly; allowit waits for it to exit. If the SDK CLI cannot be found or started, allowit exits 3.
 
 ## States and exit codes
 

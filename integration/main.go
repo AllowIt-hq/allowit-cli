@@ -83,8 +83,13 @@ func check(appRepo, selected string) error {
 		return err
 	}
 	defer os.RemoveAll(temp)
-	binary := filepath.Join(temp, "allowit")
-	if err := command(root, nil, "go", "build", "-trimpath", "-o", binary, "./cmd/allowit"); err != nil {
+	binary := filepath.Join(root, "target", "debug", "allowit")
+	if override := os.Getenv("ALLOWIT_ALIGNMENT_BINARY"); override != "" {
+		binary, err = filepath.Abs(override)
+		if err != nil {
+			return err
+		}
+	} else if err := command(root, nil, "cargo", "build", "--locked"); err != nil {
 		return err
 	}
 	for _, b := range chosen {

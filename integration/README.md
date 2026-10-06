@@ -6,7 +6,7 @@ Run from the CLI repository:
 go run ./integration --app-repo /path/to/AllowIt-app
 ```
 
-The clone must contain both exact commits in `backends.json`; the second is currently a local reviewed runtime commit. The Go runner does not fetch or change that checkout. It builds this CLI, archives each gateway's tracked Go sources into a temporary directory, verifies the pinned SDK WASM hash and overlays the integration tests there. Optional `--backend customer-workspace` runs only Igor's PR6 snapshot. Go and Git are required; Go modules must be cached or downloadable. Archive extraction, artifact hashing and test-event verification use the Go standard library.
+The clone must contain both exact commits in `backends.json`; the second is currently a local reviewed runtime commit. The Go runner does not fetch or change that checkout. It builds the Rust CLI with the locked Cargo dependencies, archives each gateway's tracked Go sources into a temporary directory, verifies the pinned SDK WASM hash and overlays the integration tests there. Optional `--backend customer-workspace` runs only Igor's PR6 snapshot. Rust, Go and Git are required; Go modules must be cached or downloadable. Archive extraction, artifact hashing and test-event verification use the Go standard library.
 
 These checks exercise the actual Go HTTP routes and Rust WASM policy evaluator. The backend's synthetic wallet identities and chain adapter fixtures provide setup; there are no live payments, model calls, external executors or production credentials. Tests cover:
 
