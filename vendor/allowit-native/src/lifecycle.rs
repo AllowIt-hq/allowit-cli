@@ -206,6 +206,8 @@ impl<'a> PolicyLifecycle<'a> {
         Self { sdk, journal }
     }
     pub fn reconcile(&self, mut record: Record, policy: &Policy, owner: Key) -> Result<Record> {
+        record.extra.remove("error");
+        record.extra.remove("replayed");
         let proof = validate_record(self.sdk.client(), policy, owner, &record)?;
         self.sdk
             .verify_release(matches!(record.method.as_str(), "revoke" | "withdraw"))?;
@@ -309,6 +311,7 @@ impl<'a> PolicyLifecycle<'a> {
         valid_id(&id)?;
         self.journal.locked(|| {
             let name=format!("request-{id}");
+            let mut superseded = BTreeMap::<String, Record>::new();
             if let Some(prior)=self.journal.read::<Record>(&name)? {
                 if prior.id!=id||prior.intent!=canonical{return Err(Error::config("Request ID conflict; recover the original request"));}
                 let mut result=self.reconcile(prior,policy,owner)?;self.journal.write(&name,&result)?;
@@ -331,18 +334,22 @@ impl<'a> PolicyLifecycle<'a> {
                     let previous=slot["id"].as_str().ok_or_else(||Error::config("Owner journal inconsistency"))?;valid_id(previous)?;
                     let old=self.journal.read::<Record>(&format!("request-{previous}"))?.ok_or_else(||Error::config("Owner journal inconsistency"))?;
                     if old.id!=previous||old.method!=method{return Err(Error::config("Owner journal inconsistency"));}
-                    let reconciled=self.reconcile(old,policy,owner)?;self.journal.write(&format!("request-{previous}"),&reconciled)?;
-                    if !reconciled.final_status()&&!(reconciled.expired()&&options.additional_owner_operation){return Err(Error::config(format!("Earlier {method} is uncertain; recover it first. After verified expiry, explicitly authorize an additional owner operation while retaining the old proof.")));}
+                    if !self.superseded_owner(&old,policy,owner)? {
+                        let reconciled=self.reconcile(old,policy,owner)?;self.journal.write(&format!("request-{previous}"),&reconciled)?;
+                        if !reconciled.final_status()&&!(reconciled.expired()&&options.additional_owner_operation){return Err(Error::config(format!("Earlier {method} is uncertain; recover it first. After verified expiry, explicitly authorize an additional owner operation while retaining the old proof.")));}
+                        if !reconciled.final_status(){superseded.insert(previous.into(),reconciled);}
+                    }
                 }
             }
             if matches!(method,"fund"|"withdraw") {
                 // Request persistence precedes the slot write. Orphaned signed
                 // proofs from that crash window also block owner operations.
                 for old in self.journal.entries::<Record>()? {
-                    if old.method==method&&!old.final_status() {
+                    if old.method==method&&!old.final_status()&&!self.superseded_owner(&old,policy,owner)? {
                         let previous=old.id.clone();let reconciled=self.reconcile(old,policy,owner)?;
                         self.journal.write(&format!("request-{previous}"),&reconciled)?;
                         if !reconciled.final_status()&&!(reconciled.expired()&&options.additional_owner_operation){return Err(Error::config(format!("Earlier {method} is uncertain; recover it first. After verified expiry, explicitly authorize an additional owner operation while retaining the old proof.")));}
+                        if !reconciled.final_status(){superseded.insert(previous,reconciled);}
                     }
                 }
             }
@@ -352,12 +359,38 @@ impl<'a> PolicyLifecycle<'a> {
             let mut record=Record{id:id.clone(),intent:canonical,method:method.into(),status:"uncertain".into(),transaction_url:self.sdk.client().transaction_url(&signature)?,signature,signed_bytes:base64::engine::general_purpose::STANDARD.encode(raw),blockhash:prepared.blockhash,last_valid_block_height:prepared.last_valid_block_height,nonce:prepared.nonce,revision:prepared.revision,extra:BTreeMap::new()};
             validate_record(self.sdk.client(),policy,owner,&record)?;
             self.journal.write(&name,&record)?;
+            // Only a durable, validated successor proof can supersede an old
+            // expired owner operation. Signing/write failure leaves its guard.
+            for (previous,mut old) in superseded {
+                old.extra.insert("supersededBy".into(),json!(id));
+                self.journal.write(&format!("request-{previous}"),&old)?;
+            }
             if matches!(method,"fund"|"withdraw"){self.journal.write(&format!("owner-slot-{method}"),&json!({"id":id}))?;}
             if method=="execute"{self.journal.write("execute-slot",&json!({"id":id}))?;}
             self.journal.write("last",&json!({"id":id}))?;
             if self.broadcast(&record).is_ok(){record.status="submitted".into();self.journal.write(&name,&record)?;}
             Ok(record)
         })
+    }
+    fn superseded_owner(&self, old: &Record, policy: &Policy, owner: Key) -> Result<bool> {
+        if !old.expired() {
+            return Ok(false);
+        }
+        let Some(id) = old.extra.get("supersededBy").and_then(Value::as_str) else {
+            return Ok(false);
+        };
+        valid_id(id)?;
+        if id == old.id {
+            return Err(Error::config("Owner journal supersession inconsistency"));
+        }
+        let Some(next) = self.journal.read::<Record>(&format!("request-{id}"))? else {
+            return Ok(false);
+        };
+        if next.id != id || next.method != old.method {
+            return Err(Error::config("Owner journal supersession inconsistency"));
+        }
+        validate_record(self.sdk.client(), policy, owner, &next)?;
+        Ok(true)
     }
     pub fn recover(&self, id: &str, policy: &Policy, owner: Key) -> Result<Record> {
         valid_id(id)?;

@@ -392,6 +392,98 @@ fn owner_expiry_does_not_infer_absence_and_additional_operation_is_explicit() {
     }
 }
 #[test]
+fn superseded_expired_owner_proof_retains_bytes_without_blocking_future_operations() {
+    for method in ["fund", "withdraw"] {
+        let f = Fixture::new();
+        let count = AtomicUsize::new(0);
+        let options = Options {
+            amount: Some("1".into()),
+            ..Options::default()
+        };
+        let first = f
+            .submit(method, &options, "old-owner-request", &count)
+            .unwrap();
+        {
+            let mut d = f.rpc.data.lock().unwrap();
+            d.height = 101;
+            d.block_height = 101;
+        }
+        let override_options = Options {
+            additional_owner_operation: true,
+            ..options.clone()
+        };
+        assert!(
+            f.life()
+                .submit(
+                    &f.policy,
+                    f.owner.public_key(),
+                    method,
+                    &override_options,
+                    Some("cancelled-owner-request"),
+                    |_, _| Err(Error::config("Signer cancelled"))
+                )
+                .is_err()
+        );
+        assert!(
+            !f.journal
+                .read::<Record>("request-old-owner-request")
+                .unwrap()
+                .unwrap()
+                .extra
+                .contains_key("supersededBy")
+        );
+        let second = f
+            .submit(
+                method,
+                &override_options,
+                "additional-owner-request",
+                &count,
+            )
+            .unwrap();
+        let old = f
+            .journal
+            .read::<Record>("request-old-owner-request")
+            .unwrap()
+            .unwrap();
+        assert_eq!(old.signed_bytes, first.signed_bytes);
+        assert_eq!(old.extra["supersededBy"], second.id);
+        assert_eq!(old.status, "uncertain");
+        // Even a supersession marker cannot bypass an unresolved successor.
+        {
+            let mut d = f.rpc.data.lock().unwrap();
+            d.height = 10;
+            d.block_height = 10;
+        }
+        assert!(
+            f.submit(method, &options, "third-owner-request", &count)
+                .is_err()
+        );
+        assert_eq!(count.load(Ordering::Relaxed), 2);
+        {
+            let mut d = f.rpc.data.lock().unwrap();
+            d.status = "settled".into();
+            d.receipt = json!({"transaction":[second.signed_bytes,"base64"],"meta":{"err":null}});
+        }
+        let third_options = Options {
+            amount: Some("2".into()),
+            ..Options::default()
+        };
+        let third = f
+            .submit(method, &third_options, "third-owner-request", &count)
+            .unwrap();
+        assert_eq!(count.load(Ordering::Relaxed), 3);
+        assert_ne!(third.signed_bytes, second.signed_bytes);
+        assert_eq!(
+            f.journal
+                .read::<Record>("request-old-owner-request")
+                .unwrap()
+                .unwrap()
+                .signed_bytes,
+            first.signed_bytes
+        );
+    }
+}
+#[test]
 fn saved_proof_cannot_change_amount_signature_or_context() {
     let f = Fixture::new();
     let count = AtomicUsize::new(0);
@@ -483,13 +575,21 @@ fn settled_requires_saved_message_both_cpis_and_exact_token_deltas() {
         d.status = "settled".into();
         d.receipt = receipt.clone();
     }
-    assert_eq!(
-        f.life()
-            .recover(&record.id, &f.policy, f.owner.public_key())
-            .unwrap()
-            .status,
-        "settled"
-    );
+    let mut stale = record.clone();
+    stale
+        .extra
+        .insert("error".into(), json!("Earlier failed observation"));
+    stale.extra.insert("replayed".into(), json!(true));
+    f.journal
+        .write(&format!("request-{}", record.id), &stale)
+        .unwrap();
+    let settled = f
+        .life()
+        .recover(&record.id, &f.policy, f.owner.public_key())
+        .unwrap();
+    assert_eq!(settled.status, "settled");
+    assert!(!settled.extra.contains_key("error"));
+    assert!(!settled.extra.contains_key("replayed"));
     f.rpc.data.lock().unwrap().receipt["meta"]["postTokenBalances"][1]["uiTokenAmount"]["amount"] =
         json!("999999");
     assert!(

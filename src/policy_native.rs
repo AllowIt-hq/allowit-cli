@@ -349,13 +349,25 @@ pub(crate) fn run(
             Err(_) => {
                 // The signed proof is already durable and may have landed.
                 // A failed observation cannot turn it into a config-only exit.
-                result.status = "uncertain".into();
-                result.extra.insert("error".into(),serde_json::json!("Recovery observation failed; keep this request ID and original journal, and run allowit policy status"));
-                if journal
-                    .locked(|| journal.write(&format!("request-{}", result.id), &result))
-                    .is_err()
-                {
-                    stderr.push_str("Recovery observation could not be saved; retain the original journal and request ID.\n");
+                let name = format!("request-{}", result.id);
+                match journal.locked(|| {
+                    let mut current = journal.read::<Record>(&name)?.ok_or_else(|| allowit_native::error::Error::config("Operation journal disappeared"))?;
+                    if current.signature != result.signature || current.signed_bytes != result.signed_bytes || current.intent != result.intent {
+                        return Err(allowit_native::error::Error::config("Operation journal changed"));
+                    }
+                    if !current.final_status() && !current.expired() {
+                        current.status = "uncertain".into();
+                        current.extra.remove("replayed");
+                        current.extra.insert("error".into(),serde_json::json!("Recovery observation failed; keep this request ID and original journal, and run allowit policy status"));
+                        journal.write(&name,&current)?;
+                    }
+                    Ok(current)
+                }) {
+                    Ok(current) => result = current,
+                    Err(_) => {
+                        result.status = "uncertain".into();
+                        stderr.push_str("Recovery observation could not be saved; retain the original journal and request ID.\n");
+                    }
                 }
                 break;
             }
