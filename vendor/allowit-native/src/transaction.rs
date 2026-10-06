@@ -35,7 +35,11 @@ impl Transaction {
                 writable: *writable,
             })
             .collect();
-        keys.sort_by_key(|a| (a.key != payer, !a.signer, !a.writable, a.key));
+        keys.sort_by(|a, b| {
+            (a.key != payer, !a.signer, !a.writable)
+                .cmp(&(b.key != payer, !b.signer, !b.writable))
+                .then_with(|| compare_base58(a.key, b.key))
+        });
         if keys.len() > 256 {
             return Err(Error::config("Transaction has too many accounts"));
         }
@@ -73,6 +77,20 @@ impl Transaction {
         Ok(raw)
     }
 }
+// web3.js localeCompare on base58's ASCII alphabet: compare primary Latin
+// letters without case, then prefer lowercase on an otherwise equal string.
+fn compare_base58(a: Key, b: Key) -> std::cmp::Ordering {
+    let a = a.to_string();
+    let b = b.to_string();
+    a.to_ascii_lowercase()
+        .cmp(&b.to_ascii_lowercase())
+        .then_with(|| {
+            a.bytes()
+                .map(|c| c.is_ascii_uppercase())
+                .cmp(b.bytes().map(|c| c.is_ascii_uppercase()))
+        })
+}
+
 fn roles(payer: Key, instructions: &[Instruction]) -> Result<BTreeMap<Key, (bool, bool)>> {
     let mut roles = BTreeMap::from([(payer, (true, true))]);
     for i in instructions {

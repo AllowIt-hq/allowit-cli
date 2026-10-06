@@ -20,7 +20,7 @@ pub struct Deployment {
     pub policy_data: Key,
     pub custody: Key,
 }
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct Config {
     pub network: String,
     pub mint: Option<Key>,
@@ -43,11 +43,16 @@ pub struct Binding {
 pub struct NativeClient {
     pub config: Config,
     pub rpc: Arc<dyn Rpc>,
+    verified: std::sync::Mutex<Option<(String, bool)>>,
 }
 impl NativeClient {
     pub fn new(config: Config, rpc: Arc<dyn Rpc>) -> Result<Self> {
         genesis(&config.network)?;
-        Ok(Self { config, rpc })
+        Ok(Self {
+            config,
+            rpc,
+            verified: std::sync::Mutex::new(None),
+        })
     }
     pub fn check_network(&self) -> Result<()> {
         let observed = self.rpc.call("getGenesisHash", json!([]))?;
@@ -100,6 +105,10 @@ impl NativeClient {
     }
     pub fn verify_release(&self, recovery: bool) -> Result<Deployment> {
         self.check_network()?;
+        let identity = digest(
+            serde_json::to_vec(&self.config)
+                .map_err(|_| Error::config("Invalid native configuration"))?,
+        );
         let d = self.config.deployment.as_ref().ok_or_else(|| {
             Error::config("Configure an independently verified native deployment")
         })?;
@@ -107,6 +116,15 @@ impl NativeClient {
             return Err(Error::config(
                 "Configure an independently verified native deployment",
             ));
+        }
+        if self
+            .verified
+            .lock()
+            .map_err(|_| Error::config("Native verification state unavailable"))?
+            .as_ref()
+            .is_some_and(|(key, full)| *key == identity && (*full || recovery))
+        {
+            return Ok(d.clone());
         }
         for (program, expected) in [
             (d.policy, &release().artifacts[0].sha256),
@@ -151,6 +169,15 @@ impl NativeClient {
                 .mint
                 .ok_or_else(|| Error::config("Invalid native mint"))?,
         )?;
+        let mut verified = self
+            .verified
+            .lock()
+            .map_err(|_| Error::config("Native verification state unavailable"))?;
+        let full = !recovery
+            || verified
+                .as_ref()
+                .is_some_and(|(key, full)| *key == identity && *full);
+        *verified = Some((identity, full));
         Ok(d.clone())
     }
     pub fn binding(&self, policy: &Policy, owner: Key, recovery: bool) -> Result<Binding> {
@@ -340,5 +367,31 @@ mod tests {
         assert!(!binding.vault.on_curve());
         c.config.deployment.as_mut().unwrap().policy_data = Key([9; 32]);
         assert!(c.public_binding(&p, Key([6; 32])).is_err());
+    }
+    #[test]
+    fn verification_cache_is_scoped_to_exact_configuration_and_recovery_profile() {
+        let mut c = client(json!(genesis("solana:testnet").unwrap()));
+        let program = Key([2; 32]);
+        let data = Key::find_program_address(&[&program.0], Key::parse(LOADER).unwrap())
+            .unwrap()
+            .0;
+        c.config.mint = Some(Key([3; 32]));
+        c.config.executor = Some(Key([4; 32]));
+        c.config.deployment = Some(Deployment {
+            network: c.config.network.clone(),
+            source_bundle: release().source_bundle.clone(),
+            policy: program,
+            policy_data: data,
+            custody: Key([5; 32]),
+        });
+        let identity = digest(serde_json::to_vec(&c.config).unwrap());
+        *c.verified.lock().unwrap() = Some((identity.clone(), true));
+        assert!(c.verify_release(false).is_ok());
+        c.config.mint = Some(Key([6; 32]));
+        assert!(c.verify_release(false).is_err());
+        c.config.mint = Some(Key([3; 32]));
+        *c.verified.lock().unwrap() = Some((identity, false));
+        assert!(c.verify_release(true).is_ok());
+        assert!(c.verify_release(false).is_err());
     }
 }

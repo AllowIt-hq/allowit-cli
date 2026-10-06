@@ -1,23 +1,23 @@
 {
   "repository": "https://github.com/ackrate/AllowIt-sdk",
-  "commit": "daeedb775007499bd1834441fb9d847d1269b762",
+  "commit": "7183621f14bf5737f3ab1c518c705919616d51e1",
   "crate": "native-rust",
   "files": {
     "Cargo.lock": "9db53ba03334edc68fb6ffc6f886f706ea6c2ee1b163d4fb147b717a4fb22da2",
     "Cargo.toml": "272c63263e5459f5701f7ae2ba4e4145d09121899d540dfb952fb7d4dc741cec",
-    "src/client.rs": "bfa512188013bd9ec5dddff8f754c9e513cca91f2a5263cacf311691998e58ae",
+    "src/client.rs": "b4d6df8236686847629fcc4651f304014cff09fb2cc6be50fc934ebbee947b41",
     "src/crypto.rs": "83a9a5a8138382b387845f223128d58f0c3e0e725f836841cc086dda3a7286e9",
     "src/error.rs": "c4b9e48e7dcfc00650ce28fd2e36d213fb986d35c4a66fbc431804899e2662a3",
     "src/journal.rs": "ccb64f85c88c618d298177e2e96fd53f3bb7776c3746b1d339a60bc7b764c7aa",
     "src/lib.rs": "14a79c54bcad394d5af2b1f4610be18e7d85b19a06dd79e5dafbbf7540ea2055",
-    "src/lifecycle.rs": "b61468916c60e24b1e37de6a66ef2586d2333dee0da31ae7e74316008841e84f",
+    "src/lifecycle.rs": "510b6a27d28f1434de232a4143dd0767c26a38b42def547e81cd715f5464e6ce",
     "src/native.rs": "768b26a6a1a4f3336f13e0ed53ed907cc30bcd1f52a7cac8ece6dd8c5a42362d",
-    "src/policy.rs": "8bb536367437495b9851631a06f2ff8d37f341597afc72a8bb87c2de72e3f22c",
+    "src/policy.rs": "eff385bb12ed5c8241d4dfff2d1a352fb9ae561ea12fab6ca8d62cd44bd24118",
     "src/release.json": "bf2ebfb37d8c1d0a39e7302f1358437b2ba25a640280bf6d10f471da0bacc2b1",
-    "src/rpc.rs": "374ebae7deaf90a5f783c662a2be8199c9b977b657ed8718b022dc8d8556bc21",
-    "src/transaction.rs": "3ff30d461fb35055ea90fbf00c3278cc66d5184de106be09b939f319cf0e2a66",
-    "tests/lifecycle.rs": "2937dd5db869fd9ecaa6b2c9ce23fcb9884364b2a85360085299a42b8878e335",
+    "src/rpc.rs": "a8c61a281d07386bc13b27569a5eafdc7d233757127343355bdac2c206359bb2",
+    "src/transaction.rs": "1f0179add5f81b96dc2c030d7e71c7dbd75e6088e3716b33329faabde266a314",
+    "tests/lifecycle.rs": "27c1e6768c2b5e7599f7b3ae911cd63fc11fd8bc820679ed10a39bbce6711345",
     "tests/reference.json": "6decd0974fb99ffb5633b99321a25bd524ffdb5b92c95137ffb6241b408f3378",
-    "tests/reference.rs": "b942fa7e65c2e458633fd61287343f249aa7760fc84d2eff75f2e9b774818bf6"
+    "tests/reference.rs": "6e16ab4a19987ee2bc2fb1b6ab104c137688e640218a5a9265e37a51fe1d09a3"
   }
 }

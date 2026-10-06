@@ -25,6 +25,7 @@ struct Network {
     sends: Vec<String>,
     receipt: Value,
     status: String,
+    refreshed_status: Option<String>,
 }
 struct FakeRpc {
     data: Mutex<Network>,
@@ -36,7 +37,11 @@ impl Rpc for FakeRpc {
         Ok(match method {
             "getBlockHeight" => json!(d.height),
             "getSlot" => json!(99),
-            "getBlock" => json!({"blockHeight":d.block_height}),
+            "getBlock" => {
+                assert_eq!(params[1]["transactionDetails"], "none");
+                assert_eq!(params[1]["rewards"], false);
+                json!({"blockHeight":d.block_height})
+            }
             "getTransaction" => d.receipt.clone(),
             "sendTransaction" => {
                 assert_eq!(params[1]["skipPreflight"], false);
@@ -88,6 +93,7 @@ impl Fixture {
                 sends: vec![],
                 receipt: Value::Null,
                 status: "uncertain".into(),
+                refreshed_status: None,
             }),
             journal: directory.clone(),
         });
@@ -165,8 +171,13 @@ impl NativeOperations for Fixture {
         Ok(())
     }
     fn status(&self, signature: &str) -> Result<Value> {
+        let mut data = self.rpc.data.lock().unwrap();
+        let status = data.status.clone();
+        if let Some(next) = data.refreshed_status.take() {
+            data.status = next;
+        }
         Ok(
-            json!({"status":self.rpc.data.lock().unwrap().status,"signature":signature,"transactionUrl":self.sdk.transaction_url(signature)?}),
+            json!({"status":status,"signature":signature,"transactionUrl":self.sdk.transaction_url(signature)?}),
         )
     }
     fn state(
@@ -227,6 +238,30 @@ impl NativeOperations for Fixture {
             blockhash,
         })
     }
+}
+#[test]
+fn owner_expiry_refreshes_lagging_status_before_allowing_addition() {
+    let f = Fixture::new();
+    let count = AtomicUsize::new(0);
+    let options = Options {
+        amount: Some("1".into()),
+        ..Options::default()
+    };
+    let record = f
+        .submit("fund", &options, "stale-owner-001", &count)
+        .unwrap();
+    {
+        let mut data = f.rpc.data.lock().unwrap();
+        data.height = 101;
+        data.block_height = 101;
+        data.refreshed_status = Some("failed".into());
+    }
+    let recovered = f
+        .life()
+        .recover(&record.id, &f.policy, f.owner.public_key())
+        .unwrap();
+    assert_eq!(recovered.status, "failed");
+    assert!(!recovered.expired());
 }
 #[test]
 fn lost_response_keeps_exact_proof_blocks_new_spend_and_never_resigns() {
@@ -396,6 +431,32 @@ fn saved_proof_cannot_change_amount_signature_or_context() {
     assert!(validate_record(&other, &f.policy, f.owner.public_key(), &record).is_err());
     assert!(!record.public().to_string().contains("signedBytes"));
     assert!(!record.public().to_string().contains("intent"));
+}
+#[test]
+fn orphaned_owner_proof_blocks_a_new_operation_after_slot_write_crash() {
+    let f = Fixture::new();
+    let count = AtomicUsize::new(0);
+    let options = Options {
+        amount: Some("1".into()),
+        ..Options::default()
+    };
+    let first = f
+        .submit("fund", &options, "orphan-owner-001", &count)
+        .unwrap();
+    f.journal.clear("owner-slot-fund").unwrap();
+    assert!(
+        f.submit("fund", &options, "additional-owner-001", &count)
+            .is_err()
+    );
+    assert_eq!(count.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        f.journal
+            .read::<Record>("request-orphan-owner-001")
+            .unwrap()
+            .unwrap()
+            .signed_bytes,
+        first.signed_bytes
+    );
 }
 #[test]
 fn settled_requires_saved_message_both_cpis_and_exact_token_deltas() {

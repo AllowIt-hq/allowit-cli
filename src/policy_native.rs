@@ -46,7 +46,7 @@ struct Local {
     rpc_url: String,
 }
 impl Local {
-    fn load() -> Result<Self> {
+    fn load(name: &str) -> Result<Self> {
         let directory = absolute(&configured("ALLOWIT_POLICY_DIR", ".allowit"))?;
         let policy_file = absolute(&configured(
             "ALLOWIT_POLICY_FILE",
@@ -75,8 +75,16 @@ impl Local {
                 .unwrap_or("solana:testnet"),
         );
         native(genesis(&network))?;
-        let mint = public_setting("ALLOWIT_MINT", context.as_ref().map(|c| c.mint))?;
-        let executor = public_setting("ALLOWIT_EXECUTOR", context.as_ref().map(|c| c.executor))?;
+        let mint = if matches!(name, "generate" | "import") {
+            context.as_ref().map(|c| c.mint)
+        } else {
+            public_setting("ALLOWIT_MINT", context.as_ref().map(|c| c.mint))?
+        };
+        let executor = if matches!(name, "generate" | "import") {
+            context.as_ref().map(|c| c.executor)
+        } else {
+            public_setting("ALLOWIT_EXECUTOR", context.as_ref().map(|c| c.executor))?
+        };
         let rpc_url = configured(
             "ALLOWIT_RPC_URL",
             if network == "solana:devnet" {
@@ -121,7 +129,7 @@ pub(crate) fn run(
     stdout: &mut String,
     stderr: &mut String,
 ) -> Result<i32> {
-    let mut local = Local::load()?;
+    let mut local = Local::load(name)?;
     if name == "generate" {
         let policy = native(Policy::generate(&local.network, &pos[0]))?;
         native(
@@ -161,7 +169,7 @@ pub(crate) fn run(
                 executor: Some(c.executor),
                 deployment: Some(c.deployment.clone()),
             },
-            Arc::new(native(HttpRpc::new(&local.rpc_url))?),
+            Arc::new(OfflineRpc),
         ))?;
         native(imported.public_binding(&bundle.policy, c.owner))?;
         let journal = FileJournal::new(local.directory.join("journal"));
@@ -303,7 +311,7 @@ pub(crate) fn run(
         owner,
         name,
         &options,
-        if request_id.is_empty() {
+        if std::env::var_os("ALLOWIT_REQUEST_ID").is_none() {
             None
         } else {
             Some(&request_id)
@@ -336,7 +344,22 @@ pub(crate) fn run(
     let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
     while !result.final_status() && !result.expired() && std::time::Instant::now() < until {
         std::thread::sleep(std::time::Duration::from_secs(1));
-        result = native(lifecycle.recover(&result.id, &policy, owner))?;
+        match lifecycle.recover(&result.id, &policy, owner) {
+            Ok(observed) => result = observed,
+            Err(_) => {
+                // The signed proof is already durable and may have landed.
+                // A failed observation cannot turn it into a config-only exit.
+                result.status = "uncertain".into();
+                result.extra.insert("error".into(),serde_json::json!("Recovery observation failed; keep this request ID and original journal, and run allowit policy status"));
+                if journal
+                    .locked(|| journal.write(&format!("request-{}", result.id), &result))
+                    .is_err()
+                {
+                    stderr.push_str("Recovery observation could not be saved; retain the original journal and request ID.\n");
+                }
+                break;
+            }
+        }
     }
     if replayed {
         result
@@ -426,6 +449,19 @@ fn save_text(path: &Path, text: &str) -> Result<()> {
     }
     result
 }
+struct OfflineRpc;
+impl allowit_native::rpc::Rpc for OfflineRpc {
+    fn call(
+        &self,
+        _: &str,
+        _: serde_json::Value,
+    ) -> allowit_native::error::Result<serde_json::Value> {
+        Err(allowit_native::error::Error::config(
+            "Offline policy operation cannot access RPC",
+        ))
+    }
+}
+
 fn configured(name: &str, fallback: &str) -> String {
     let v = env_value(name);
     if v.is_empty() { fallback.into() } else { v }

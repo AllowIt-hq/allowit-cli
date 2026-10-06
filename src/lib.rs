@@ -32,6 +32,27 @@ pub fn run(args: Vec<String>) -> i32 {
         }
     };
     let token = env_value("ALLOWIT_TOKEN");
+    let stdout = if args.first().is_some_and(|a| a == "policy")
+        && serde_json::from_str::<Value>(&stdout).is_ok()
+    {
+        // Escape display controls within native JSON without changing the
+        // parsed policy prompt, identity, or skill content.
+        stdout
+            .chars()
+            .map(|c| {
+                if ('\u{7f}'..'\u{a0}').contains(&c)
+                    || ('\u{202a}'..='\u{202e}').contains(&c)
+                    || ('\u{2066}'..='\u{2069}').contains(&c)
+                {
+                    format!("\\u{:04x}", c as u32)
+                } else {
+                    c.to_string()
+                }
+            })
+            .collect()
+    } else {
+        stdout
+    };
     let _ = std::io::stdout().write_all(output::clean(stdout, &token).as_bytes());
     let _ = std::io::stderr().write_all(output::clean(stderr, &token).as_bytes());
     code

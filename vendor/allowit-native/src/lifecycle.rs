@@ -217,7 +217,7 @@ impl<'a> PolicyLifecycle<'a> {
         {
             return Ok(record);
         }
-        let result = self.sdk.status(&record.signature)?;
+        let mut result = self.sdk.status(&record.signature)?;
         if result["status"] == "uncertain" {
             let height = self.block_height()?;
             if height > record.last_valid_block_height {
@@ -230,7 +230,7 @@ impl<'a> PolicyLifecycle<'a> {
                 )?;
                 let block = self.sdk.client().rpc.call(
                     "getBlock",
-                    json!([slot,{"commitment":"finalized","maxSupportedTransactionVersion":0}]),
+                    json!([slot,{"commitment":"finalized","transactionDetails":"none","rewards":false,"maxSupportedTransactionVersion":0}]),
                 )?;
                 let finalized = block
                     .get("blockHeight")
@@ -240,11 +240,18 @@ impl<'a> PolicyLifecycle<'a> {
                 if let Some(height) = finalized.filter(|h| *h > record.last_valid_block_height) {
                     let state = self.sdk.state(policy, owner, true, Some(slot))?;
                     if matches!(record.method.as_str(), "fund" | "withdraw") {
-                        record.extra.insert("blockhashExpired".into(), json!(true));
-                        record.update(result);
-                        return Ok(record);
+                        // Reobserve status after the coherent expiry boundary;
+                        // a lagging initial RPC node cannot authorize addition.
+                        result = self.sdk.status(&record.signature)?;
+                        if result["status"] == "uncertain" {
+                            record.extra.insert("blockhashExpired".into(), json!(true));
+                            record.update(result);
+                            return Ok(record);
+                        }
                     }
-                    let unchanged = if record.method == "deploy" {
+                    let unchanged = if matches!(record.method.as_str(), "fund" | "withdraw") {
+                        false
+                    } else if record.method == "deploy" {
                         state.is_none()
                     } else {
                         state.as_ref().is_some_and(|s| {
@@ -268,7 +275,9 @@ impl<'a> PolicyLifecycle<'a> {
                         record.extra.insert("absence".into(), absence);
                         return Ok(record);
                     }
-                    record.extra.insert("blockhashExpired".into(), json!(true));
+                    if !matches!(record.method.as_str(), "fund" | "withdraw") {
+                        record.extra.insert("blockhashExpired".into(), json!(true));
+                    }
                 }
             }
         }
@@ -324,6 +333,17 @@ impl<'a> PolicyLifecycle<'a> {
                     if old.id!=previous||old.method!=method{return Err(Error::config("Owner journal inconsistency"));}
                     let reconciled=self.reconcile(old,policy,owner)?;self.journal.write(&format!("request-{previous}"),&reconciled)?;
                     if !reconciled.final_status()&&!(reconciled.expired()&&options.additional_owner_operation){return Err(Error::config(format!("Earlier {method} is uncertain; recover it first. After verified expiry, explicitly authorize an additional owner operation while retaining the old proof.")));}
+                }
+            }
+            if matches!(method,"fund"|"withdraw") {
+                // Request persistence precedes the slot write. Orphaned signed
+                // proofs from that crash window also block owner operations.
+                for old in self.journal.entries::<Record>()? {
+                    if old.method==method&&!old.final_status() {
+                        let previous=old.id.clone();let reconciled=self.reconcile(old,policy,owner)?;
+                        self.journal.write(&format!("request-{previous}"),&reconciled)?;
+                        if !reconciled.final_status()&&!(reconciled.expired()&&options.additional_owner_operation){return Err(Error::config(format!("Earlier {method} is uncertain; recover it first. After verified expiry, explicitly authorize an additional owner operation while retaining the old proof.")));}
+                    }
                 }
             }
             let prepared=self.sdk.prepare(policy,owner,method,options)?;

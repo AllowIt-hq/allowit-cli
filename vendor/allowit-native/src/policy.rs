@@ -49,6 +49,22 @@ pub fn decimal(n: u64) -> String {
 pub fn digest(data: impl AsRef<[u8]>) -> String {
     format!("{:x}", Sha256::digest(data.as_ref()))
 }
+fn js_trim(value: &str) -> &str {
+    value.trim_matches(|c| {
+        matches!(
+            c,
+            '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+                ..='\u{200a}'
+                    | '\u{2028}'
+                    | '\u{2029}'
+                    | '\u{202f}'
+                    | '\u{205f}'
+                    | '\u{3000}'
+                    | '\u{feff}'
+        )
+    })
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Policy {
@@ -112,7 +128,7 @@ impl Policy {
         {
             return Err(Error::config("Invalid policy instance"));
         }
-        if self.prompt.trim().is_empty() || self.prompt.encode_utf16().count() > 8000 {
+        if js_trim(&self.prompt).is_empty() || self.prompt.encode_utf16().count() > 8000 {
             return Err(Error::config("Invalid policy prompt"));
         }
         if self.id != digest(serde_json::to_vec(&self.identity()).unwrap()) {
@@ -122,11 +138,11 @@ impl Policy {
     }
     pub fn generate(network: &str, prompt: &str) -> Result<Self> {
         genesis(network)?;
-        if prompt.trim().is_empty() || prompt.encode_utf16().count() > 8000 {
+        if js_trim(prompt).is_empty() || prompt.encode_utf16().count() > 8000 {
             return Err(Error::config("Supply one bounded policy prompt"));
         }
-        let re=regex::Regex::new(r"(?i)^Spend up to ([0-9]+(?:\.[0-9]{1,6})?) (?:tokens|test tokens) per day(?: with PaySH discovery)?\.?$").unwrap();
-        let matched=re.captures(prompt.trim()).ok_or_else(||Error::denied("This native profile supports a daily token ceiling only. Use “Spend up to 5 test tokens per day” or configure the prompt author. Other rules must not be silently dropped."))?;
+        let re=regex::Regex::new(r"(?i-u)^Spend up to ([0-9]+(?:\.[0-9]{1,6})?) (?:tokens|test tokens) per day(?P<discovery> with PaySH discovery)?\.?$").unwrap();
+        let matched=re.captures(js_trim(prompt)).ok_or_else(||Error::denied("This native profile supports a daily token ceiling only. Use “Spend up to 5 test tokens per day” or configure the prompt author. Other rules must not be silently dropped."))?;
         let daily_limit = decimal(units(&matched[1])?);
         let r = release();
         let mut policy = Self {
@@ -136,9 +152,7 @@ impl Policy {
             network: network.into(),
             prompt: prompt.into(),
             daily_limit,
-            pay_discovery: prompt
-                .to_ascii_lowercase()
-                .contains(" with paysh discovery"),
+            pay_discovery: matched.name("discovery").is_some(),
             source_bundle: r.source_bundle.clone(),
             id: String::new(),
             policy_artifact: r.artifacts[0].sha256.clone(),
@@ -195,5 +209,25 @@ mod tests {
         for v in ["-1", "1e6", "0.0000001", "01", "1.", "18446744073709551616"] {
             assert!(units(v).is_err(), "{v}");
         }
+    }
+    #[test]
+    fn author_matches_javascript_ascii_case_and_whitespace() {
+        assert!(
+            Policy::generate(
+                "solana:testnet",
+                "Spend up to 5 test tokens per day with PayſH discovery"
+            )
+            .is_err()
+        );
+        assert!(
+            Policy::generate("solana:testnet", "\u{85}Spend up to 5 test tokens per day").is_err()
+        );
+        assert!(
+            Policy::generate(
+                "solana:testnet",
+                "\u{feff}Spend up to 5 test tokens per day\u{feff}"
+            )
+            .is_ok()
+        );
     }
 }

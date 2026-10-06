@@ -107,13 +107,18 @@ fn temp() -> std::path::PathBuf {
 #[test]
 fn generate_is_offline_native_and_preserves_policy_instance() {
     let directory = temp();
-    let result = run(
+    let result = run_with(
         &directory,
         &[
             "policy",
             "generate",
             "Spend up to 5 test tokens per day",
             "--json",
+        ],
+        &[
+            ("ALLOWIT_MINT", "unused-invalid-mint"),
+            ("ALLOWIT_EXECUTOR", "unused-invalid-executor"),
+            ("ALLOWIT_RPC_URL", "unused-invalid-rpc"),
         ],
     );
     assert!(
@@ -164,9 +169,14 @@ fn import_is_public_only_and_cannot_replace_occupied_policy() {
     let bundle = json!({"version":1,"policy":p,"context":context});
     let source = directory.with_extension("executor.json");
     std::fs::write(&source, serde_json::to_vec(&bundle).unwrap()).unwrap();
-    let result = run(
+    let result = run_with(
         &directory,
         &["policy", "import", source.to_str().unwrap(), "--json"],
+        &[
+            ("ALLOWIT_MINT", "unused-invalid-mint"),
+            ("ALLOWIT_EXECUTOR", "unused-invalid-executor"),
+            ("ALLOWIT_RPC_URL", "unused-invalid-rpc"),
+        ],
     );
     assert!(
         result.status.success(),
