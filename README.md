@@ -2,7 +2,7 @@
 
 `allowit` sends an agent's actions through an AllowIt policy. It is a thin, strict client for one policy's harness API; the policy itself (restricted Rust, evaluated by the shared SDK WASM on the AllowIt server) decides. The CLI cannot bypass the policy, the owner-input gate or the server's request schema.
 
-Rust harness-client migration candidate. The native `policy` lifecycle still uses the temporary Node SDK adapter in this checkpoint and is not ready to ship; that adapter will be replaced by the Rust native SDK before handoff. The Go implementation is retained under `reference/go/` as a differential test oracle; it is not the default command or distribution build.
+Rust migration candidate. All commands call Rust modules directly, including the pinned native SDK for policy generation, signing, receipt validation and recovery. The candidate requires final review and platform checks before release. The Go implementation is retained under `reference/go/` as a differential test oracle; it is not the default command or distribution build.
 
 This branch is the untagged `0.3.0-dev` candidate. Build from this checkout to use its gateway compatibility fixes and the `allowit policy` owner lifecycle commands. The tagged `v0.1.1` installation below remains the earlier release.
 
@@ -121,7 +121,7 @@ Fields a service omits (`title`, `policyId`, `owner`, `endpoints`, `capabilities
 
 ## Owner policy lifecycle
 
-`allowit policy` runs the owner's policy lifecycle through the AllowIt SDK CLI (`native/cli.mjs` in AllowIt-sdk, Node 22). The SDK does the work: it generates the policy, signs with the owner's key, keeps its journal and talks to the network. allowit only checks the arguments, then runs the SDK CLI. These commands need no `ALLOWIT_TOKEN` and do not read `ALLOWIT_URL`.
+`allowit policy` calls the pinned `allowit-native` Rust SDK library. The SDK generates policy parameters, signs locally, keeps its durable journal and talks to the network. These commands need no `ALLOWIT_TOKEN` and do not read `ALLOWIT_URL`. The CLI has no Node runtime or subprocess adapter.
 
 ```sh
 allowit policy generate "Spend up to 5 test tokens per day"   # prints the generated Rust source
@@ -149,14 +149,9 @@ Decimals are plain digits with an optional fraction: no sign, exponent, separato
 
 **Native lifecycle exits.** 0 settled/new generation or status, 5 uncertain, 6 replay of an earlier settled operation, 20 policy denial or finalized failure, 3 configuration. `ALLOWIT_REQUEST_ID` identifies a new intended operation; keep it unchanged for retries.
 
-**Locating the SDK CLI.** In this order:
+**Local configuration.** `ALLOWIT_POLICY_DIR` defaults to `.allowit`; `ALLOWIT_POLICY_FILE` may select another policy file. `ALLOWIT_NETWORK`, `ALLOWIT_RPC_URL`, `ALLOWIT_MINT`, `ALLOWIT_EXECUTOR`, and `ALLOWIT_DEPLOYMENT_FILE` configure the native profile. Import persists a public context and refuses conflicting configuration. `ALLOWIT_OWNER_KEYPAIR` is used for owner operations, `ALLOWIT_EXECUTOR_KEYPAIR` for execution, and `ALLOWIT_OWNER` supplies the public owner for execution/status. Keys are private local files. `ALLOWIT_REQUEST_ID` is the durable operation ID. Only an explicitly additional fund/withdraw uses both a fresh ID and `ALLOWIT_ADDITIONAL_OWNER_OPERATION=1` after an expired uncertain operation.
 
-1. `ALLOWIT_SDK_CLI`, which must be an absolute path to the SDK's `native/cli.mjs` (a relative or missing path is refused, exit 3).
-2. `native-sdk/cli.mjs` in the directory of the `allowit` executable, with symlinks resolved, so an install that ships the SDK beside the binary needs no configuration.
-
-`ALLOWIT_NODE` names the Node 22 executable (default `node`, found on `PATH`).
-
-**Invocation.** allowit runs `ALLOWIT_NODE SDK_CLI COMMAND [--json] [-- ARG...]` directly with Rust `std::process::Command`, never through a shell. Positional arguments follow `--` exactly as given; `--json` comes before `--` when requested. The SDK CLI inherits allowit's stdin, stdout, stderr and environment, so its output (Rust source, skill, explorer links, prompts) reaches the terminal unaltered and is not scrubbed by allowit. allowit exits with the SDK CLI's exit status, and for a non-zero status also prints `allowit: policy COMMAND: the SDK CLI exited with status N` on stderr. A child killed by a signal gives 128 + the signal number. An interrupt from the terminal reaches the SDK CLI directly; allowit waits for it to exit. If the SDK CLI cannot be found or started, allowit exits 3.
+**SDK source pin.** `vendor/allowit-native/` contains only the canonical SDK crate and its license. `vendor/native-sdk.json` records the exact SDK commit and file hashes. `scripts/sync-native-sdk.py SDK_REPO FULL_COMMIT --check` verifies the snapshot against canonical source; ordinary builds and CI require no private SDK checkout or cross-repository token.
 
 ## States and exit codes
 

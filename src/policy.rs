@@ -1,11 +1,6 @@
 use crate::{
-    config::env_value,
     error::{Error, Result, quoted},
     request::{matches, solana_address},
-};
-use std::{
-    path::PathBuf,
-    process::{Command, Stdio},
 };
 const USAGE: &str = include_str!("policy-usage.txt");
 pub(crate) fn run(args: &[String], stdout: &mut String, stderr: &mut String) -> Result<i32> {
@@ -95,94 +90,7 @@ pub(crate) fn run(args: &[String], stdout: &mut String, stderr: &mut String) -> 
         "tune" => decimal("VALUE", &pos[0], false)?,
         _ => {}
     }
-    let configured = env_value("ALLOWIT_SDK_CLI");
-    let cli = if !configured.is_empty() {
-        let path = PathBuf::from(&configured);
-        if !path.is_absolute() {
-            return Err(Error::config(format!(
-                "ALLOWIT_SDK_CLI must be an absolute path to the SDK's cli.mjs, not {}",
-                quoted(&configured)
-            )));
-        }
-        if !path.is_file() {
-            return Err(Error::config(format!(
-                "ALLOWIT_SDK_CLI {} is not a readable file",
-                quoted(&configured)
-            )));
-        }
-        path
-    } else {
-        let self_path=std::env::current_exe().and_then(std::fs::canonicalize).map_err(|e|Error::config(format!("cannot locate the allowit executable ({e}); set ALLOWIT_SDK_CLI to the SDK's cli.mjs")))?;
-        let path = self_path.parent().unwrap().join("native-sdk/cli.mjs");
-        if !path.is_file() {
-            return Err(Error::config(format!(
-                "the AllowIt SDK CLI is not installed at {}; set ALLOWIT_SDK_CLI to the absolute path of the SDK's native/cli.mjs",
-                path.display()
-            )));
-        }
-        path
-    };
-    let node = env_value("ALLOWIT_NODE");
-    let node = if node.is_empty() { "node" } else { &node };
-    let mut command = Command::new(node);
-    command
-        .arg(cli)
-        .arg(name)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    if json {
-        command.arg("--json");
-    }
-    if !pos.is_empty() {
-        command.arg("--").args(pos);
-    }
-    // The child shares the terminal process group. Terminal SIGINT reaches it
-    // directly; SIGTERM addressed only to this wrapper is forwarded.
-    #[cfg(unix)]
-    let mut signals = signal_hook::iterator::Signals::new([
-        signal_hook::consts::SIGINT,
-        signal_hook::consts::SIGTERM,
-    ])
-    .map_err(|e| Error::config(format!("cannot monitor SDK CLI signals: {e}")))?;
-    let mut child=command.spawn().map_err(|e|Error::config(format!("cannot run the AllowIt SDK CLI with {node} (set ALLOWIT_NODE to a Node 22 executable): {e}")))?;
-    #[cfg(unix)]
-    let handle = signals.handle();
-    #[cfg(unix)]
-    let forwarding = {
-        let pid = child.id();
-        std::thread::spawn(move || {
-            for signal in signals.forever() {
-                if signal == signal_hook::consts::SIGTERM {
-                    let _ = Command::new("/bin/kill")
-                        .arg("-TERM")
-                        .arg(pid.to_string())
-                        .status();
-                }
-            }
-        })
-    };
-    let status=child.wait().map_err(|e|Error::config(format!("cannot run the AllowIt SDK CLI with {node} (set ALLOWIT_NODE to a Node 22 executable): {e}")));
-    #[cfg(unix)]
-    {
-        handle.close();
-        let _ = forwarding.join();
-    }
-    let status = status?;
-    #[cfg(unix)]
-    use std::os::unix::process::ExitStatusExt;
-    #[cfg(unix)]
-    let code = status
-        .code()
-        .unwrap_or_else(|| 128 + status.signal().unwrap_or(0));
-    #[cfg(not(unix))]
-    let code = status.code().unwrap_or(3);
-    if code != 0 {
-        stderr.push_str(&format!(
-            "allowit: policy {name}: the SDK CLI exited with status {code}\n"
-        ));
-    }
-    Ok(code)
+    crate::policy_native::run(name, &pos, json, stdout, stderr)
 }
 fn decimal(name: &str, v: &str, positive: bool) -> Result<()> {
     if v.len() > 40

@@ -1,16 +1,21 @@
-allowit policy runs the owner's policy lifecycle through the AllowIt SDK CLI.
+allowit policy calls the pinned native Rust SDK library.
 
-The SDK CLI (Node 22) does the work: it generates the pinned Rust policy and its parameters,
-signs with the owner's key, keeps its journal and talks to the network. This
-command only checks the arguments and runs it. No ALLOWIT_TOKEN is needed.
-The default network is Testnet. ALLOWIT_NETWORK=solana:devnet is explicit;
-configure its RPC as well. The SDK refuses Mainnet. Generate never signs.
-Execute uses only the executor key and ALLOWIT_OWNER public key; status has no signer.
+Policy generation, local signing, durable recovery and network access are owned
+by the SDK. No ALLOWIT_TOKEN is needed. The default network is Solana Testnet;
+ALLOWIT_NETWORK=solana:devnet selects Devnet. Mainnet is refused. Generate never
+signs. Execute uses only the executor key; status has no signer.
 
 Configuration (environment only):
-  ALLOWIT_SDK_CLI  absolute path to the SDK's native/cli.mjs
-                   (default: native-sdk/cli.mjs beside the allowit executable)
-  ALLOWIT_NODE     Node 22 executable (default: node, found on PATH)
+  ALLOWIT_POLICY_DIR         local policy and journal directory (default .allowit)
+  ALLOWIT_POLICY_FILE        optional policy file override
+  ALLOWIT_NETWORK            solana:testnet or solana:devnet
+  ALLOWIT_RPC_URL            optional network RPC URL
+  ALLOWIT_MINT               six-decimal classic SPL test mint
+  ALLOWIT_EXECUTOR           designated executor public key
+  ALLOWIT_DEPLOYMENT_FILE    verified native deployment manifest
+  ALLOWIT_OWNER              owner public key for execute/status
+  ALLOWIT_OWNER_KEYPAIR      private owner key file for owner operations
+  ALLOWIT_EXECUTOR_KEYPAIR   private executor key file for execution
 
 Commands:
   allowit policy generate PROMPT          generate a policy from one prompt;
@@ -28,7 +33,7 @@ Commands:
   allowit policy withdraw AMOUNT          withdraw unspent funds
   allowit policy tune VALUE               change the policy's tunable value
 
-  Every command accepts --json: the SDK prints a machine-readable result on
+  Every command accepts --json: the CLI prints a machine-readable result on
   stdout instead. Progress and errors go to stderr.
 
 Arguments:
@@ -40,5 +45,5 @@ Arguments:
 Set ALLOWIT_REQUEST_ID to a fresh ID for each new intended operation. Keep
 it unchanged for retries; exit 6 is an earlier receipt, not a new payment.
 
-Exit status is the SDK CLI's own. allowit exits 2 for invalid arguments and 3
-when the SDK CLI cannot be found or started, before anything runs.
+Exit status: 0 settled/generated/status, 2 usage, 3 configuration, 5 uncertain,
+6 replay of an earlier settled operation, 20 denied or finalized failure.

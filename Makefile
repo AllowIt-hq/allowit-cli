@@ -8,6 +8,8 @@ test:
 	$(CARGO) fmt --check
 	$(CARGO) clippy --locked --all-targets -- -D warnings
 	$(CARGO) test --locked
+	CARGO_TARGET_DIR="$(CURDIR)/target" $(CARGO) test --manifest-path vendor/allowit-native/Cargo.toml --locked
+	CARGO_TARGET_DIR="$(CURDIR)/target" $(CARGO) clippy --manifest-path vendor/allowit-native/Cargo.toml --locked --all-targets -- -D warnings
 	cd reference/go && $(GO) vet ./... && $(GO) test -race -count=1 ./...
 	$(GO) test -race -count=1 ./integration
 

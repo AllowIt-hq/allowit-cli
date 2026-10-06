@@ -72,8 +72,6 @@ fn validation_and_help_match_reference() {
         vec!["show", "policy", "--json=maybe"],
         vec!["exec", "policy", "--amount", "1", "--amount", "2"],
         vec!["status", "policy", "too-short"],
-        vec!["policy"],
-        vec!["policy", "help"],
         vec!["policy", "fund", "0"],
         vec!["policy", "tune", "-1"],
         vec!["policy", "generate", ""],
