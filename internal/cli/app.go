@@ -14,9 +14,10 @@ import (
 	"time"
 )
 
-const Version = "0.2.0-dev"
+const Version = "0.3.0-dev"
 
-const usage = `allowit sends actions through an AllowIt policy.
+const usage = `allowit sends actions through an AllowIt policy and runs the
+owner's policy lifecycle.
 
 Configuration (environment only):
   ALLOWIT_URL      service origin, e.g. https://allowit.example
@@ -28,6 +29,9 @@ Commands:
   allowit eval   POLICY [request flags]     check permission; spends nothing
   allowit exec   POLICY [request flags]     submit the request
   allowit status POLICY REQUEST_ID [--wait 60s] [--json]
+  allowit policy generate|deploy|fund|execute|status|revoke|withdraw|tune ...
+                 owner lifecycle through the AllowIt SDK CLI; no token
+                 needed (see allowit policy help)
   allowit version
 
 Request flags:
@@ -69,6 +73,10 @@ type App struct {
 	Sleep        func(time.Duration)
 	Timeout      time.Duration
 	PollInterval time.Duration
+	// Runner runs the SDK CLI for allowit policy; nil uses os/exec.
+	Runner CommandRunner
+	// Executable locates allowit to find the bundled SDK; nil uses os.Executable.
+	Executable func() (string, error)
 }
 
 func (a App) Run(args []string) int {
@@ -96,6 +104,8 @@ func (a App) Run(args []string) int {
 		code, err = a.request(args[0], args[1:], out, errOut)
 	case "status":
 		code, err = a.status(args[1:], out, errOut)
+	case "policy":
+		code, err = a.policy(args[1:], out, errOut)
 	case "version", "--version":
 		out.printf("allowit %s\n", Version)
 		return exitOK
@@ -103,7 +113,7 @@ func (a App) Run(args []string) int {
 		out.printf("%s", usage)
 		return exitOK
 	default:
-		err = usagef("unknown command %q (show, eval, exec, status)", args[0])
+		err = usagef("unknown command %q (show, eval, exec, status, policy)", args[0])
 	}
 	if err != nil {
 		errOut.printf("allowit: %v\n", err)
@@ -408,6 +418,9 @@ func (a App) request(kind string, args []string, out, errOut printer) (int, erro
 		return 0, err
 	}
 	resent := c.resent
+	// Replay metadata belongs to the submission, not the later status reads.
+	// Keep it even when polling replaces the response with the current state.
+	replayed, createdAt := r["replayed"] == true, r["createdAt"]
 	// From here AllowIt has accepted the request: any failure to read its
 	// result is uncertain, never a rejection.
 	unknown := func(err error) error {
@@ -432,6 +445,12 @@ func (a App) request(kind string, args []string, out, errOut printer) (int, erro
 			return 0, unknown(err)
 		}
 		r = next
+	}
+	if replayed {
+		r["replayed"] = true
+		if createdAt != nil {
+			r["createdAt"] = createdAt
+		}
 	}
 	res := classify(r, kind)
 	// A derived ID that this invocation did not itself resend matched an

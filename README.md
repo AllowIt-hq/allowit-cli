@@ -4,7 +4,7 @@
 
 Go, standard library only.
 
-This branch is the untagged `0.2.0-dev` candidate. Build from this checkout to use its gateway compatibility fixes. The tagged `v0.1.1` installation below remains the earlier release.
+This branch is the untagged `0.3.0-dev` candidate. Build from this checkout to use its gateway compatibility fixes and the `allowit policy` owner lifecycle commands. The tagged `v0.1.1` installation below remains the earlier release.
 
 ## Install
 
@@ -115,6 +115,45 @@ Fields a service omits (`title`, `policyId`, `owner`, `endpoints`, `capabilities
 
 **Context.** `--context` must be a single JSON object of at most 16 KB, depth 8 and 128 values, with no repeated keys and no top-level `allowitExecution` (AllowIt supplies that field). The server enforces the same limits.
 
+## Owner policy lifecycle
+
+`allowit policy` runs the owner's policy lifecycle through the AllowIt SDK CLI (`native/cli.mjs` in AllowIt-sdk, Node 22). The SDK does the work: it generates the policy, signs with the owner's key, keeps its journal and talks to the network. allowit only checks the arguments, then runs the SDK CLI. These commands need no `ALLOWIT_TOKEN` and do not read `ALLOWIT_URL`.
+
+```sh
+allowit policy generate "Spend up to 5 test tokens per day"   # prints the generated Rust source
+allowit policy deploy                       # prints the generated skill and the transaction's explorer link
+allowit policy fund 25                      # prints the transaction's explorer link
+allowit policy execute RECIPIENT_TOKEN_ACCOUNT 1.5
+allowit policy status
+allowit policy revoke
+allowit policy withdraw 10
+allowit policy tune 0.5
+allowit policy help                         # or: allowit policy COMMAND --help
+```
+
+| Command | Arguments |
+|---|---|
+| `generate` | Exactly one `PROMPT`. Quote it; several words unquoted are refused. Put `--` before a prompt that begins with `-`. |
+| `deploy`, `status`, `revoke` | None. |
+| `fund`, `withdraw` | One positive decimal `AMOUNT` (e.g. `5`, `0.25`). |
+| `execute` | `RECIPIENT` (a Solana token account address, checked offline) and a positive decimal `AMOUNT`. |
+| `tune` | One non-negative decimal `VALUE`. |
+
+Decimals are plain digits with an optional fraction: no sign, exponent, separator, leading zero or bare `.`, at most 40 characters. The SDK checks precision and limits. Every command accepts `--json`, which asks the SDK for a machine-readable result on stdout; any other flag is refused. Invalid arguments exit 2 before anything runs.
+
+**Network.** Testnet by default. `ALLOWIT_NETWORK=solana:devnet` selects Devnet explicitly; configure its RPC as well. Mainnet is refused. Generate never signs. Execute needs `ALLOWIT_OWNER` (public key) and the executor key only; status needs no secret key. Owner keys stay on the owner device.
+
+**Native lifecycle exits.** 0 settled/new generation or status, 5 uncertain, 6 replay of an earlier settled operation, 20 policy denial or finalized failure, 3 configuration. `ALLOWIT_REQUEST_ID` identifies a new intended operation; keep it unchanged for retries.
+
+**Locating the SDK CLI.** In this order:
+
+1. `ALLOWIT_SDK_CLI`, which must be an absolute path to the SDK's `native/cli.mjs` (a relative or missing path is refused, exit 3).
+2. `native-sdk/cli.mjs` in the directory of the `allowit` executable, with symlinks resolved, so an install that ships the SDK beside the binary needs no configuration.
+
+`ALLOWIT_NODE` names the Node 22 executable (default `node`, found on `PATH`).
+
+**Invocation.** allowit runs `ALLOWIT_NODE SDK_CLI COMMAND [--json] [-- ARG...]` directly with `os/exec`, never through a shell. Positional arguments follow `--` exactly as given; `--json` comes before `--` when requested. The SDK CLI inherits allowit's stdin, stdout, stderr and environment, so its output (Rust source, skill, explorer links, prompts) reaches the terminal unaltered and is not scrubbed by allowit. allowit exits with the SDK CLI's exit status, and for a non-zero status also prints `allowit: policy COMMAND: the SDK CLI exited with status N` on stderr. A child killed by a signal gives 128 + the signal number. An interrupt from the terminal reaches the SDK CLI directly; allowit waits for it to exit. If the SDK CLI cannot be found or started, allowit exits 3.
+
 ## States and exit codes
 
 | Exit | State | Meaning |
@@ -143,7 +182,7 @@ The configured token is redacted in full from all output, whatever its length. I
 
 ## Server compatibility
 
-The agent interface is exactly these four commands. Policy creation, editing, allocation and owner approval stay in the AllowIt web app; the token cannot answer owner questions, sign or change the policy.
+The agent interface is exactly these four commands (`show`, `eval`, `exec`, `status`). `allowit policy` is the owner's tool, not the agent's; see [Owner policy lifecycle](#owner-policy-lifecycle). Otherwise policy creation, editing, allocation and owner approval stay in the AllowIt web app; the token cannot answer owner questions, sign or change the policy.
 
 | Server | `/skill` shape | CLI behaviour |
 |---|---|---|
