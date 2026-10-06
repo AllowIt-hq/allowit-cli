@@ -2,7 +2,7 @@
 
 `allowit` sends an agent's actions through an AllowIt policy. It is a thin, strict client for one policy's harness API; the policy itself (restricted Rust, evaluated by the shared SDK WASM on the AllowIt server) decides. The CLI cannot bypass the policy, the owner-input gate or the server's request schema.
 
-Rust. The Go implementation is retained under `reference/go/` as a differential test oracle; it is not the default command or distribution build.
+Rust harness-client migration candidate. The native `policy` lifecycle still uses the temporary Node SDK adapter in this checkpoint and is not ready to ship; that adapter will be replaced by the Rust native SDK before handoff. The Go implementation is retained under `reference/go/` as a differential test oracle; it is not the default command or distribution build.
 
 This branch is the untagged `0.3.0-dev` candidate. Build from this checkout to use its gateway compatibility fixes and the `allowit policy` owner lifecycle commands. The tagged `v0.1.1` installation below remains the earlier release.
 
