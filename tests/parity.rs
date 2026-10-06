@@ -89,7 +89,7 @@ fn request_bytes_ids_states_and_context_match_reference() {
     let calls = std::sync::Arc::new(Mutex::new(Vec::new()));
     let recorded = calls.clone();
     let server = std::thread::spawn(move || {
-        for _ in 0..12 {
+        for _ in 0..16 {
             let (mut conn, _) = listener.accept().unwrap();
             let mut data = Vec::new();
             let mut byte = [0u8; 1];
@@ -147,6 +147,18 @@ fn request_bytes_ids_states_and_context_match_reference() {
             "--merchant",
             "<merchant>",
         ],
+        vec![
+            "--amount",
+            "0.000000001",
+            "--rail",
+            "solana",
+            "--op",
+            "transferSOL",
+            "--addr",
+            "11111111111111111111111111111111",
+            "--before",
+            r#"[{"TYPE":"bogus","type":"contract_call","contract":"11111111111111111111111111111111","METHOD":"noop","args":{},"maxCostUSDC":"0","maxCostUSDC":null}]"#,
+        ],
     ] {
         let mut args = vec!["eval", "policy", "--action", "research", "--json"];
         args.extend(extra);
@@ -154,7 +166,7 @@ fn request_bytes_ids_states_and_context_match_reference() {
     }
     server.join().unwrap();
     let calls = calls.lock().unwrap();
-    assert_eq!(calls.len(), 6);
+    assert_eq!(calls.len(), 8);
     for pair in calls.chunks_exact(2) {
         assert_eq!(pair[0], pair[1], "wire request differs");
     }

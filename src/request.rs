@@ -54,8 +54,7 @@ pub(crate) struct Plan {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<Call>,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Serialize)]
 pub(crate) struct Call {
     #[serde(rename = "type", default)]
     pub kind: String,
@@ -66,6 +65,51 @@ pub(crate) struct Call {
     pub args: Option<Box<RawValue>>,
     #[serde(rename = "maxCostUSDC", default)]
     pub max_cost: String,
+}
+impl<'de> Deserialize<'de> for Call {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Call;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an execution call object")
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> std::result::Result<Call, M::Error> {
+                let mut call = Call {
+                    kind: String::new(),
+                    contract: String::new(),
+                    method: String::new(),
+                    args: None,
+                    max_cost: String::new(),
+                };
+                while let Some(name) = map.next_key::<String>()? {
+                    let slot = match name.to_ascii_lowercase().as_str() {
+                        "type" => &mut call.kind,
+                        "contract" => &mut call.contract,
+                        "method" => &mut call.method,
+                        "maxcostusdc" => &mut call.max_cost,
+                        "args" => {
+                            call.args = Some(map.next_value()?);
+                            continue;
+                        }
+                        _ => return Err(serde::de::Error::custom("unknown execution call field")),
+                    };
+                    // Go's string fields retain their preceding value on JSON
+                    // null; repeated recognized fields use the last value.
+                    if let Some(value) = map.next_value::<Option<String>>()? {
+                        *slot = value;
+                    }
+                }
+                Ok(call)
+            }
+        }
+        deserializer.deserialize_map(Visitor)
+    }
 }
 pub(crate) fn matches(s: &str, pattern: &str) -> bool {
     regex::Regex::new(pattern).unwrap().is_match(s)
