@@ -3,7 +3,8 @@ allowit policy calls the pinned native Rust SDK library.
 Policy generation, local signing, durable recovery and network access are owned
 by the SDK. No ALLOWIT_TOKEN is needed. The default network is Solana Testnet;
 ALLOWIT_NETWORK=solana:devnet selects Devnet. Mainnet is refused. Generate never
-signs. Execute uses only the executor key; status has no signer.
+signs. Execute uses the executor key and an owner-issued, server-scoped approval
+capability; the trusted authority key never leaves the server. Status has no signer.
 
 Configuration (environment only):
   ALLOWIT_POLICY_DIR         local policy and journal directory (default .allowit)
@@ -12,18 +13,22 @@ Configuration (environment only):
   ALLOWIT_RPC_URL            optional network RPC URL
   ALLOWIT_MINT               six-decimal classic SPL test mint
   ALLOWIT_EXECUTOR           designated executor public key
+  ALLOWIT_AUTHORITY          trusted server authority public key
   ALLOWIT_DEPLOYMENT_FILE    verified native deployment manifest
   ALLOWIT_OWNER              owner public key for execute/status
   ALLOWIT_OWNER_KEYPAIR      private owner key file for owner operations
   ALLOWIT_EXECUTOR_KEYPAIR   private executor key file for execution
+  ALLOWIT_EXECUTION_ACTION   exact action for the server policy (default transfer)
+  ALLOWIT_EXECUTION_MERCHANT exact merchant, when applicable
+  ALLOWIT_EXECUTION_CONTEXT_JSON optional JSON object for the server policy
+  ALLOWIT_EXECUTION_CONTEXT_FILE optional path to that JSON object (not both)
 
 Commands:
   allowit policy generate PROMPT          generate a policy from one prompt;
                                           prints the generated Rust source
   allowit policy import EXECUTOR_JSON      import the browser policy bundle
-  allowit policy deploy                   deploy the generated policy; prints
-                                          the generated skill and the
-                                          transaction's explorer link
+  allowit policy deploy AMOUNT            create, configure, fund and activate
+                                          the vault in one owner transaction
   allowit policy fund AMOUNT              fund the policy; prints the
                                           transaction's explorer link
   allowit policy execute RECIPIENT AMOUNT pay AMOUNT to RECIPIENT, a Solana
@@ -31,7 +36,9 @@ Commands:
   allowit policy status                   show the deployed policy's state
   allowit policy revoke                   revoke the deployed policy
   allowit policy withdraw AMOUNT          withdraw unspent funds
-  allowit policy tune VALUE               change the policy's tunable value
+  allowit policy close                    withdraw all and close the vault
+  allowit policy tune VALUE               change the daily limit
+  allowit policy tune-action VALUE        change the per-action limit
 
   Every command accepts --json: the CLI prints a machine-readable result on
   stdout instead. Progress and errors go to stderr.
@@ -42,8 +49,9 @@ Arguments:
   The SDK checks precision and limits. Use -- before a PROMPT that begins
   with -.
 
-Set ALLOWIT_REQUEST_ID to a fresh ID for each new intended operation. Keep
-it unchanged for retries; exit 6 is an earlier receipt, not a new payment.
+Set ALLOWIT_REQUEST_ID to a fresh ID for each new intended operation; execute
+requires it. Keep it and the exact action, merchant, context, recipient and
+amount unchanged for retries; exit 6 is an earlier receipt, not a new payment.
 
 Exit status: 0 settled/generated/status, 2 usage, 3 configuration, 5 uncertain,
 6 replay of an earlier settled operation, 20 denied or finalized failure.

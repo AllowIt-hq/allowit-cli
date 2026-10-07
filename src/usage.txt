@@ -11,7 +11,7 @@ Commands:
   allowit eval   POLICY [request flags]     check permission; spends nothing
   allowit exec   POLICY [request flags]     submit the request
   allowit status POLICY REQUEST_ID [--wait 60s] [--json]
-  allowit policy generate|deploy|fund|execute|status|revoke|withdraw|tune ...
+  allowit policy generate|deploy|fund|execute|status|revoke|withdraw|close|tune|tune-action ...
                  owner lifecycle through the AllowIt SDK CLI; no token
                  needed (see allowit policy help)
   allowit version

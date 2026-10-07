@@ -10,7 +10,7 @@ use allowit_native::{
     crypto::{Key, LocalSigner},
     journal::FileJournal,
     lifecycle::{PolicyLifecycle, Record},
-    native::Options,
+    native::{ExecutionRequestIdentity, Options, number},
     policy::{Policy, genesis},
     rpc::HttpRpc,
 };
@@ -30,6 +30,7 @@ struct Context {
     network: String,
     mint: Key,
     executor: Key,
+    authority: Key,
     deployment: Deployment,
 }
 #[derive(Deserialize)]
@@ -62,6 +63,7 @@ impl Local {
                 ("ALLOWIT_NETWORK", c.network.clone()),
                 ("ALLOWIT_MINT", c.mint.to_string()),
                 ("ALLOWIT_EXECUTOR", c.executor.to_string()),
+                ("ALLOWIT_AUTHORITY", c.authority.to_string()),
             ] {
                 let present = env_value(name);
                 if !present.is_empty() && present != value {
@@ -89,6 +91,11 @@ impl Local {
         } else {
             public_setting("ALLOWIT_EXECUTOR", context.as_ref().map(|c| c.executor))?
         };
+        let authority = if matches!(name, "generate" | "import") {
+            context.as_ref().map(|c| c.authority)
+        } else {
+            public_setting("ALLOWIT_AUTHORITY", context.as_ref().map(|c| c.authority))?
+        };
         let rpc_url = configured(
             "ALLOWIT_RPC_URL",
             if network == "solana:devnet" {
@@ -101,6 +108,7 @@ impl Local {
             network: network.clone(),
             mint,
             executor,
+            authority,
             deployment: context.as_ref().map(|c| c.deployment.clone()),
         };
         let journal = FileJournal::new(directory.join("journal"));
@@ -193,7 +201,7 @@ pub(crate) fn run(
             audit.validate()?;
         }
         let c = &bundle.context;
-        if bundle.version != 1
+        if bundle.version != 2
             || c.policy_id != bundle.policy.id
             || c.network != bundle.policy.network
         {
@@ -204,6 +212,7 @@ pub(crate) fn run(
                 network: c.network.clone(),
                 mint: Some(c.mint),
                 executor: Some(c.executor),
+                authority: Some(c.authority),
                 deployment: Some(c.deployment.clone()),
             },
             Arc::new(OfflineRpc),
@@ -307,11 +316,15 @@ pub(crate) fn run(
             stdout.push_str(&format!("Policy {}\n", policy.id));
             if let Some(s) = state {
                 stdout.push_str(&format!(
-                    "Vault {}\nApproved: {}\nBalance: {}\nSpent today counter: {}\n",
+                    "Vault {}\nTrusted authority: {}\nApproved: {}\nBalance: {}\nPer-action limit: {}\nSpent today counter: {}\n",
                     s.binding.vault,
+                    s.binding.authority,
                     s.approved,
                     allowit_native::policy::decimal(native(allowit_native::native::number(
                         &s.balance
+                    ))?),
+                    allowit_native::policy::decimal(native(allowit_native::native::number(
+                        &s.action_limit
                     ))?),
                     allowit_native::policy::decimal(native(allowit_native::native::number(
                         &s.spent
@@ -334,9 +347,8 @@ pub(crate) fn run(
         return Ok(if audit_pending { 5 } else { 0 });
     }
     let options = match name {
-        "execute" => Options {
-            recipient: Some(native(Key::parse(&pos[0]))?),
-            amount: Some(pos[1].clone()),
+        "deploy" => Options {
+            amount: Some(pos[0].clone()),
             ..Options::default()
         },
         "fund" | "withdraw" => Options {
@@ -348,33 +360,84 @@ pub(crate) fn run(
             amount: Some(pos[0].clone()),
             ..Options::default()
         },
+        "tune-action" => Options {
+            amount: Some(pos[0].clone()),
+            ..Options::default()
+        },
+        "close" => {
+            let state = native(client.state(&policy, owner, true, None))?
+                .ok_or_else(|| Error::config("Deploy the native policy first"))?;
+            Options {
+                instance_slot: Some(native(number(&state.instance_slot))?),
+                ..Options::default()
+            }
+        }
         _ => Options::default(),
     };
     let request_id = env_value("ALLOWIT_REQUEST_ID");
-    let mut result = native(lifecycle.submit(
-        &policy,
-        owner,
-        name,
-        &options,
-        if std::env::var_os("ALLOWIT_REQUEST_ID").is_none() {
-            None
-        } else {
-            Some(&request_id)
-        },
-        |tx, role| {
-            if role == "executor" {
-                let signer = load_signer("ALLOWIT_EXECUTOR_KEYPAIR").map_err(to_native)?;
-                if tx.payer != signer.public_key() {
+    let method = if name == "tune-action" {
+        "tune_action"
+    } else {
+        name
+    };
+    let mut result = if name == "execute" {
+        if std::env::var_os("ALLOWIT_REQUEST_ID").is_none() || request_id.is_empty() {
+            return Err(Error::config(
+                "Set one fresh ALLOWIT_REQUEST_ID for this intended payment; keep it unchanged for retries",
+            ));
+        }
+        let reporter = audit.as_ref().ok_or_else(|| {
+            Error::config(
+                "Import an owner-issued native executor bundle with its scoped approval capability",
+            )
+        })?;
+        let recipient = native(Key::parse(&pos[0]))?;
+        let action = configured("ALLOWIT_EXECUTION_ACTION", "transfer");
+        let merchant = env_value("ALLOWIT_EXECUTION_MERCHANT");
+        let context = execution_context()?;
+        let identity = native(ExecutionRequestIdentity::new(
+            &policy,
+            &request_id,
+            &pos[1],
+            recipient,
+            &action,
+            &merchant,
+            &context,
+        ))?;
+        let executor = load_signer("ALLOWIT_EXECUTOR_KEYPAIR")?;
+        native(lifecycle.submit_authorized(
+            &policy,
+            owner,
+            &identity,
+            || reporter.authorize(&identity, &context),
+            |transaction| {
+                if transaction.payer != executor.public_key() {
                     return Err(allowit_native::error::Error::config(
-                        "Configured signer does not match the prepared fee payer",
+                        "Configured executor does not match the prepared fee payer",
                     ));
                 }
-                Ok(signer.sign(&tx.message))
+                Ok(executor.sign(&transaction.message))
+            },
+        ))?
+    } else {
+        native(lifecycle.submit(
+            &policy,
+            owner,
+            method,
+            &options,
+            if std::env::var_os("ALLOWIT_REQUEST_ID").is_none() {
+                None
             } else {
+                Some(&request_id)
+            },
+            |tx, role| {
+                if role != "owner" {
+                    return Err(allowit_native::error::Error::config(
+                        "Owner operation requested an unexpected signer",
+                    ));
+                }
                 let signer = signer.as_ref().ok_or_else(|| {
-                    allowit_native::error::Error::config(
-                        "Owner signing is unavailable in executor mode",
-                    )
+                    allowit_native::error::Error::config("Owner signing is unavailable")
                 })?;
                 if tx.payer != signer.public_key() {
                     return Err(allowit_native::error::Error::config(
@@ -382,9 +445,9 @@ pub(crate) fn run(
                     ));
                 }
                 Ok(signer.sign(&tx.message))
-            }
-        },
-    ))?;
+            },
+        ))?
+    };
     let replayed = result.extra.get("replayed") == Some(&serde_json::json!(true));
     let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
     while !result.final_status()
@@ -553,6 +616,26 @@ impl allowit_native::rpc::Rpc for OfflineRpc {
 fn configured(name: &str, fallback: &str) -> String {
     let v = env_value(name);
     if v.is_empty() { fallback.into() } else { v }
+}
+fn execution_context() -> Result<serde_json::Value> {
+    let inline = env_value("ALLOWIT_EXECUTION_CONTEXT_JSON");
+    let file = env_value("ALLOWIT_EXECUTION_CONTEXT_FILE");
+    if !inline.is_empty() && !file.is_empty() {
+        return Err(Error::config("Configure only one execution context source"));
+    }
+    let context = if !file.is_empty() {
+        read_optional(Path::new(&file))?
+            .ok_or_else(|| Error::config("Cannot read execution context file"))?
+    } else if inline.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(&inline)
+            .map_err(|_| Error::config("Execution context must be a JSON object"))?
+    };
+    if !context.is_object() {
+        return Err(Error::config("Execution context must be a JSON object"));
+    }
+    Ok(context)
 }
 fn public_setting(name: &str, fallback: Option<Key>) -> Result<Option<Key>> {
     let v = env_value(name);

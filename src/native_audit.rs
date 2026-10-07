@@ -1,6 +1,15 @@
 //! Capability-scoped SQL audit reporting; it grants no signing or owner authority.
 use crate::{config::parse_origin, error::Error};
-use allowit_native::{error::Result, journal::FileJournal, lifecycle::Record, rpc::Rpc};
+use allowit_native::{
+    client::Binding,
+    crypto::Key,
+    error::Result,
+    journal::FileJournal,
+    lifecycle::{AuthorizedExecution, Record},
+    native::{ApprovalCommitment, ApprovalRequest, ExecutionRequestIdentity, Simulation},
+    rpc::Rpc,
+};
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -38,6 +47,34 @@ pub(crate) struct Reporter {
     policy_id: String,
     client: reqwest::blocking::Client,
     pub blocked: AtomicBool,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExecuteResponse {
+    binding: Binding,
+    request: ApprovalRequest,
+    approval: ApprovalCommitment,
+    intent: String,
+    message: String,
+    partial_transaction: String,
+    operation: PreparedOperation,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PreparedOperation {
+    id: String,
+    policy_id: String,
+    method: String,
+    status: String,
+    blockhash: Key,
+    last_valid_block_height: u64,
+    nonce: String,
+    revision: String,
+    commitment: String,
+    expires_at: u64,
+    instance_slot: u64,
+    decision_code: String,
+    simulation: Simulation,
 }
 fn unavailable() -> allowit_native::error::Error {
     allowit_native::error::Error::uncertain(
@@ -105,6 +142,106 @@ impl Reporter {
         }
         Ok(operation.clone())
     }
+    pub fn authorize(
+        &self,
+        identity: &ExecutionRequestIdentity,
+        context: &Value,
+    ) -> Result<AuthorizedExecution> {
+        if identity.vault_policy_id != self.policy_id {
+            return Err(allowit_native::error::Error::config(
+                "Execution request belongs to a different policy",
+            ));
+        }
+        let body = serde_json::to_vec(&json!({
+            "policyId": &self.policy_id,
+            "requestId": &identity.operation_id,
+            "action": &identity.action,
+            "merchant": &identity.merchant,
+            "context": context,
+            "options": {"amount": &identity.amount, "recipient": identity.recipient},
+        }))
+        .map_err(|_| unavailable())?;
+        if body.len() > 65_536 {
+            return Err(allowit_native::error::Error::config(
+                "Native execution request is too large",
+            ));
+        }
+        let mut response = self
+            .client
+            .post(format!("{}/api/native/execute", self.config.origin))
+            .bearer_auth(&self.config.token)
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send()
+            .map_err(|_| unavailable())?;
+        let status = response.status();
+        let mut raw = Vec::new();
+        Read::by_ref(&mut response)
+            .take(2_097_153)
+            .read_to_end(&mut raw)
+            .map_err(|_| unavailable())?;
+        if raw.len() > 2_097_152 {
+            return Err(unavailable());
+        }
+        if status != reqwest::StatusCode::OK {
+            let message = serde_json::from_slice::<Value>(&raw)
+                .ok()
+                .and_then(|value| value["error"].as_str().map(str::to_owned))
+                .filter(|message| {
+                    !message.is_empty()
+                        && message.len() <= 1_000
+                        && !message.chars().any(char::is_control)
+                })
+                .unwrap_or_else(|| "Native execution authorization failed".into());
+            return Err(match status.as_u16() {
+                400 | 401 | 404 | 409 => allowit_native::error::Error::config(message),
+                403 => allowit_native::error::Error::denied(message),
+                _ => allowit_native::error::Error::uncertain(message),
+            });
+        }
+        let response: ExecuteResponse = serde_json::from_slice(&raw).map_err(|_| unavailable())?;
+        let operation = response.operation;
+        let commitment = response.approval.digest()?;
+        if operation.id != identity.operation_id
+            || operation.policy_id != self.policy_id
+            || operation.method != "execute"
+            || operation.status != "prepared"
+            || operation.commitment != commitment
+            || operation.expires_at != response.approval.expires_at
+            || operation.instance_slot.to_string() != response.approval.instance_slot
+            || operation.nonce != response.approval.nonce
+            || operation.revision != response.approval.policy_revision
+            || operation.decision_code != response.request.decision_code
+        {
+            return Err(unavailable());
+        }
+        let message = base64::engine::general_purpose::STANDARD
+            .decode(response.message)
+            .map_err(|_| unavailable())?;
+        let partial_transaction = base64::engine::general_purpose::STANDARD
+            .decode(response.partial_transaction)
+            .map_err(|_| unavailable())?;
+        if message.is_empty()
+            || message.len() > 1_232
+            || partial_transaction.len() > 1_232
+            || operation.simulation.transaction_bytes != partial_transaction.len()
+        {
+            return Err(unavailable());
+        }
+        Ok(AuthorizedExecution {
+            binding: response.binding,
+            request: response.request,
+            approval: response.approval,
+            intent: response.intent,
+            message,
+            partial_transaction,
+            blockhash: operation.blockhash,
+            last_valid_block_height: operation.last_valid_block_height,
+            nonce: operation.nonce,
+            revision: operation.revision,
+            simulation: operation.simulation,
+        })
+    }
     pub fn finish(&self, journal: &FileJournal, id: &str) -> (bool, bool) {
         let withheld = self.blocked.load(Ordering::Relaxed);
         let acknowledged = journal
@@ -146,7 +283,6 @@ impl Rpc for AuditedRpc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use allowit_native::crypto::Key;
     use std::{
         io::{Read, Write},
         net::TcpListener,
@@ -159,11 +295,15 @@ mod tests {
             method: "execute".into(),
             status: "uncertain".into(),
             signature: "fixture-signature".into(),
+            signatures: vec!["fixture-signature".into()],
             signed_bytes: "cHJvb2Y=".into(),
             blockhash: Key([9; 32]),
             last_valid_block_height: 100,
             nonce: Some("0".into()),
             revision: Some("1".into()),
+            expires_at: None,
+            commitment: None,
+            instance_slot: None,
             transaction_url: "fixture".into(),
             extra: Default::default(),
         }

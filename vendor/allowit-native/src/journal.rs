@@ -160,7 +160,10 @@ impl FileJournal {
     pub fn locked<T>(&self, run: impl FnOnce() -> Result<T>) -> Result<T> {
         self.initialize()?;
         let path = self.directory.join(".lock");
+        #[cfg(unix)]
         let mut builder = fs::DirBuilder::new();
+        #[cfg(not(unix))]
+        let builder = fs::DirBuilder::new();
         #[cfg(unix)]
         {
             use std::os::unix::fs::DirBuilderExt;

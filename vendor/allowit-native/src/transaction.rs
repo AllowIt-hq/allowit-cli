@@ -22,6 +22,7 @@ pub struct Transaction {
     pub payer: Key,
     pub blockhash: Key,
     pub instructions: Vec<Instruction>,
+    pub signers: Vec<Key>,
     pub message: Vec<u8>,
 }
 impl Transaction {
@@ -43,8 +44,10 @@ impl Transaction {
         if keys.len() > 256 {
             return Err(Error::config("Transaction has too many accounts"));
         }
+        let signers: Vec<_> = keys.iter().filter(|a| a.signer).map(|a| a.key).collect();
+        let readonly_signers = keys.iter().filter(|a| a.signer && !a.writable).count();
         let readonly = keys.iter().filter(|a| !a.signer && !a.writable).count();
-        let mut message = vec![1, 0, readonly as u8];
+        let mut message = vec![signers.len() as u8, readonly_signers as u8, readonly as u8];
         short(&mut message, keys.len());
         for a in &keys {
             message.extend(a.key.0);
@@ -59,20 +62,74 @@ impl Transaction {
             short(&mut message, i.data.len());
             message.extend(&i.data);
         }
-        if message.len() + 65 > 1232 {
+        let mut signature_prefix = Vec::new();
+        short(&mut signature_prefix, signers.len());
+        if message.len() + signature_prefix.len() + signers.len() * 64 > 1232 {
             return Err(Error::config("Native transaction exceeds the packet limit"));
         }
         Ok(Self {
             payer,
             blockhash,
             instructions,
+            signers,
             message,
         })
     }
     pub fn signed(&self, signature: [u8; 64]) -> Result<Vec<u8>> {
-        verify(self.payer, &self.message, &signature)?;
-        let mut raw = vec![1];
-        raw.extend(signature);
+        if self.signers.len() != 1 {
+            return Err(Error::config(
+                "All required native transaction signatures must be supplied",
+            ));
+        }
+        self.signed_by(&[(self.signers[0], signature)])
+    }
+    pub fn signed_by(&self, signatures: &[(Key, [u8; 64])]) -> Result<Vec<u8>> {
+        self.encode_signatures(signatures, true)
+    }
+    pub fn partially_signed(&self, signatures: &[(Key, [u8; 64])]) -> Result<Vec<u8>> {
+        self.encode_signatures(signatures, false)
+    }
+    pub fn add_signature(&self, raw: &[u8], signer: Key, signature: [u8; 64]) -> Result<Vec<u8>> {
+        let partial = Signed::parse_partial(raw)?;
+        partial.matches(self)?;
+        let mut signatures: Vec<_> = self
+            .signers
+            .iter()
+            .copied()
+            .zip(partial.signatures.iter().copied())
+            .filter(|(_, signature)| *signature != [0; 64])
+            .collect();
+        if let Some((_, current)) = signatures.iter().find(|(key, _)| *key == signer) {
+            if *current != signature {
+                return Err(Error::config("Conflicting native transaction signature"));
+            }
+        } else {
+            signatures.push((signer, signature));
+        }
+        self.encode_signatures(&signatures, false)
+    }
+    fn encode_signatures(
+        &self,
+        signatures: &[(Key, [u8; 64])],
+        require_all: bool,
+    ) -> Result<Vec<u8>> {
+        let mut supplied = BTreeMap::new();
+        for (key, signature) in signatures {
+            if !self.signers.contains(key) || supplied.insert(*key, *signature).is_some() {
+                return Err(Error::config("Unexpected native transaction signer"));
+            }
+            verify(*key, &self.message, signature)?;
+        }
+        if require_all && supplied.len() != self.signers.len() {
+            return Err(Error::config(
+                "All required native transaction signatures must be supplied",
+            ));
+        }
+        let mut raw = Vec::new();
+        short(&mut raw, self.signers.len());
+        for signer in &self.signers {
+            raw.extend(supplied.get(signer).copied().unwrap_or([0; 64]));
+        }
         raw.extend(&self.message);
         Ok(raw)
     }
@@ -101,18 +158,10 @@ fn roles(payer: Key, instructions: &[Instruction]) -> Result<BTreeMap<Key, (bool
             entry.1 |= a.writable;
         }
     }
-    if roles
-        .iter()
-        .any(|(key, (signer, _))| *signer && *key != payer)
-    {
-        return Err(Error::config(
-            "Native transaction must have one designated signer",
-        ));
-    }
     Ok(roles)
 }
 pub struct Signed {
-    pub signature: [u8; 64],
+    pub signatures: Vec<[u8; 64]>,
     pub message: Vec<u8>,
     pub keys: Vec<Meta>,
     pub blockhash: Key,
@@ -120,6 +169,27 @@ pub struct Signed {
 }
 impl Signed {
     pub fn parse(raw: &[u8]) -> Result<Self> {
+        Self::parse_inner(raw, false)
+    }
+    pub fn parse_partial(raw: &[u8]) -> Result<Self> {
+        Self::parse_inner(raw, true)
+    }
+    pub fn primary_signature(&self) -> Result<[u8; 64]> {
+        self.signatures
+            .first()
+            .copied()
+            .filter(|signature| *signature != [0; 64])
+            .ok_or_else(|| Error::config("Native transaction payer signature is missing"))
+    }
+    pub fn signature(&self, signer: Key) -> Option<[u8; 64]> {
+        self.keys
+            .iter()
+            .take(self.signatures.len())
+            .position(|meta| meta.key == signer)
+            .and_then(|index| self.signatures.get(index).copied())
+            .filter(|signature| *signature != [0; 64])
+    }
+    fn parse_inner(raw: &[u8], allow_partial: bool) -> Result<Self> {
         if raw.len() > 1232 {
             return Err(Error::config("Invalid signed transaction"));
         }
@@ -127,21 +197,27 @@ impl Signed {
             data: raw,
             offset: 0,
         };
-        if r.short()? != 1 {
-            return Err(Error::config(
-                "Native proof must have exactly one signature",
-            ));
+        let signature_count = r.short()?;
+        if signature_count == 0 || signature_count > 16 {
+            return Err(Error::config("Invalid native transaction signatures"));
         }
-        let signature = r.array::<64>()?;
+        let mut signatures = Vec::with_capacity(signature_count);
+        for _ in 0..signature_count {
+            signatures.push(r.array::<64>()?);
+        }
         let start = r.offset;
         let required = r.byte()?;
         let readonly_signers = r.byte()?;
         let readonly = r.byte()?;
-        if required != 1 || readonly_signers != 0 {
+        if required == 0 || required as usize != signature_count || readonly_signers > required {
             return Err(Error::config("Invalid native message header"));
         }
         let count = r.short()?;
-        if count == 0 || count > 256 || readonly as usize >= count {
+        if count == 0
+            || count > 256
+            || required as usize > count
+            || readonly as usize > count - required as usize
+        {
             return Err(Error::config("Invalid native account table"));
         }
         let mut keys = Vec::new();
@@ -152,8 +228,12 @@ impl Signed {
             }
             keys.push(Meta {
                 key,
-                signer: i == 0,
-                writable: i < count - readonly as usize,
+                signer: i < required as usize,
+                writable: if i < required as usize {
+                    i < required as usize - readonly_signers as usize
+                } else {
+                    i < count - readonly as usize
+                },
             });
         }
         let blockhash = Key(r.array()?);
@@ -192,20 +272,30 @@ impl Signed {
             return Err(Error::config("Trailing transaction bytes"));
         }
         let message = raw[start..].to_vec();
-        verify(keys[0].key, &message, &signature)?;
+        for (key, signature) in keys.iter().take(signature_count).zip(&signatures) {
+            if *signature == [0; 64] {
+                if !allow_partial {
+                    return Err(Error::config("Native transaction signature is missing"));
+                }
+            } else {
+                verify(key.key, &message, signature)?;
+            }
+        }
         Ok(Self {
-            signature,
+            signatures,
             message,
             keys,
             blockhash,
             instructions,
         })
     }
-    /// Accepts the original SDK's account ordering while requiring the exact
-    /// intended instructions, payer, blockhash, and global account privileges.
+    /// Requires the exact pre-approved message bytes. A wallet may add only its
+    /// signature; account order, privileges, instructions, and blockhash cannot
+    /// be canonicalized or rewritten after approval.
     pub fn matches(&self, expected: &Transaction) -> Result<()> {
         let expected_roles = roles(expected.payer, &expected.instructions)?;
-        if self.keys[0].key != expected.payer
+        if self.message != expected.message
+            || self.keys[0].key != expected.payer
             || self.blockhash != expected.blockhash
             || self.keys.len() != expected_roles.len()
             || self.instructions.len() != expected.instructions.len()
@@ -332,5 +422,64 @@ mod tests {
         let mut trailing = raw;
         trailing.push(0);
         assert!(Signed::parse(&trailing).is_err());
+    }
+
+    #[test]
+    fn partial_cosignatures_preserve_the_exact_message_and_slots() {
+        let executor = LocalSigner::from_secret(
+            &ed25519_dalek::SigningKey::from_bytes(&[7; 32]).to_keypair_bytes(),
+        )
+        .unwrap();
+        let authority = LocalSigner::from_secret(
+            &ed25519_dalek::SigningKey::from_bytes(&[8; 32]).to_keypair_bytes(),
+        )
+        .unwrap();
+        let tx = Transaction::new(
+            executor.public_key(),
+            Key([9; 32]),
+            vec![Instruction {
+                program: Key([3; 32]),
+                accounts: vec![
+                    Meta {
+                        key: executor.public_key(),
+                        signer: true,
+                        writable: false,
+                    },
+                    Meta {
+                        key: authority.public_key(),
+                        signer: true,
+                        writable: false,
+                    },
+                ],
+                data: vec![4, 5, 6],
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            tx.signers,
+            vec![executor.public_key(), authority.public_key()]
+        );
+        let authority_signature = authority.sign(&tx.message);
+        let partial = tx
+            .partially_signed(&[(authority.public_key(), authority_signature)])
+            .unwrap();
+        assert!(Signed::parse(&partial).is_err());
+        let parsed = Signed::parse_partial(&partial).unwrap();
+        assert_eq!(
+            parsed.signature(authority.public_key()),
+            Some(authority_signature)
+        );
+        assert_eq!(parsed.signature(executor.public_key()), None);
+        parsed.matches(&tx).unwrap();
+        let complete = tx
+            .add_signature(&partial, executor.public_key(), executor.sign(&tx.message))
+            .unwrap();
+        let parsed = Signed::parse(&complete).unwrap();
+        parsed.matches(&tx).unwrap();
+        assert_eq!(
+            parsed.primary_signature().unwrap(),
+            executor.sign(&tx.message)
+        );
+        assert_eq!(parsed.message, tx.message);
     }
 }

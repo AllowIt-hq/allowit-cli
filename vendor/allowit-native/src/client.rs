@@ -25,6 +25,7 @@ pub struct Config {
     pub network: String,
     pub mint: Option<Key>,
     pub executor: Option<Key>,
+    pub authority: Option<Key>,
     pub deployment: Option<Deployment>,
 }
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -32,6 +33,7 @@ pub struct Config {
 pub struct Binding {
     pub owner: Key,
     pub executor: Key,
+    pub authority: Key,
     pub mint: Key,
     pub vault: Key,
     pub token_account: Key,
@@ -81,7 +83,7 @@ impl NativeClient {
         }
         let id = hex32(&policy.id)?;
         let (vault, bump) =
-            Key::find_program_address(&[b"allowit-vault-v1", &owner.0, &id], d.custody)?;
+            Key::find_program_address(&[b"allowit-vault-v2", &owner.0, &id], d.custody)?;
         let mint = self
             .config
             .mint
@@ -90,10 +92,26 @@ impl NativeClient {
             .config
             .executor
             .ok_or_else(|| Error::config("Invalid native executor"))?;
+        let authority = self
+            .config
+            .authority
+            .ok_or_else(|| Error::config("Invalid native authority"))?;
+        if authority == executor
+            || authority == owner
+            || executor == owner
+            || !owner.on_curve()
+            || !executor.on_curve()
+            || !authority.on_curve()
+        {
+            return Err(Error::config(
+                "Native authority, executor, and owner must be distinct",
+            ));
+        }
         let token_account = associated_token_address(mint, vault, true)?;
         Ok(Binding {
             owner,
             executor,
+            authority,
             mint,
             vault,
             token_account,
@@ -266,6 +284,7 @@ pub fn hex32(value: &str) -> Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::LocalSigner;
     use base64::Engine;
     struct FakeRpc(serde_json::Value);
     impl Rpc for FakeRpc {
@@ -279,6 +298,7 @@ mod tests {
                 network: "solana:testnet".into(),
                 mint: None,
                 executor: None,
+                authority: None,
                 deployment: None,
             },
             Arc::new(FakeRpc(response)),
@@ -301,6 +321,7 @@ mod tests {
                     network: "solana:mainnet".into(),
                     mint: None,
                     executor: None,
+                    authority: None,
                     deployment: None
                 },
                 Arc::new(FakeRpc(json!(null)))
@@ -348,6 +369,14 @@ mod tests {
     }
     #[test]
     fn public_binding_requires_canonical_program_data() {
+        let signer = |n| {
+            LocalSigner::from_secret(
+                &ed25519_dalek::SigningKey::from_bytes(&[n; 32]).to_keypair_bytes(),
+            )
+            .unwrap()
+            .public_key()
+        };
+        let owner = signer(1);
         let p = Policy::generate("solana:testnet", "Spend up to 5 test tokens per day").unwrap();
         let policy = Key([2; 32]);
         let data = Key::find_program_address(&[&policy.0], Key::parse(LOADER).unwrap())
@@ -355,7 +384,8 @@ mod tests {
             .0;
         let mut c = client(json!(null));
         c.config.mint = Some(Key([3; 32]));
-        c.config.executor = Some(Key([4; 32]));
+        c.config.executor = Some(signer(2));
+        c.config.authority = Some(signer(3));
         c.config.deployment = Some(Deployment {
             network: p.network.clone(),
             source_bundle: release().source_bundle.clone(),
@@ -363,10 +393,10 @@ mod tests {
             policy_data: data,
             custody: Key([5; 32]),
         });
-        let binding = c.public_binding(&p, Key([6; 32])).unwrap();
+        let binding = c.public_binding(&p, owner).unwrap();
         assert!(!binding.vault.on_curve());
         c.config.deployment.as_mut().unwrap().policy_data = Key([9; 32]);
-        assert!(c.public_binding(&p, Key([6; 32])).is_err());
+        assert!(c.public_binding(&p, owner).is_err());
     }
     #[test]
     fn verification_cache_is_scoped_to_exact_configuration_and_recovery_profile() {
@@ -377,6 +407,7 @@ mod tests {
             .0;
         c.config.mint = Some(Key([3; 32]));
         c.config.executor = Some(Key([4; 32]));
+        c.config.authority = Some(Key([7; 32]));
         c.config.deployment = Some(Deployment {
             network: c.config.network.clone(),
             source_bundle: release().source_bundle.clone(),
