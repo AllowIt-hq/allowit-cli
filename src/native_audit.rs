@@ -49,6 +49,8 @@ impl Reporter {
         config.validate().map_err(|_| unavailable())?;
         let client = reqwest::blocking::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .min_tls_version(reqwest::tls::Version::TLS_1_2)
             .timeout(Duration::from_secs(60))
             .build()
             .map_err(|_| unavailable())?;
@@ -102,6 +104,15 @@ impl Reporter {
             return Err(unavailable());
         }
         Ok(operation.clone())
+    }
+    pub fn finish(&self, journal: &FileJournal, id: &str) -> (bool, bool) {
+        let withheld = self.blocked.load(Ordering::Relaxed);
+        let acknowledged = journal
+            .read::<Record>(&format!("request-{id}"))
+            .ok()
+            .flatten()
+            .is_some_and(|record| self.report(&record).is_ok());
+        (withheld, withheld || !acknowledged)
     }
 }
 pub(crate) struct AuditedRpc {
@@ -269,6 +280,58 @@ mod tests {
         let mut final_state = acknowledgment();
         final_state["status"] = json!("settled");
         check_report_before_broadcast(200, final_state, false);
+    }
+    #[test]
+    fn withheld_broadcast_stays_pending_after_late_durable_acknowledgment() {
+        let directory =
+            std::env::temp_dir().join(format!("allowit-audit-late-{}", std::process::id()));
+        let journal = FileJournal::new(&directory);
+        journal
+            .locked(|| journal.write("request-audit-proof-0001", &record()))
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut raw = Vec::new();
+            let mut byte = [0];
+            while !raw.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                raw.push(byte[0]);
+            }
+            let header = String::from_utf8(raw).unwrap();
+            let length = header
+                .lines()
+                .find_map(|l| {
+                    l.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .and_then(|n| n.parse::<usize>().ok())
+                })
+                .unwrap();
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).unwrap();
+            let submitted: Value = serde_json::from_slice(&body).unwrap();
+            assert!(submitted["record"]["replayed"].is_null());
+            let body = json!({"operation":acknowledgment()}).to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let reporter = Reporter::new(
+            AuditConfig {
+                origin,
+                token: format!("native-report.{}", "a".repeat(32)),
+            },
+            "fixture-policy".into(),
+        )
+        .unwrap();
+        reporter.blocked.store(true, Ordering::Relaxed);
+        assert_eq!(reporter.finish(&journal, "audit-proof-0001"), (true, true));
+        server.join().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]
     fn audit_capability_refuses_url_credentials_paths_and_unknown_token_formats() {

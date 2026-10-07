@@ -294,7 +294,7 @@ pub(crate) fn run(
             operations.push(match lifecycle.recover(&record.id,&policy,owner){Ok(r)=>{
                 if r.method=="execute" && audit.as_ref().is_some_and(|a|a.report(&r).is_err()) {audit_pending=true;}
                 r.public()
-            },Err(_)=>serde_json::json!({"id":record.id,"status":"uncertain","error":"Saved operation could not be verified against this configuration"})});
+            },Err(_)=>{if record.method=="execute" && audit.is_some(){audit_pending=true;} serde_json::json!({"id":record.id,"status":"uncertain","error":"Saved operation could not be verified against this configuration"})}});
         }
         let last = native(journal.read::<serde_json::Value>("last"))?;
         let operation = last
@@ -430,9 +430,18 @@ pub(crate) fn run(
             .insert("replayed".into(), serde_json::json!(true));
     }
     let mut output = result.public();
-    let audit_pending =
-        name == "execute" && audit.as_ref().is_some_and(|a| a.report(&result).is_err());
+    let (broadcast_withheld, audit_pending) = if name == "execute" {
+        audit
+            .as_ref()
+            .map(|a| a.finish(&journal, &result.id))
+            .unwrap_or((false, false))
+    } else {
+        (false, false)
+    };
     if audit.is_some() && name == "execute" {
+        if broadcast_withheld {
+            output["broadcastWithheld"] = serde_json::json!(true);
+        }
         output["auditStatus"] = serde_json::json!(if audit_pending {
             "pending"
         } else {
@@ -472,6 +481,9 @@ pub(crate) fn run(
         stderr.push_str("This request expired without execution. For a deliberate retry, set a new ALLOWIT_REQUEST_ID; keep the original journal.\n");
     }
     if audit_pending {
+        if broadcast_withheld {
+            stderr.push_str("Broadcast was withheld. Retry the identical execute command with this request ID to report and broadcast the saved proof; policy status only observes and reports.\n");
+        }
         stderr.push_str("Native SQL audit is pending. Retain the original journal and request ID; retry the identical command or run allowit policy status.\n");
         return Ok(5);
     }
