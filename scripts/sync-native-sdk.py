@@ -40,12 +40,15 @@ for name in ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/Aeneas-Apache-2.0.tx
     present = subprocess.run(['git', '-C', str(args.sdk_repo), 'cat-file', '-e', revision + ':' + name], capture_output=True)
     if present.returncode == 0:
         legal[name] = subprocess.check_output(['git', '-C', str(args.sdk_repo), 'show', revision + ':' + name])
-manifest = {'repository': 'https://github.com/ackrate/AllowIt-sdk', 'commit': revision, 'crate': 'native-rust', 'files': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(files.items())}}
+manifest = {'repository': 'https://github.com/AllowIt-hq/allowit-sdk', 'commit': revision, 'crate': 'native-rust', 'files': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(files.items())}}
 if legal:
     manifest['licenses'] = {name: hashlib.sha256(data).hexdigest() for name, data in sorted(legal.items())}
 manifest_text = json.dumps(manifest, indent=2) + '\n'
 if args.check:
-    if (root / 'vendor' / 'native-sdk.json').read_text() != manifest_text:
+    # Existing pins retain their original repository identity after a transfer.
+    captured = (root / 'vendor' / 'native-sdk.json').read_text()
+    historical = manifest_text.replace('https://github.com/AllowIt-hq/allowit-sdk', 'https://github.com/ackrate/AllowIt-sdk')
+    if captured not in {manifest_text, historical}:
         raise SystemExit('SDK source manifest differs')
     actual = {p.relative_to(vendored).as_posix(): p.read_bytes() for p in vendored.rglob('*') if p.is_file()}
     if actual != files:
