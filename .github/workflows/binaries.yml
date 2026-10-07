@@ -67,7 +67,7 @@ jobs:
           policy = json.loads(Path('generated.json').read_text())
           assert policy['dailyLimit'] == '5'
           assert policy['network'] == 'solana:testnet'
-          assert policy['profile'] == 'solana-native-v1'
+          assert policy['profile'] == 'solana-native-v2'
           PY
       - name: Package license notices
         run: python3 scripts/package-licenses.py --dist dist
