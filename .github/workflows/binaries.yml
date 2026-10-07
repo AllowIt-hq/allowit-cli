@@ -42,12 +42,16 @@ jobs:
           echo CC_x86_64_unknown_linux_musl=musl-gcc >> "$GITHUB_ENV"
       - name: Build locked binary
         run: cargo build --locked --release --target '${{ matrix.target }}'
+      - name: Test provenance contract
+        run: python3 scripts/test-binary-provenance.py
       - name: Package and checksum
         run: |
           mkdir -p dist
           cp 'target/${{ matrix.target }}/release/allowit' 'dist/${{ matrix.asset }}'
           cd dist
           shasum -a 256 '${{ matrix.asset }}' > '${{ matrix.asset }}.sha256'
+      - name: Record source and SDK provenance
+        run: python3 scripts/binary-provenance.py --binary 'dist/${{ matrix.asset }}' --target '${{ matrix.target }}' --output 'dist/${{ matrix.asset }}.provenance.json'
       - name: Verify static Linux binary
         if: runner.os == 'Linux'
         run: file 'dist/${{ matrix.asset }}' | grep -Eq 'statically linked|static-pie linked'
