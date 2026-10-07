@@ -2,6 +2,7 @@ mod args;
 mod client;
 mod config;
 mod error;
+mod native_audit;
 mod output;
 mod policy;
 mod policy_native;

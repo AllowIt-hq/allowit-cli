@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/ackrate/AllowIt-sdk",
-  "commit": "721d9965a7b82dbe5252a87b670f21af7cb4a143",
+  "commit": "6406b1ab26906868c7669e92ad64e96386b0f031",
   "crate": "native-rust",
   "files": {
     "Cargo.lock": "9db53ba03334edc68fb6ffc6f886f706ea6c2ee1b163d4fb147b717a4fb22da2",
@@ -10,13 +10,13 @@
     "src/error.rs": "c4b9e48e7dcfc00650ce28fd2e36d213fb986d35c4a66fbc431804899e2662a3",
     "src/journal.rs": "ccb64f85c88c618d298177e2e96fd53f3bb7776c3746b1d339a60bc7b764c7aa",
     "src/lib.rs": "14a79c54bcad394d5af2b1f4610be18e7d85b19a06dd79e5dafbbf7540ea2055",
-    "src/lifecycle.rs": "e937280307443b80373c250b1d11112779ced257b35a3c02f818824155d0fe4d",
+    "src/lifecycle.rs": "e4bf9e82780d05b12634756f6a2dac6ad49c20c0ca99ad29a94c14d93d193806",
     "src/native.rs": "768b26a6a1a4f3336f13e0ed53ed907cc30bcd1f52a7cac8ece6dd8c5a42362d",
     "src/policy.rs": "eff385bb12ed5c8241d4dfff2d1a352fb9ae561ea12fab6ca8d62cd44bd24118",
     "src/release.json": "bf2ebfb37d8c1d0a39e7302f1358437b2ba25a640280bf6d10f471da0bacc2b1",
     "src/rpc.rs": "a8c61a281d07386bc13b27569a5eafdc7d233757127343355bdac2c206359bb2",
     "src/transaction.rs": "1f0179add5f81b96dc2c030d7e71c7dbd75e6088e3716b33329faabde266a314",
-    "tests/lifecycle.rs": "de64310f59fb979b04d5cf4a17d78ba0fd3437e821d88555e4fc34a866d20ecb",
+    "tests/lifecycle.rs": "f7d82cede9cd60f2805439fbdfdd26c6949a0c08e27357b83e74238cc6ec6a81",
     "tests/reference.json": "6decd0974fb99ffb5633b99321a25bd524ffdb5b92c95137ffb6241b408f3378",
     "tests/reference.rs": "6e16ab4a19987ee2bc2fb1b6ab104c137688e640218a5a9265e37a51fe1d09a3"
   }
