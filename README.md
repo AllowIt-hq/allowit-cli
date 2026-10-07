@@ -8,6 +8,11 @@ This branch is the untagged `0.3.0-dev` candidate. Build from this checkout to u
 
 ## Install
 
+Native `policy` commands require a local POSIX filesystem for private, durable journals.
+On Windows, use Linux/WSL and keep state in the Linux filesystem, not `/mnt/c` or `/mnt/d`.
+The CLI refuses unsupported platforms before loading keys or creating policy state.
+Keep existing journals for recovery. Do not regenerate or resubmit an uncertain operation.
+
 `github.com/ackrate/allowit-cli` is private; installing needs authorized GitHub access. There is no public download.
 
 ```sh

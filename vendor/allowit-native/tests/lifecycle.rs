@@ -4,7 +4,9 @@ use allowit_native::{
     crypto::{Key, LocalSigner},
     error::{Error, Result},
     journal::FileJournal,
-    lifecycle::{NativeOperations, PolicyLifecycle, Record, validate_record},
+    lifecycle::{
+        NativeOperations, PolicyLifecycle, Record, intent_for, reconcile_record, validate_record,
+    },
     native::{Options, Prepared, State},
     policy::Policy,
     release,
@@ -26,6 +28,8 @@ struct Network {
     receipt: Value,
     status: String,
     refreshed_status: Option<String>,
+    blockhash_valid: bool,
+    processed_blockhash_valid: Option<bool>,
 }
 struct FakeRpc {
     data: Mutex<Network>,
@@ -36,6 +40,16 @@ impl Rpc for FakeRpc {
         let mut d = self.data.lock().unwrap();
         Ok(match method {
             "getBlockHeight" => json!(d.height),
+            "isBlockhashValid" => {
+                let valid = if params[1]["commitment"] == "processed" {
+                    assert_eq!(params[1]["minContextSlot"], 99);
+                    d.processed_blockhash_valid.unwrap_or(d.blockhash_valid)
+                } else {
+                    assert_eq!(params[1]["commitment"], "finalized");
+                    d.blockhash_valid
+                };
+                json!({"value":valid,"context":{"slot":99}})
+            }
             "getSlot" => json!(99),
             "getBlock" => {
                 assert_eq!(params[1]["transactionDetails"], "none");
@@ -94,6 +108,8 @@ impl Fixture {
                 receipt: Value::Null,
                 status: "uncertain".into(),
                 refreshed_status: None,
+                blockhash_valid: false,
+                processed_blockhash_valid: None,
             }),
             journal: directory.clone(),
         });
@@ -610,4 +626,106 @@ fn settled_requires_saved_message_both_cpis_and_exact_token_deltas() {
             .message
             .contains("CPI")
     );
+}
+
+#[test]
+fn server_reconciliation_requires_no_file_journal_or_signing() {
+    let f = Fixture::new();
+    let options = f.options("1");
+    let owner = f.owner.public_key();
+    let prepared = f.prepare(&f.policy, owner, "execute", &options).unwrap();
+    let signature = f.executor.sign(&prepared.transaction.message);
+    let signature_text = bs58::encode(signature).into_string();
+    let record = Record {
+        id: "server-proof-0001".into(),
+        intent: intent_for(&f.sdk, &f.policy, owner, "execute", &options).unwrap(),
+        method: "execute".into(),
+        status: "uncertain".into(),
+        signature: signature_text.clone(),
+        signed_bytes: base64::engine::general_purpose::STANDARD
+            .encode(prepared.transaction.signed(signature).unwrap()),
+        blockhash: prepared.blockhash,
+        last_valid_block_height: prepared.last_valid_block_height,
+        nonce: prepared.nonce,
+        revision: prepared.revision,
+        transaction_url: f.sdk.transaction_url(&signature_text).unwrap(),
+        extra: Default::default(),
+    };
+    assert!(!f.directory.exists());
+    let observed = reconcile_record(&f, record.clone(), &f.policy, owner).unwrap();
+    assert_eq!(observed.status, "uncertain");
+    assert_eq!(observed.signature, record.signature);
+    assert_eq!(observed.signed_bytes, record.signed_bytes);
+    assert!(!f.directory.exists());
+    assert!(f.rpc.data.lock().unwrap().sends.is_empty());
+    // A foreign journal's unsigned validity height cannot infer nonexecution
+    // while the original signed blockhash can still land.
+    let mut low_height = record.clone();
+    low_height.last_valid_block_height = 1;
+    f.rpc.data.lock().unwrap().blockhash_valid = true;
+    let mut forged_absence = low_height.clone();
+    forged_absence.status = "failed".into();
+    forged_absence
+        .extra
+        .insert("absence".into(), json!({"kind":"expired-execute"}));
+    forged_absence
+        .extra
+        .insert("blockhashExpired".into(), json!(true));
+    forged_absence
+        .extra
+        .insert("decisionCode".into(), json!("EXPIRED_UNEXECUTED"));
+    let observed = reconcile_record(&f, forged_absence, &f.policy, owner).unwrap();
+    assert_eq!(observed.status, "uncertain");
+    assert!(!observed.expired());
+    assert!(!observed.extra.contains_key("absence"));
+    assert!(!observed.extra.contains_key("decisionCode"));
+    let observed = reconcile_record(&f, low_height.clone(), &f.policy, owner).unwrap();
+    assert_eq!(observed.status, "uncertain");
+    assert!(!observed.expired());
+    assert!(!observed.extra.contains_key("absence"));
+    f.rpc.data.lock().unwrap().blockhash_valid = false;
+    f.rpc.data.lock().unwrap().processed_blockhash_valid = Some(true);
+    let observed = reconcile_record(&f, low_height.clone(), &f.policy, owner).unwrap();
+    assert_eq!(observed.status, "uncertain");
+    assert!(!observed.expired());
+    assert!(!observed.extra.contains_key("absence"));
+    f.rpc.data.lock().unwrap().processed_blockhash_valid = Some(false);
+    let observed = reconcile_record(&f, low_height, &f.policy, owner).unwrap();
+    assert_eq!(observed.status, "uncertain");
+    assert!(!observed.expired());
+    assert!(!observed.extra.contains_key("absence"));
+    assert!(!observed.extra.contains_key("decisionCode"));
+    assert!(!f.directory.exists());
+    assert!(f.rpc.data.lock().unwrap().sends.is_empty());
+    for method in ["fund", "withdraw"] {
+        let options = Options {
+            amount: Some("1".into()),
+            ..Options::default()
+        };
+        let prepared = f.prepare(&f.policy, owner, method, &options).unwrap();
+        let signature = f.owner.sign(&prepared.transaction.message);
+        let signature_text = bs58::encode(signature).into_string();
+        let imported = Record {
+            id: format!("imported-{method}"),
+            intent: intent_for(&f.sdk, &f.policy, owner, method, &options).unwrap(),
+            method: method.into(),
+            status: "failed".into(),
+            signature: signature_text.clone(),
+            signed_bytes: base64::engine::general_purpose::STANDARD
+                .encode(prepared.transaction.signed(signature).unwrap()),
+            blockhash: prepared.blockhash,
+            last_valid_block_height: 1,
+            nonce: prepared.nonce,
+            revision: prepared.revision,
+            transaction_url: f.sdk.transaction_url(&signature_text).unwrap(),
+            extra: Default::default(),
+        };
+        let observed = reconcile_record(&f, imported, &f.policy, owner).unwrap();
+        assert_eq!(observed.status, "uncertain");
+        assert!(!observed.expired());
+        assert!(!observed.extra.contains_key("absence"));
+    }
+    let mut substituted = record;
+    substituted.intent = substituted.intent.replace("\"1\"", "\"2\"");
+    assert!(reconcile_record(&f, substituted, &f.policy, owner).is_err());
 }

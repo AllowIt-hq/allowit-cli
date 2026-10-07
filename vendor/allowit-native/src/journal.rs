@@ -9,6 +9,16 @@ use std::{
 pub struct FileJournal {
     directory: PathBuf,
 }
+/// Fail before storing proofs on platforms without this journal's permission and durability contract.
+pub fn require_supported_platform() -> Result<()> {
+    if cfg!(unix) {
+        Ok(())
+    } else {
+        Err(Error::config(
+            "Native file journals require a local POSIX filesystem. On Windows, use Linux/WSL with state in its Linux filesystem, not /mnt/c or /mnt/d. Keep existing journals for recovery; pending operations remain uncertain.",
+        ))
+    }
+}
 impl FileJournal {
     pub fn new(directory: impl Into<PathBuf>) -> Self {
         Self {
@@ -16,6 +26,7 @@ impl FileJournal {
         }
     }
     pub fn initialize(&self) -> Result<()> {
+        require_supported_platform()?;
         let mut builder = fs::DirBuilder::new();
         builder.recursive(true);
         #[cfg(unix)]
@@ -53,6 +64,7 @@ impl FileJournal {
         Ok(self.directory.join(format!("{name}.json")))
     }
     pub fn read<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>> {
+        require_supported_platform()?;
         let path = self.path(name)?;
         let mut options = OpenOptions::new();
         options.read(true);
@@ -120,6 +132,7 @@ impl FileJournal {
         Ok(values)
     }
     pub fn write<T: Serialize>(&self, name: &str, value: &T) -> Result<()> {
+        require_supported_platform()?;
         let path = self.path(name)?;
         let temp = self
             .directory
@@ -151,6 +164,7 @@ impl FileJournal {
         result
     }
     pub fn clear(&self, name: &str) -> Result<()> {
+        require_supported_platform()?;
         match fs::remove_file(self.path(name)?) {
             Ok(()) => sync_directory(&self.directory),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -188,6 +202,32 @@ fn sync_directory(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+    #[cfg(not(unix))]
+    #[test]
+    fn unsupported_platform_leaves_no_journal_or_lock() {
+        let path = std::env::temp_dir().join(format!("allowit-platform-{}", uuid::Uuid::new_v4()));
+        let journal = FileJournal::new(&path);
+        assert!(
+            journal
+                .initialize()
+                .unwrap_err()
+                .message
+                .contains("local POSIX filesystem")
+        );
+        assert!(
+            journal
+                .write("request-proof", &json!({"proof":"test"}))
+                .is_err()
+        );
+        assert!(journal.read::<Value>("request-proof").is_err());
+        assert!(journal.clear("request-proof").is_err());
+        assert!(
+            journal
+                .locked::<()>(|| panic!("must not sign or submit"))
+                .is_err()
+        );
+        assert!(!path.exists());
+    }
     #[test]
     fn proof_is_durable_and_locked_before_use() {
         let path =

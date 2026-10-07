@@ -129,6 +129,7 @@ pub(crate) fn run(
     stdout: &mut String,
     stderr: &mut String,
 ) -> Result<i32> {
+    native(allowit_native::journal::require_supported_platform())?;
     let mut local = Local::load(name)?;
     if name == "generate" {
         let policy = native(Policy::generate(&local.network, &pos[0]))?;
