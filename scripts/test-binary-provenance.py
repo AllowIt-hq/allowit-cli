@@ -63,6 +63,22 @@ class ProvenanceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "format"):
             provenance.manifest(self.repo, self.binary, "x86_64-unknown-linux-musl")
 
+    def test_refuses_unlisted_committed_sdk_build_script(self):
+        (self.repo / "vendor/allowit-native/build.rs").write_text("fn main() {}\n")
+        self.git("add", ".")
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "extra")
+        with self.assertRaisesRegex(ValueError, "file set"):
+            provenance.manifest(self.repo, self.binary, "aarch64-apple-darwin")
+
+    def test_refuses_empty_sdk_snapshot(self):
+        path = self.repo / "vendor/native-sdk.json"
+        value = json.loads(path.read_text()); value["files"] = {}
+        path.write_text(json.dumps(value))
+        self.git("add", ".")
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "empty")
+        with self.assertRaisesRegex(ValueError, "file set"):
+            provenance.manifest(self.repo, self.binary, "aarch64-apple-darwin")
+
 
 if __name__ == "__main__":
     unittest.main()

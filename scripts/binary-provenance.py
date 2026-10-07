@@ -35,6 +35,10 @@ def manifest(repo, binary, target):
     sdk = json.loads((repo / "vendor/native-sdk.json").read_text())
     if not re.fullmatch(r"[0-9a-f]{40}", sdk["commit"]):
         raise ValueError("SDK pin must be a full commit")
+    tracked = {name.removeprefix("vendor/allowit-native/") for name in
+               git(repo, "ls-files", "vendor/allowit-native").splitlines()}
+    if set(sdk["files"]) != tracked or not {"Cargo.toml", "Cargo.lock", "src/lib.rs", "src/release.json"}.issubset(tracked):
+        raise ValueError("SDK snapshot file set differs from its pin")
     for name, expected in sdk["files"].items():
         relative = Path(name)
         if relative.is_absolute() or ".." in relative.parts:
@@ -70,7 +74,12 @@ def manifest(repo, binary, target):
         value["build"] = {
             "githubRunURL": f"https://github.com/ackrate/allowit-cli/actions/runs/{run}",
             "runAttempt": int(attempt),
+            "event": os.environ.get("GITHUB_EVENT_NAME", ""),
+            "ref": os.environ.get("GITHUB_REF", ""),
+            "sha": os.environ.get("GITHUB_SHA", ""),
         }
+        if value["build"]["sha"] != value["cli"]["commit"]:
+            raise ValueError("GitHub build revision differs from source HEAD")
     return value
 
 
