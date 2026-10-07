@@ -195,6 +195,32 @@ fn import_is_public_only_and_cannot_replace_occupied_policy() {
         std::fs::read(directory.join("context.json")).unwrap(),
         saved
     );
+    let audited = temp();
+    let token = format!("native-report.{}", "a".repeat(32));
+    let mut bundle = bundle;
+    bundle["audit"] = json!({"origin":"https://staging.example.invalid","token":token});
+    std::fs::write(&source, serde_json::to_vec(&bundle).unwrap()).unwrap();
+    let imported = run(
+        &audited,
+        &["policy", "import", source.to_str().unwrap(), "--json"],
+    );
+    assert!(imported.status.success());
+    assert!(!String::from_utf8_lossy(&imported.stdout).contains(&token));
+    assert!(!String::from_utf8_lossy(&imported.stderr).contains(&token));
+    let audit = audited.join("journal/audit.json");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&std::fs::read(&audit).unwrap()).unwrap()["token"],
+        token
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&audit).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    std::fs::remove_dir_all(audited).unwrap();
     std::fs::remove_dir_all(directory).unwrap();
     std::fs::remove_file(source).unwrap();
 }

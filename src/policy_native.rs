@@ -3,6 +3,7 @@
 use crate::{
     config::env_value,
     error::{Error, Result},
+    native_audit::{AuditConfig, AuditedRpc, Reporter},
 };
 use allowit_native::{
     client::{Config, Deployment, NativeClient},
@@ -36,6 +37,8 @@ struct Bundle {
     version: u32,
     policy: Policy,
     context: Context,
+    #[serde(default)]
+    audit: Option<AuditConfig>,
 }
 struct Local {
     directory: PathBuf,
@@ -44,6 +47,7 @@ struct Local {
     network: String,
     config: Config,
     rpc_url: String,
+    audit: Option<AuditConfig>,
 }
 impl Local {
     fn load(name: &str) -> Result<Self> {
@@ -99,6 +103,14 @@ impl Local {
             executor,
             deployment: context.as_ref().map(|c| c.deployment.clone()),
         };
+        let journal = FileJournal::new(directory.join("journal"));
+        if directory.join("journal").exists() {
+            native(journal.initialize())?;
+        }
+        let audit: Option<AuditConfig> = native(journal.read("audit"))?;
+        if let Some(audit) = &audit {
+            audit.validate()?;
+        }
         Ok(Self {
             directory,
             policy_file,
@@ -106,13 +118,35 @@ impl Local {
             network,
             config,
             rpc_url,
+            audit,
         })
     }
-    fn client(&self) -> Result<NativeClient> {
-        native(NativeClient::new(
-            self.config.clone(),
-            Arc::new(native(HttpRpc::new(&self.rpc_url))?),
-        ))
+    fn client(
+        &self,
+        policy_id: &str,
+        audit_enabled: bool,
+    ) -> Result<(NativeClient, Option<Arc<Reporter>>)> {
+        let rpc = native(HttpRpc::new(&self.rpc_url))?;
+        let audit = if audit_enabled {
+            self.audit
+                .as_ref()
+                .map(|config| native(Reporter::new(config.clone(), policy_id.into())))
+                .transpose()?
+                .map(Arc::new)
+        } else {
+            None
+        };
+        let rpc: Arc<dyn allowit_native::rpc::Rpc> = if let Some(reporter) = &audit {
+            Arc::new(AuditedRpc {
+                rpc: Box::new(rpc),
+                reporter: reporter.clone(),
+                journal: FileJournal::new(self.directory.join("journal")),
+            })
+        } else {
+            Arc::new(rpc)
+        };
+        let client = native(NativeClient::new(self.config.clone(), rpc))?;
+        Ok((client, audit))
     }
     fn save_policy(&self, policy: &Policy) -> Result<()> {
         create_private(
@@ -155,6 +189,9 @@ pub(crate) fn run(
         let bundle: Bundle = read_optional(Path::new(&pos[0]))?
             .ok_or_else(|| Error::config("Cannot read executor bundle"))?;
         native(bundle.policy.validate())?;
+        if let Some(audit) = &bundle.audit {
+            audit.validate()?;
+        }
         let c = &bundle.context;
         if bundle.version != 1
             || c.policy_id != bundle.policy.id
@@ -178,6 +215,7 @@ pub(crate) fn run(
             if let Some(existing)=&local.context {
                 if serde_json::to_vec(existing).unwrap()!=serde_json::to_vec(c).unwrap() {return Err(allowit_native::error::Error::config("A different public context already exists here; choose a new policy directory"));}
             } else {create_private(&local.directory.join("context.json"),c,"A different public context already exists here; choose a new policy directory").map_err(to_native)?;}
+            if let Some(audit)=&bundle.audit {journal.write("audit",audit)?;}
             local.save_policy(&bundle.policy).map_err(to_native)
         }))?;
         if json {
@@ -232,7 +270,7 @@ pub(crate) fn run(
             "Configured owner differs from the imported policy",
         ));
     }
-    let client = local.client()?;
+    let (client, audit) = local.client(&policy.id, matches!(name, "execute" | "status"))?;
     let journal = FileJournal::new(local.directory.join("journal"));
     if owner_role && local.context.is_none() {
         let bundle = native(client.bundle(&policy, owner))?;
@@ -251,8 +289,12 @@ pub(crate) fn run(
     if name == "status" {
         let records = native(journal.entries::<Record>())?;
         let mut operations = Vec::new();
+        let mut audit_pending = false;
         for record in records {
-            operations.push(match lifecycle.recover(&record.id,&policy,owner){Ok(r)=>r.public(),Err(_)=>serde_json::json!({"id":record.id,"status":"uncertain","error":"Saved operation could not be verified against this configuration"})});
+            operations.push(match lifecycle.recover(&record.id,&policy,owner){Ok(r)=>{
+                if r.method=="execute" && audit.as_ref().is_some_and(|a|a.report(&r).is_err()) {audit_pending=true;}
+                r.public()
+            },Err(_)=>serde_json::json!({"id":record.id,"status":"uncertain","error":"Saved operation could not be verified against this configuration"})});
         }
         let last = native(journal.read::<serde_json::Value>("last"))?;
         let operation = last
@@ -286,7 +328,10 @@ pub(crate) fn run(
                 ));
             }
         }
-        return Ok(0);
+        if audit_pending {
+            stderr.push_str("Native SQL audit is pending; retain this journal and run allowit policy status again.\n");
+        }
+        return Ok(if audit_pending { 5 } else { 0 });
     }
     let options = match name {
         "execute" => Options {
@@ -342,7 +387,13 @@ pub(crate) fn run(
     ))?;
     let replayed = result.extra.get("replayed") == Some(&serde_json::json!(true));
     let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    while !result.final_status() && !result.expired() && std::time::Instant::now() < until {
+    while !result.final_status()
+        && !result.expired()
+        && std::time::Instant::now() < until
+        && !audit
+            .as_ref()
+            .is_some_and(|a| a.blocked.load(std::sync::atomic::Ordering::Relaxed))
+    {
         std::thread::sleep(std::time::Duration::from_secs(1));
         match lifecycle.recover(&result.id, &policy, owner) {
             Ok(observed) => result = observed,
@@ -379,6 +430,15 @@ pub(crate) fn run(
             .insert("replayed".into(), serde_json::json!(true));
     }
     let mut output = result.public();
+    let audit_pending =
+        name == "execute" && audit.as_ref().is_some_and(|a| a.report(&result).is_err());
+    if audit.is_some() && name == "execute" {
+        output["auditStatus"] = serde_json::json!(if audit_pending {
+            "pending"
+        } else {
+            "confirmed"
+        });
+    }
     if result.status == "settled" && name == "deploy" {
         let state = native(client.state(&policy, owner, true, None))?
             .ok_or_else(|| Error::config("Deployed vault is unavailable"))?;
@@ -410,6 +470,10 @@ pub(crate) fn run(
     }
     if result.extra.get("decisionCode") == Some(&serde_json::json!("EXPIRED_UNEXECUTED")) {
         stderr.push_str("This request expired without execution. For a deliberate retry, set a new ALLOWIT_REQUEST_ID; keep the original journal.\n");
+    }
+    if audit_pending {
+        stderr.push_str("Native SQL audit is pending. Retain the original journal and request ID; retry the identical command or run allowit policy status.\n");
+        return Ok(5);
     }
     Ok(if result.status == "failed" {
         20

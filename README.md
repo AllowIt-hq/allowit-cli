@@ -153,6 +153,8 @@ Decimals are plain digits with an optional fraction: no sign, exponent, separato
 
 **SDK source pin.** `vendor/allowit-native/` contains the canonical SDK crate and its required build and test inputs. `vendor/native-sdk.json` records the exact SDK commit and file hashes. `scripts/sync-native-sdk.py SDK_REPO FULL_COMMIT --check` verifies the snapshot against canonical source; ordinary builds and CI require no private SDK checkout or cross-repository token.
 
+**Hosted executor audit.** A backend-exported executor bundle may additionally contain `audit: {origin, token}`. Import saves this capability in the private local journal. It grants only reporting of that policy's executor-signed operations to `POST /api/native/report`; it grants no owner, approval or signing authority. For this profile the CLI persists the exact signed proof, requires a durable SQL acknowledgment before broadcasting, then reports recovered/finalized status. Missing, redirected or inconsistent acknowledgments block broadcast or produce exit 5; retain the journal and retry the identical request ID. `policy status` retries reporting without signing or broadcasting. The token is never printed. Local denials before signing create no chain operation and are outside this signed-operation audit. Owner browser operations use the backend owner lifecycle; standalone owner CLI operations remain local when no hosted audit bundle is configured.
+
 ## States and exit codes
 
 | Exit | State | Meaning |
