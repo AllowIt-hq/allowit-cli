@@ -10,6 +10,11 @@ Main contains the untagged `0.3.0-dev` implementation. No native Rust GitHub Rel
 
 Use Rust 1.85 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
 
+Native `policy` commands require a local POSIX filesystem for private, durable journals.
+On Windows, use Linux/WSL and keep state in the Linux filesystem, not `/mnt/c` or `/mnt/d`.
+The CLI refuses unsupported platforms before loading keys or creating policy state.
+Keep existing journals for recovery. Do not regenerate or resubmit an uncertain operation.
+
 ```sh
 git clone https://github.com/AllowIt-hq/allowit-cli.git
 cd allowit-cli
