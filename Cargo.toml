@@ -3,7 +3,7 @@ name = "allowit-cli"
 version = "0.3.0-dev"
 edition = "2024"
 rust-version = "1.85"
-license = "UNLICENSED"
+license = "MIT"
 publish = false
 
 [[bin]]

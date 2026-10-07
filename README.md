@@ -1,33 +1,34 @@
 # allowit
 
-`allowit` sends an agent's actions through an AllowIt policy. It is a thin, strict client for one policy's harness API; the policy itself (restricted Rust, evaluated by the shared SDK WASM on the AllowIt server) decides. The CLI cannot bypass the policy, the owner-input gate or the server's request schema.
+`allowit` is a native Rust CLI for AllowIt policies. Its HTTP commands send agent requests through the AllowIt service; its native policy commands use the pinned Rust SDK locally for generation, signing, receipt validation and recovery. The CLI cannot bypass the policy, owner approval or server request schema.
 
-Rust migration candidate. All commands call Rust modules directly, including the pinned native SDK for policy generation, signing, receipt validation and recovery. The candidate requires final review and platform checks before release. The Go implementation is retained under `reference/go/` as a differential test oracle; it is not the default command or distribution build.
+All commands call Rust modules directly. The binary needs no Node runtime. The Go implementation under `reference/go/` is a differential test oracle; the default command and distribution build use Rust.
 
-This branch is the untagged `0.3.0-dev` candidate. Build from this checkout to use its gateway compatibility fixes and the `allowit policy` owner lifecycle commands. The tagged `v0.1.1` installation below remains the earlier release.
+Main contains the untagged `0.3.0-dev` implementation. No native Rust GitHub Release has been published. The existing `v0.1.0` and `v0.1.1` tags identify earlier Go releases.
 
-## Install
+## Build from source
 
-`github.com/ackrate/allowit-cli` is private; installing needs authorized GitHub access. There is no public download.
+Use Rust 1.85 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
 
 ```sh
-GOPRIVATE=github.com/ackrate/* go install github.com/ackrate/allowit-cli/cmd/allowit@v0.1.1
-allowit version
+git clone https://github.com/ackrate/allowit-cli.git
+cd allowit-cli
+cargo build --locked --release
+./target/release/allowit version
 ```
 
-Or build the Rust candidate from a checkout (Rust 1.85 or later):
+Validation and distribution builds:
 
 ```sh
-cargo build --locked --release         # target/release/allowit
 make test                             # Rust tests + Go reference regressions
 make parity                           # original harness cases against Rust
 make integration APP_REPO=/path/to/AllowIt-app
 make dist                             # static Linux/musl distribution
 ```
 
-`make dist` requires the `x86_64-unknown-linux-musl` target and a suitable musl linker. CI installs both and uploads `dist/allowit-linux-amd64` with its SHA-256. The lockfile pins the complete dependency graph. The old Go installation above remains available for the earlier tagged release.
+`make dist` requires the `x86_64-unknown-linux-musl` target and a suitable musl linker. CI installs both and uploads `dist/allowit-linux-amd64` with its SHA-256. The lockfile pins the complete dependency graph.
 
-The **Native binaries** workflow validates PRs and supports manual builds of Linux x64 (static musl), macOS Apple Silicon and macOS Intel, with checksums and a source-free smoke test whose PATH has no Node installation. It uploads private workflow artifacts; it does not publish a GitHub Release. Windows is not yet validated. These distribution checks must pass on the complete native lifecycle port before a release is accepted.
+The **Native binaries** workflow validates PRs and supports manual builds of Linux x64 (static musl), macOS Apple Silicon and macOS Intel, with checksums and a source-free smoke test whose PATH has no Node installation. It uploads workflow artifacts; it does not publish a GitHub Release. Windows is not yet validated. Distribution checks must pass for the exact release revision before a release is accepted.
 
 The CLI is independent of the optional hosted-agent runtime. A host can install the same binary used by an external agent; this repository contains no sandbox launcher, supervisor or model proxy.
 
