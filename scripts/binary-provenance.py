@@ -60,7 +60,7 @@ def manifest(repo, binary, target):
         "schemaVersion": 1,
         "kind": "rust-native",
         "cli": {
-            "repository": "https://github.com/ackrate/allowit-cli",
+            "repository": "https://github.com/AllowIt-hq/allowit-cli",
             "commit": git(repo, "rev-parse", "HEAD"),
             "sourceTree": git(repo, "rev-parse", "HEAD^{tree}"),
             "version": version,
@@ -76,9 +76,9 @@ def manifest(repo, binary, target):
     }
     run = os.environ.get("GITHUB_RUN_ID", "")
     attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
-    if run.isdigit() and attempt.isdigit() and os.environ.get("GITHUB_REPOSITORY") == "ackrate/allowit-cli":
+    if run.isdigit() and attempt.isdigit() and os.environ.get("GITHUB_REPOSITORY", "").lower() == "allowit-hq/allowit-cli":
         value["build"] = {
-            "githubRunURL": f"https://github.com/ackrate/allowit-cli/actions/runs/{run}",
+            "githubRunURL": f"https://github.com/AllowIt-hq/allowit-cli/actions/runs/{run}",
             "runAttempt": int(attempt),
             "event": os.environ.get("GITHUB_EVENT_NAME", ""),
             "ref": os.environ.get("GITHUB_REF", ""),

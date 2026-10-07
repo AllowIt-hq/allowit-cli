@@ -2,7 +2,7 @@
 
 `allowit` is a native Rust CLI for AllowIt policies. Its HTTP commands send agent requests through the AllowIt service; its native policy commands use the pinned Rust SDK locally for generation, signing, receipt validation and recovery. The CLI cannot bypass the policy, owner approval or server request schema.
 
-All commands call Rust modules directly. The binary needs no Node runtime. The Go implementation under `reference/go/` is a differential test oracle; the default command and distribution build use Rust.
+All commands call Rust modules directly. The binary needs no Node runtime. The Go implementation under `reference/go/` is a differential test oracle; the default command and distribution build use Rust. Its historical Go module path remains unchanged.
 
 Main contains the untagged `0.3.0-dev` implementation. No native Rust GitHub Release has been published. The existing `v0.1.0` and `v0.1.1` tags identify earlier Go releases.
 
@@ -11,7 +11,7 @@ Main contains the untagged `0.3.0-dev` implementation. No native Rust GitHub Rel
 Use Rust 1.85 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
 
 ```sh
-git clone https://github.com/ackrate/allowit-cli.git
+git clone https://github.com/AllowIt-hq/allowit-cli.git
 cd allowit-cli
 cargo build --locked --release
 ./target/release/allowit version
@@ -182,7 +182,7 @@ The configured token is redacted in full from all output, whatever its length. I
 
 ## API used
 
-HTTP action commands use `GET /api/harness/{owner}/{policy}/skill` and `POST` routes for `judge`, `transactions` and `status`, with the policy-scoped bearer token. The frontend proxies this public API to the Rust backend in `ackrate/AllowIt-engine/server/`. The CLI does not link backend or engine crates.
+HTTP action commands use `GET /api/harness/{owner}/{policy}/skill` and `POST` routes for `judge`, `transactions` and `status`, with the policy-scoped bearer token. The frontend proxies this public API to the Rust backend in `AllowIt-hq/allowit-engine/server/`. The CLI does not link backend or engine crates.
 
 The HTTP commands report server states and preserve owner approval. Native `policy execute` uses the executor's local key and standing policy approval; it cannot sign owner operations. An exported bundle with an audit capability additionally requires the server acknowledgment described above.
 

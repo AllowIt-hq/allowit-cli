@@ -90,8 +90,14 @@ class ProvenanceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "file set"):
             provenance.manifest(self.repo, self.binary, "aarch64-apple-darwin")
 
+    def test_ci_build_metadata_accepts_github_repository_case(self):
+        context = {"GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2", "GITHUB_REPOSITORY": "allowit-hq/ALLOWIT-CLI", "GITHUB_SHA": self.git("rev-parse", "HEAD")}
+        with patch.dict(os.environ, context):
+            result = provenance.manifest(self.repo, self.binary, "aarch64-apple-darwin")
+            self.assertEqual(result["build"]["githubRunURL"], "https://github.com/AllowIt-hq/allowit-cli/actions/runs/123")
+
     def test_ci_build_metadata_binds_actual_checkout(self):
-        context = {"GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2", "GITHUB_REPOSITORY": "ackrate/allowit-cli", "GITHUB_SHA": self.git("rev-parse", "HEAD"), "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/main"}
+        context = {"GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2", "GITHUB_REPOSITORY": "AllowIt-hq/allowit-cli", "GITHUB_SHA": self.git("rev-parse", "HEAD"), "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/main"}
         with patch.dict(os.environ, context):
             result = provenance.manifest(self.repo, self.binary, "aarch64-apple-darwin")
             self.assertEqual(result["build"]["event"], "workflow_dispatch")
