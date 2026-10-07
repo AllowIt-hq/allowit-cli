@@ -25,6 +25,14 @@ fn run_with(directory: &Path, args: &[&str], extra: &[(&str, &str)]) -> Output {
         .unwrap()
 }
 #[test]
+fn native_parser_advertises_the_v2_owner_commands() {
+    let result = run(&temp(), &["policy", "mystery"]);
+    assert_eq!(result.status.code(), Some(2));
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(error.contains("close"), "{error}");
+    assert!(error.contains("tune-action"), "{error}");
+}
+#[test]
 fn status_uses_public_context_without_loading_any_signing_key() {
     use std::{
         io::{Read, Write},
