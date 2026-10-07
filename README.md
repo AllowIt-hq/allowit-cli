@@ -31,6 +31,8 @@ The **Native binaries** workflow validates PRs and supports manual builds of Lin
 
 The CLI is independent of the optional hosted-agent runtime. A host can install the same binary used by an external agent; this repository contains no sandbox launcher, supervisor or model proxy.
 
+Each **Native binaries** artifact also includes `allowit-PLATFORM.provenance.json` (schema version 1, kind `rust-native`). It records the binary target and SHA-256, exact CLI commit and source tree, pinned SDK commit and file hashes, and native contract release identity. Staging consumers should select a trusted workflow run, verify the binary checksum against this manifest, and compare the release identity with their backend before executing a downloaded skill. The manifest describes the workflow build; it is not a signature or a standalone attestation from an arbitrary download.
+
 ## Configure
 
 Environment only; the token is never accepted as a flag or URL parameter.
