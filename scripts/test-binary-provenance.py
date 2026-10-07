@@ -3,12 +3,14 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("provenance", Path(__file__).with_name("binary-provenance.py"))
@@ -18,6 +20,8 @@ spec.loader.exec_module(provenance)
 
 class ProvenanceTests(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(os.environ, {"GITHUB_RUN_ID": "", "GITHUB_RUN_ATTEMPT": ""})
+        environment.start(); self.addCleanup(environment.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name) / "repo"
@@ -78,6 +82,16 @@ class ProvenanceTests(unittest.TestCase):
         self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "empty")
         with self.assertRaisesRegex(ValueError, "file set"):
             provenance.manifest(self.repo, self.binary, "aarch64-apple-darwin")
+
+    def test_ci_build_metadata_binds_actual_checkout(self):
+        context = {"GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2", "GITHUB_REPOSITORY": "ackrate/allowit-cli", "GITHUB_SHA": self.git("rev-parse", "HEAD"), "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/main"}
+        with patch.dict(os.environ, context):
+            result = provenance.manifest(self.repo, self.binary, "aarch64-apple-darwin")
+            self.assertEqual(result["build"]["event"], "workflow_dispatch")
+            self.assertEqual(result["build"]["sha"], result["cli"]["commit"])
+            with patch.dict(os.environ, {"GITHUB_SHA": "0" * 40}):
+                with self.assertRaisesRegex(ValueError, "revision differs"):
+                    provenance.manifest(self.repo, self.binary, "aarch64-apple-darwin")
 
 
 if __name__ == "__main__":
