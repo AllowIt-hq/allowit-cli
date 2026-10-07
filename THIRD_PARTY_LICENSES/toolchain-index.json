@@ -70,5 +70,12 @@
   {
     "path": "toolchains/go-vendor/golang.org/x/text/LICENSE",
     "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+  },
+  {
+    "path": "toolchains/musl-1.2.5-COPYRIGHT.txt",
+    "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af",
+    "upstream": "https://www.musl-libc.org/releases/musl-1.2.5.tar.gz",
+    "version": "1.2.5",
+    "linkedBy": "Rust1.98 x86_64-unknown-linux-musl default self-contained static libc"
   }
 ]
