@@ -55,6 +55,11 @@ class LicenseMaterial(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Toolchain notice'):
             MODULE.validate(self.root)
 
+    def test_sdk_license_is_checked(self):
+        (self.root / 'vendor/native-sdk-licenses/LICENSE').write_text('changed attribution')
+        with self.assertRaisesRegex(ValueError, 'SDK license notice'):
+            MODULE.validate(self.root)
+
 
 if __name__ == '__main__':
     unittest.main()
