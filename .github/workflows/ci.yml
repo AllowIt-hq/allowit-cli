@@ -36,6 +36,8 @@ jobs:
         run: |
           file dist/allowit-linux-amd64 | grep -Eq 'statically linked|static-pie linked'
           ./dist/allowit-linux-amd64 version
+      - name: Package license notices
+        run: python3 scripts/package-licenses.py --dist dist
       - uses: actions/upload-artifact@v4
         with:
           name: allowit-linux-amd64

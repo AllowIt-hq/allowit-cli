@@ -1,0 +1,715 @@
+{
+  "repository": "ackrate/allowit-cli",
+  "companionNotices": "THIRD_PARTY_LICENSES/",
+  "artifacts": [
+    {
+      "artifactId": 11454200118,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37551752468,
+      "sourceCommit": "03e5617ff1114fa127edb5617f14248372cdc0b2",
+      "archiveSHA256": "2c61c9ed36a6bcc234006035b6aca866b92669b0cc6d01edb7619b2a0a17809f",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "26641e871ab70b5686d8d7b93bf6f582756d3b3ade113ff95c33c36ca04ebfaf"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "175066bfcbc8b6d3601e1a8f4f0084c296a60cb0cc18c52879d3ee7f70e9ddc8"
+        }
+      ]
+    },
+    {
+      "artifactId": 11453087263,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37551752221,
+      "sourceCommit": "03e5617ff1114fa127edb5617f14248372cdc0b2",
+      "archiveSHA256": "35c66e8d347fe799b8f86d338da9cd81344d4a1213aea4448625218615144736",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "bc49cecea7e03562aaf05588a84aecb9ffe95c99ccee19e295ae67fc0842ce26"
+        },
+        {
+          "name": "allowit-linux-amd64.provenance.json",
+          "sha256": "60f0a693dea2b0293dde03fcef46d8c15d7be1c4d704c56a1dcb3406b4889c6d"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "4e248c7423134d2947319de81b11ac47802eeb223147abd5f31252a96745bdbc"
+        }
+      ]
+    },
+    {
+      "artifactId": 11453033183,
+      "artifactName": "allowit-darwin-amd64",
+      "workflowRunId": 37551752221,
+      "sourceCommit": "03e5617ff1114fa127edb5617f14248372cdc0b2",
+      "archiveSHA256": "773b19da4647cbe60ed9b6778fc3c7f70a23e74ad50eea927b0c835cfebcf22f",
+      "files": [
+        {
+          "name": "allowit-darwin-amd64",
+          "sha256": "054606ae2109ae73ab6628c25a0240f485d8ba35c64bd2d4df85c833dea5ed82"
+        },
+        {
+          "name": "allowit-darwin-amd64.provenance.json",
+          "sha256": "c799d5e3e9ed76ffd80eb6bc414846b5bb66b4f70e03152cb200a3440596d26f"
+        },
+        {
+          "name": "allowit-darwin-amd64.sha256",
+          "sha256": "d92f71517b7d1479b731798e36a71a511e10df899019e2a3c4c90cf50317db47"
+        }
+      ]
+    },
+    {
+      "artifactId": 11452948187,
+      "artifactName": "allowit-darwin-arm64",
+      "workflowRunId": 37551754042,
+      "sourceCommit": "4b37bce19607e32620cc1ba4bcdf02cdfff69e0b",
+      "archiveSHA256": "8c6d667dd16728eebb024fbbac9307ab97fcf0e69805babb9f376be1a6b6f0c1",
+      "files": [
+        {
+          "name": "allowit-darwin-arm64",
+          "sha256": "696a6c87bd3e1ced8c11dbdaf039d08ef6d8ae683008d609d4722d9fee530b23"
+        },
+        {
+          "name": "allowit-darwin-arm64.sha256",
+          "sha256": "6a61b160ca9e3949492b9d85079dd3158f7ec4374b20bcbd4ce3b4bc8c1ea811"
+        }
+      ]
+    },
+    {
+      "artifactId": 11452789085,
+      "artifactName": "allowit-darwin-amd64",
+      "workflowRunId": 37551754042,
+      "sourceCommit": "4b37bce19607e32620cc1ba4bcdf02cdfff69e0b",
+      "archiveSHA256": "1d52a3f5b925ab61cdbf8f2d097bd66d2cdeb732f1b3d1213f663a183f7288ef",
+      "files": [
+        {
+          "name": "allowit-darwin-amd64",
+          "sha256": "b561a8b757d0d34b7ff2f9edf51ba73ac91b0a9df7998c3f63cc3f4ce5720634"
+        },
+        {
+          "name": "allowit-darwin-amd64.sha256",
+          "sha256": "78a62e8021f874bfafd22669a0fc05abd1d920bf48611dd5bbb38a5687117609"
+        }
+      ]
+    },
+    {
+      "artifactId": 11452609252,
+      "artifactName": "allowit-darwin-arm64",
+      "workflowRunId": 37551752221,
+      "sourceCommit": "03e5617ff1114fa127edb5617f14248372cdc0b2",
+      "archiveSHA256": "9bdf34d2a2fe6d65973ce427239c360f24f9c6a5aa46a0eec25a1a42cab41709",
+      "files": [
+        {
+          "name": "allowit-darwin-arm64",
+          "sha256": "c0bcb5c8ecf3f88738dd7405b07f80ce018ece173e1d1e175e46dbd8c233f8d4"
+        },
+        {
+          "name": "allowit-darwin-arm64.sha256",
+          "sha256": "8a4a433bccbd47bb442a2bff9f7c0db9a46850a292b278045c59552a4d7db644"
+        },
+        {
+          "name": "allowit-darwin-arm64.provenance.json",
+          "sha256": "750d7a17af37f776dad7300ca9bc8aed209bb09693b9aa491d9ba24a18797f6b"
+        }
+      ]
+    },
+    {
+      "artifactId": 11452569801,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37551754042,
+      "sourceCommit": "4b37bce19607e32620cc1ba4bcdf02cdfff69e0b",
+      "archiveSHA256": "ff988bb406abcef75d6ea5fdc83eedfeea776b0cc05e86ff5db0a982ce2d85ed",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "90acd6d22b69d2f4cdb309860b5fc9c92adf79fa6f2db4fcc6a5d8344e9c5d37"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "b2c6a13a0a619babeecaceeb69d9096d382da5583a32822c06c00417d692f0fc"
+        }
+      ]
+    },
+    {
+      "artifactId": 11452125663,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37547624028,
+      "sourceCommit": "7761cf65ea63c7b32aa2a0ba9e283e763fffddac",
+      "archiveSHA256": "cc7656cee081c10648a7e840d48221b12e0cedd97dbd7032d42cd979768b5fa1",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "93780c01224feab7929955d9ba292279ff0f40082b8530d0a693e9f175cc0e2f"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "97c7a3545385917718db1b1ed026c66d26fbd5691eb211ed614511e174786100"
+        }
+      ]
+    },
+    {
+      "artifactId": 11449810842,
+      "artifactName": "allowit-darwin-amd64",
+      "workflowRunId": 37542319101,
+      "sourceCommit": "6544a47b98167c35016a84fe0d4c48a068ee17c9",
+      "archiveSHA256": "004e489157e6f7510d13fa897a2701a14362c11885c2c6b5be426fd0c3013976",
+      "files": [
+        {
+          "name": "allowit-darwin-amd64",
+          "sha256": "054606ae2109ae73ab6628c25a0240f485d8ba35c64bd2d4df85c833dea5ed82"
+        },
+        {
+          "name": "allowit-darwin-amd64.sha256",
+          "sha256": "d92f71517b7d1479b731798e36a71a511e10df899019e2a3c4c90cf50317db47"
+        }
+      ]
+    },
+    {
+      "artifactId": 11449416694,
+      "artifactName": "allowit-darwin-arm64",
+      "workflowRunId": 37542319101,
+      "sourceCommit": "6544a47b98167c35016a84fe0d4c48a068ee17c9",
+      "archiveSHA256": "d4a6a6c1b58f235bef7854f01acad06c72643383886cc0604e8b3d08e632323a",
+      "files": [
+        {
+          "name": "allowit-darwin-arm64.sha256",
+          "sha256": "8a4a433bccbd47bb442a2bff9f7c0db9a46850a292b278045c59552a4d7db644"
+        },
+        {
+          "name": "allowit-darwin-arm64",
+          "sha256": "c0bcb5c8ecf3f88738dd7405b07f80ce018ece173e1d1e175e46dbd8c233f8d4"
+        }
+      ]
+    },
+    {
+      "artifactId": 11449295920,
+      "artifactName": "allowit-darwin-amd64",
+      "workflowRunId": 37541625365,
+      "sourceCommit": "7397ec836704ad590aead5eb80b6f0f670ccbe08",
+      "archiveSHA256": "ed6fb5d1f5f2e4860dad99c6e449bc1de9266fe83973f51d0344195f0d455604",
+      "files": [
+        {
+          "name": "allowit-darwin-amd64",
+          "sha256": "5af1df23da7deb8b135f57d175074d94cc4307e48379a43aaf14c673d387aac8"
+        },
+        {
+          "name": "allowit-darwin-amd64.sha256",
+          "sha256": "dbbac3c50aaf8de897039dd73ed91be57563b9f8b2aa141244a81448fef72d66"
+        }
+      ]
+    },
+    {
+      "artifactId": 11449136616,
+      "artifactName": "allowit-darwin-amd64",
+      "workflowRunId": 37541896861,
+      "sourceCommit": "a2c99d9d0872584d94dba074510ec3f6a8b65d57",
+      "archiveSHA256": "11a0f7af8ebba55c063e9c05d707223f36241ea9992179942e436c2cb1a74a22",
+      "files": [
+        {
+          "name": "allowit-darwin-amd64",
+          "sha256": "5af1df23da7deb8b135f57d175074d94cc4307e48379a43aaf14c673d387aac8"
+        },
+        {
+          "name": "allowit-darwin-amd64.sha256",
+          "sha256": "dbbac3c50aaf8de897039dd73ed91be57563b9f8b2aa141244a81448fef72d66"
+        }
+      ]
+    },
+    {
+      "artifactId": 11448943065,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37542319101,
+      "sourceCommit": "6544a47b98167c35016a84fe0d4c48a068ee17c9",
+      "archiveSHA256": "768a449e897a6cc2d7297a089b6404edae02ccb75c0caf8c5486e50fb6b5ec17",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "d029c09677cf1abcd75024fe4f0d9a742c337e8e6e3307d489bcbaa4ea17c66d"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "309cae42d2d31e96c138f4f80ac6db2c1be37df7176f8f4a867630c9f70bbe65"
+        }
+      ]
+    },
+    {
+      "artifactId": 11448936007,
+      "artifactName": "allowit-darwin-arm64",
+      "workflowRunId": 37541625365,
+      "sourceCommit": "7397ec836704ad590aead5eb80b6f0f670ccbe08",
+      "archiveSHA256": "eaa3be231c43ee86ff398c61e6aa6e6de3e5c0018e7a883a3a488b3d1d94967c",
+      "files": [
+        {
+          "name": "allowit-darwin-arm64",
+          "sha256": "1e67cfb79ee82d96cea215e5102e74f835362a660ea047c040ab36c166f518c7"
+        },
+        {
+          "name": "allowit-darwin-arm64.sha256",
+          "sha256": "38928546c724f295675b8923f4484822871e7769c57859d1b19d8a1be71093d7"
+        }
+      ]
+    },
+    {
+      "artifactId": 11448926976,
+      "artifactName": "allowit-darwin-arm64",
+      "workflowRunId": 37541896861,
+      "sourceCommit": "a2c99d9d0872584d94dba074510ec3f6a8b65d57",
+      "archiveSHA256": "a98b9244de31da92ca239b03480a02a4bdc0c5f99d2865a044ff2e7db483164d",
+      "files": [
+        {
+          "name": "allowit-darwin-arm64",
+          "sha256": "1e67cfb79ee82d96cea215e5102e74f835362a660ea047c040ab36c166f518c7"
+        },
+        {
+          "name": "allowit-darwin-arm64.sha256",
+          "sha256": "38928546c724f295675b8923f4484822871e7769c57859d1b19d8a1be71093d7"
+        }
+      ]
+    },
+    {
+      "artifactId": 11448539259,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37542319107,
+      "sourceCommit": "6544a47b98167c35016a84fe0d4c48a068ee17c9",
+      "archiveSHA256": "06b7a1fa711c518bc7c2eadbe954c6f640d6c4965c3ff0e574c200514e20f448",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "bae9b9cc9715636673354ae854d885fcd161fd6047900af8f3adc8d02df4a9cf"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "626a6e02892b36c2a442f14b8e7d1ce9910e2142567b59dee23a6558c32eaaad"
+        }
+      ]
+    },
+    {
+      "artifactId": 11448471538,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37539983083,
+      "sourceCommit": "3b7c4d676d27190b25e80cf416dfaa78632ee5ba",
+      "archiveSHA256": "0d20eeca7726e6018d0a3e975f2ea89e7cce990ff86fd187a494930d1ebbb147",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "70571d5f87f055c10616ae038eeb43f89d7f7fd31ff4b66fafce466fe17e0cd8"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "a2dc2f756e3fb1b4cc1dc0a5a72d481671e89ad71c54f99db6326e998ac6fc8e"
+        }
+      ]
+    },
+    {
+      "artifactId": 11448358799,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37539983158,
+      "sourceCommit": "3b7c4d676d27190b25e80cf416dfaa78632ee5ba",
+      "archiveSHA256": "2ef90a11d2aeb1fccef7af557805ce302493e8b84bfa49b8cefdbdb5a08f59c5",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "396a1d3c9b7663ccef694a8616a5a47e21a14e734918bba28d2459d79370775e"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "4332f8005c70979c29f698b606a63ecec91fd72f1a7e97ca34233f40dccfc485"
+        }
+      ]
+    },
+    {
+      "artifactId": 11448286648,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37539498294,
+      "sourceCommit": "ff6102d70fc88c344f6ecb24adc8633f20f53256",
+      "archiveSHA256": "d2a29981f1bb775ac0565e93e772dc2f5a20138aaa6d58fb879fa84303cd7504",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "d07e0d63f4064e59e08b9c35fbebc90fcacdca67bdf8df736b0acf1ab35eb9f3"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "c7151e70696476629ec0e7f6844bbb7b22afcfe1c888289239a11481de74ab7f"
+        }
+      ]
+    },
+    {
+      "artifactId": 11448137758,
+      "artifactName": "allowit-darwin-arm64",
+      "workflowRunId": 37539983083,
+      "sourceCommit": "3b7c4d676d27190b25e80cf416dfaa78632ee5ba",
+      "archiveSHA256": "a04ea3e714ef76e85f68c23a09b6bdfff667cde79742dac5c31acc9d01bf07a9",
+      "files": [
+        {
+          "name": "allowit-darwin-arm64",
+          "sha256": "d4879fe6555f4d190decb94e01c5d3d8e72c3f1fca30201ae7710f7bd463573f"
+        },
+        {
+          "name": "allowit-darwin-arm64.sha256",
+          "sha256": "40bdace2eb19b33263c0c4f0d4bec5720c9b3ce99a7210b53d7e98c713fef416"
+        }
+      ]
+    },
+    {
+      "artifactId": 11448097700,
+      "artifactName": "allowit-darwin-amd64",
+      "workflowRunId": 37539498294,
+      "sourceCommit": "ff6102d70fc88c344f6ecb24adc8633f20f53256",
+      "archiveSHA256": "8d158e6af2cb670ad46aae6c846b5d7bc090e54e9a233bf3b9d04043a73f2ee8",
+      "files": [
+        {
+          "name": "allowit-darwin-amd64",
+          "sha256": "8b07a0004dfef3553e28ef725c481e3599afad2f6d4640635c4bb09cd8019633"
+        },
+        {
+          "name": "allowit-darwin-amd64.sha256",
+          "sha256": "335b4b1e7644fa854c80bb6a48ea51114eb0e7d69eab7fafddf08ddd1c7138df"
+        }
+      ]
+    },
+    {
+      "artifactId": 11447709517,
+      "artifactName": "allowit-darwin-amd64",
+      "workflowRunId": 37539983083,
+      "sourceCommit": "3b7c4d676d27190b25e80cf416dfaa78632ee5ba",
+      "archiveSHA256": "5e4e0ec6cab76a756db73a630d275f284d042bdc6d6059f221b6a49d706629fa",
+      "files": [
+        {
+          "name": "allowit-darwin-amd64",
+          "sha256": "71a28cb75333f473505cff8568cbe39ede112eaadbc10af9b8d3fde1b8c2edf9"
+        },
+        {
+          "name": "allowit-darwin-amd64.sha256",
+          "sha256": "0d4caa08622d87651fae5c84aa848765635b2c9826d87dd1869372853e4a04b1"
+        }
+      ]
+    },
+    {
+      "artifactId": 11447468224,
+      "artifactName": "allowit-darwin-arm64",
+      "workflowRunId": 37539498294,
+      "sourceCommit": "ff6102d70fc88c344f6ecb24adc8633f20f53256",
+      "archiveSHA256": "85ba944570df045014877bcbbba7de1cc6510ff7f6c6f156f126fc9b71a64dd1",
+      "files": [
+        {
+          "name": "allowit-darwin-arm64",
+          "sha256": "87914292ecdbd1978e4c0be6b6457bdb7fe0a1f558af4058a0a0f98330975be4"
+        },
+        {
+          "name": "allowit-darwin-arm64.sha256",
+          "sha256": "785e27727d6a7bbb845dc5db65f891a5a0614cc2823bff336d04d80c5dd68505"
+        }
+      ]
+    },
+    {
+      "artifactId": 11407872041,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37453695007,
+      "sourceCommit": "7ddc1641455ea4df1a1abd43aeff2c264c14c0d1",
+      "archiveSHA256": "35dc2f16e62171ad99ab6081b9448a2e6fa9b64589d39a315eac4f4202362ad9",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "c7e2be14f4eb2449c3ae9e2a959b5ed8a2fdecb8ff096fcf6e30be40f6a12738"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "942b88ff769c1aeb04b23ccc91f2523e731f1e20b25ccee7dc65a95480a8a034"
+        }
+      ]
+    },
+    {
+      "artifactId": 11387374107,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37406904046,
+      "sourceCommit": "a40fadf16006f0c600a97b0886922d92754af691",
+      "archiveSHA256": "b6f78e412828f1596fa1b4d02fffe8867963321d4ffba36a851f4747fec123c1",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "d21953811f8ae62164bc6ae02336d52df3c2d724d43ee39ba43a659e8dcf666c"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "d87f5d265466540c4442bf32133bf5241afac0bfc651ac01b958f60bc7941c88"
+        }
+      ]
+    },
+    {
+      "artifactId": 11387202816,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37406910853,
+      "sourceCommit": "a40fadf16006f0c600a97b0886922d92754af691",
+      "archiveSHA256": "3fa5a5ffe41db6d0c5e03041d415a513dfd6e55064abef21120d1c09c17b913f",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "c91ca3468ce729d0d03e38eae4acddf6dc87f2e996b53577c677bfaba01a3793"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "6af2c06b089ecfef91971dee38f4a1b545ec63168fe999389b5e600bf6226a79"
+        }
+      ]
+    },
+    {
+      "artifactId": 11385491827,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37401892202,
+      "sourceCommit": "1bddcf76a82169ad3e966a228c460afc312ab33f",
+      "archiveSHA256": "7d3671cf40eed97e5e9db4cffd98de0e3a88d833114223d7a90d023dc5e4e599",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "fa18280519a79df3db6fb735dbb43cb040852399e1140cfbcb4adb033175df47"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "c6e608a6ec318cab4db01d1a41b5b4a4b7f412408bc85475aaff8e5415085c82"
+        }
+      ]
+    },
+    {
+      "artifactId": 11378780079,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37384841623,
+      "sourceCommit": "525732fe083158792490fb8944d4301ab70b3ab5",
+      "archiveSHA256": "b51beeb373323747fed9090bc3cfe23b88c4b86bf022f3a1d6a066d10f04e050",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "fbb7047797380360ba126696dfddc6204290e46c617f8b0bf59a9ec234ce8905"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "70f51a4a23747e3f9f76ba32eef3e713293107b8749a1a26abd09da41672beb3"
+        }
+      ]
+    },
+    {
+      "artifactId": 11378415043,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37384760391,
+      "sourceCommit": "525732fe083158792490fb8944d4301ab70b3ab5",
+      "archiveSHA256": "c59d22835f15fdb437579666b0d3a316dbe8fe3dbe67d64e2212da2d4afab6ad",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "a70efbf1044fa9076b34fe77abc9a95028f00d21e72a12ed699c037a8d25c5f2"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "7de6cf7674b366f586cd378037b8fe5522412888a22a655158db14865957d3e4"
+        }
+      ]
+    },
+    {
+      "artifactId": 11323800722,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37257799641,
+      "sourceCommit": "c3463f5be2db36680632d8cec7ee6d2190304537",
+      "archiveSHA256": "cf82bbdb71f4cf73a974bd3df0de67a965e0818c6824c5d71be59d9379665670",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "0aac4b5b113c47ec01973e0a4bbbbd1d43709f623bbb0a1c5af785fb67cf0e07"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "7b33dd4ad425c0bf54f638747f65de2047f717d25b8f37928ee500e10dabe0c5"
+        }
+      ]
+    },
+    {
+      "artifactId": 11323329733,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37260012656,
+      "sourceCommit": "e9f92edc09fe38f4ed9c37841fc59ac7b7a9556e",
+      "archiveSHA256": "2741935070efca47485a67822f33b9fe1ae99e4d262eb78f04b20c5f0a7d7d22",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "53211363d7944a64f091e56e3470a5006067b1588da9a264323796ccbeea20d9"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "4d3b1c282d3fca4f309f6b04439da729f7b95e6292c0e2b962881ea2b0f8bb16"
+        }
+      ]
+    },
+    {
+      "artifactId": 11322897381,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37257152020,
+      "sourceCommit": "c3463f5be2db36680632d8cec7ee6d2190304537",
+      "archiveSHA256": "a10236f18d8bca7ac531f9ed521b38a721a72431cdc6e2332dcec6f2c00c57ba",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "1c310ddb284390731fabb57fef57a31a3cbfb207ad5f7c444247e0b8a76e962b"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "04b265b664e6e6eb025c790054f6f455d5ea408c21ac2ac6eb09931cd5808b19"
+        }
+      ]
+    },
+    {
+      "artifactId": 11320120436,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37248188082,
+      "sourceCommit": "3090822bc5f0ad519b96f6dab297f22c64c51dff",
+      "archiveSHA256": "199c14b787045b52bc8f1e9492bd0b528ec42bc170c5934b3f9e1d5b826a9a59",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "c27679e481e1e5667f177d42df767fc5cd8b103f46ffd3d16cca4d976cd7b4bb"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "907813dcf6c8186fe0be739855b772a8235131cde5f7700acf1729aa68c41bf6"
+        }
+      ]
+    },
+    {
+      "artifactId": 11319598595,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37247985854,
+      "sourceCommit": "eec9aa3d7cfebb763dccab222167fc0a60c3252a",
+      "archiveSHA256": "623ffb155fd509120cd7bb8f56f488e1776c7601e7db4163a86e2ad466a1b6dd",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "8638648610ea1f2664671ee6f51d014bd8834d8b58b55bac8811b3bece68e84c"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "4594903fd026bcc8d50a07a81e46a6f8512e02009c9ad730bbfbf9b2cb6684e2"
+        }
+      ]
+    },
+    {
+      "artifactId": 11319409283,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37247982295,
+      "sourceCommit": "eec9aa3d7cfebb763dccab222167fc0a60c3252a",
+      "archiveSHA256": "6dca9ac3a4146dc3ea6e08a5f06980cc0e1bbfc4c4bb9df0c7bd261c39b9611f",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "f1bf18caaa2e1beeca6314d0e8391c12cc4e4af59dbb31b5a23c783518ad23f4"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "570bb18cfa3b07f8c22055cc850d6f46d9ceab74b02718eeea7f2bb29f1d2fad"
+        }
+      ]
+    },
+    {
+      "artifactId": 11319213161,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37246901386,
+      "sourceCommit": "ede2e11be092860e350b8559fbd71511eed1d7b4",
+      "archiveSHA256": "b40ae3e419c261a09fd0c8ce006c3fbb8f4e88bc509849f169563e2857ad0910",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "22f75099f19409c6c9a675d4f7e33c12ee69c3cc420c2bc82b84c9464a011ac2"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "8deeab6c6b9f4156c0a1b7a7f60d2feb8df47a3c2c09d0a727c093ceed38286b"
+        }
+      ]
+    },
+    {
+      "artifactId": 11318853840,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 37246880224,
+      "sourceCommit": "ede2e11be092860e350b8559fbd71511eed1d7b4",
+      "archiveSHA256": "de8deca23b792195bdcfd78350a9c6591ccb11bc2ec1e7dcd3b80a3f35174f1e",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "e4ab74322134dc31b562a9f73d5e4d5e336d599ca2aa791ea8404ad1c303cab7"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "7f79ce90beacd90627ba83880947e4ce97277fc3a9724350a91fec402b631e44"
+        }
+      ]
+    },
+    {
+      "artifactId": 11015516508,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 36527649245,
+      "sourceCommit": "cd5516b8c975210b61904087ec5f93363f79534e",
+      "archiveSHA256": "f172985402f6a39b13391a742ce941c32aad132699fbff43127b900b2f7e7ad1",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "adfff4b26d41a6a14f4a3b5febbadbe107713b04411e3198daae168b4d4f7398"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "f1420caee8b52e03e68264372d174033b792571c810cf4cefdd65abe590f0212"
+        }
+      ]
+    },
+    {
+      "artifactId": 11015077812,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 36527649212,
+      "sourceCommit": "cd5516b8c975210b61904087ec5f93363f79534e",
+      "archiveSHA256": "5742fe84c0703b361f005cd49ed02144ad6a06035a927484112668365cf3241d",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "22e437045867e3e75036fe3c8e023b6a6545bbe705cdd720fd0801f324b45a12"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "c86ef61fc484c345923cfdcce7d3f09e9ac814e69b4fb23ca48d3476d473bf5d"
+        }
+      ]
+    },
+    {
+      "artifactId": 11014050012,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 36523124355,
+      "sourceCommit": "263392f6ea5c51168d3ab50d6fcc5c82cdb66f2b",
+      "archiveSHA256": "76adcdb555e3cd40fab62e49fcf998ab68061b88bfe3976537004d51994a14ef",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "bbed4adcec8406d3ce87ca63180f21e926540d98cf05fdb3aff4ca75bdcc01ca"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "ccf1e671f163cbdd967c0a6ba5a703b2ad62d06ec2249e0bde8a22b485854e3c"
+        }
+      ]
+    },
+    {
+      "artifactId": 11013364586,
+      "artifactName": "allowit-linux-amd64",
+      "workflowRunId": 36523125444,
+      "sourceCommit": "263392f6ea5c51168d3ab50d6fcc5c82cdb66f2b",
+      "archiveSHA256": "1adac9810ef7c3ed773c3781bc864282cf494d316af803d33aefec2f7bac2cc9",
+      "files": [
+        {
+          "name": "allowit-linux-amd64",
+          "sha256": "d8ffee6ae6e947035bcb4cffd3293efecce06ade7c3062271c4aa6706203304c"
+        },
+        {
+          "name": "allowit-linux-amd64.sha256",
+          "sha256": "10e34c49c4c37a18e841d12d349fa96aa1e31ebd6568cfc1a3874eee14a57c40"
+        }
+      ]
+    }
+  ]
+}
