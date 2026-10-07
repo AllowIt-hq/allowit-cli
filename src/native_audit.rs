@@ -283,6 +283,14 @@ impl Rpc for AuditedRpc {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use allowit_native::{
+        client::{Config, Deployment, LOADER, NativeClient},
+        crypto::LocalSigner,
+        native::State,
+        policy::{Policy, digest, units},
+        release,
+        transaction::Transaction,
+    };
     use std::{
         io::{Read, Write},
         net::TcpListener,
@@ -405,6 +413,202 @@ mod tests {
     }
     fn acknowledgment() -> Value {
         json!({"id":record().id,"signature":record().signature,"policyId":"fixture-policy","method":"execute","status":"uncertain"})
+    }
+    struct Offline;
+    impl Rpc for Offline {
+        fn call(&self, _: &str, _: Value) -> Result<Value> {
+            Err(allowit_native::error::Error::config("unexpected test RPC"))
+        }
+    }
+    fn seeded(seed: u8, public: &str) -> LocalSigner {
+        let public = Key::parse(public).unwrap();
+        let mut pair = [seed; 64];
+        pair[32..].copy_from_slice(&public.0);
+        LocalSigner::from_secret(&pair).unwrap()
+    }
+    #[test]
+    fn scoped_execute_request_accepts_only_the_canonical_authority_partial() {
+        let owner = seeded(1, "AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9");
+        let executor = seeded(2, "9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu");
+        let authority = seeded(3, "GyGKxMyg1p9SsHfm15MkNUu1u9TN2JtTspcdmrtGUdse");
+        let policy =
+            Policy::generate("solana:testnet", "Spend up to 5 test tokens per day").unwrap();
+        let policy_program = Key([7; 32]);
+        let deployment = Deployment {
+            network: policy.network.clone(),
+            source_bundle: release().source_bundle.clone(),
+            policy: policy_program,
+            policy_data: Key::find_program_address(
+                &[&policy_program.0],
+                Key::parse(LOADER).unwrap(),
+            )
+            .unwrap()
+            .0,
+            custody: Key([9; 32]),
+        };
+        let client = NativeClient::new(
+            Config {
+                network: policy.network.clone(),
+                mint: Some(Key([4; 32])),
+                executor: Some(executor.public_key()),
+                authority: Some(authority.public_key()),
+                deployment: Some(deployment),
+            },
+            Arc::new(Offline),
+        )
+        .unwrap();
+        let binding = client.public_binding(&policy, owner.public_key()).unwrap();
+        let state = State {
+            binding: binding.clone(),
+            abi: 2,
+            source_bundle: policy.source_bundle.clone(),
+            policy_artifact: policy.policy_artifact.clone(),
+            vault_id: policy.id.clone(),
+            daily_limit: "5000000".into(),
+            action_limit: "1000000".into(),
+            spent: "0".into(),
+            spent_day: "0".into(),
+            nonce: "4".into(),
+            revision: "7".into(),
+            instance_slot: "19".into(),
+            approved: true,
+            balance: "5000000".into(),
+        };
+        let context = json!({"invoice":"fixed-1"});
+        let identity = ExecutionRequestIdentity::new(
+            &policy,
+            "server-authorize-001",
+            "1.0",
+            owner.public_key(),
+            "fetch fixed fixture",
+            "fixture merchant",
+            &context,
+        )
+        .unwrap();
+        let request = ApprovalRequest {
+            version: 1,
+            operation_id: identity.operation_id.clone(),
+            input_digest: identity.digest().unwrap(),
+            vault_policy_id: policy.id.clone(),
+            execution_policy_id: "fixture-execution-policy".into(),
+            execution_policy_digest: policy.execution_policy_digest.clone(),
+            execution_requirements_digest: policy.execution_requirements_digest.clone(),
+            execution_policy_revision: 2,
+            recipient: identity.recipient,
+            amount_units: units(&identity.amount).unwrap(),
+            action: identity.action.clone(),
+            merchant: identity.merchant.clone(),
+            context_hash: identity.context_hash.clone(),
+            decision_code: "PASS".into(),
+            evidence_digest: digest(b"[]"),
+        };
+        let approval = ApprovalCommitment::new(
+            &policy,
+            &state,
+            &identity.operation_id,
+            identity.recipient,
+            &identity.amount,
+            200,
+            &request.digest().unwrap(),
+            None,
+        )
+        .unwrap();
+        let options = approval.options().unwrap();
+        let blockhash = Key([10; 32]);
+        let transaction = Transaction::new(
+            binding.executor,
+            blockhash,
+            client
+                .expected_instructions(&policy, &binding, "execute", &options, Some("4"), Some("7"))
+                .unwrap(),
+        )
+        .unwrap();
+        let partial = transaction
+            .partially_signed(&[(authority.public_key(), authority.sign(&transaction.message))])
+            .unwrap();
+        let response = json!({
+            "binding": &binding,
+            "request": &request,
+            "approval": &approval,
+            "intent": allowit_native::lifecycle::intent_for(
+                &client,
+                &policy,
+                owner.public_key(),
+                "execute",
+                &options,
+            )
+            .unwrap(),
+            "message": base64::engine::general_purpose::STANDARD.encode(&transaction.message),
+            "partialTransaction": base64::engine::general_purpose::STANDARD.encode(&partial),
+            "operation": {
+                "id": &identity.operation_id,
+                "policyId": &policy.id,
+                "method": "execute",
+                "status": "prepared",
+                "blockhash": blockhash,
+                "lastValidBlockHeight": 100,
+                "nonce": "4",
+                "revision": "7",
+                "commitment": approval.digest().unwrap(),
+                "expiresAt": 200,
+                "instanceSlot": 19,
+                "decisionCode": "PASS",
+                "simulation": {"contextSlot":99,"unitsConsumed":10000,"transactionBytes":partial.len()},
+            },
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut header = Vec::new();
+            let mut byte = [0];
+            while !header.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                header.push(byte[0]);
+            }
+            let header = String::from_utf8(header).unwrap();
+            assert!(header.starts_with("POST /api/native/execute HTTP/1.1"));
+            assert!(
+                header
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer native-report.")
+            );
+            let length = header
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .and_then(|n| n.parse::<usize>().ok())
+                })
+                .unwrap();
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["requestId"], "server-authorize-001");
+            assert_eq!(body["action"], "fetch fixed fixture");
+            assert_eq!(body["merchant"], "fixture merchant");
+            assert_eq!(body["context"]["invoice"], "fixed-1");
+            assert_eq!(body["options"]["amount"], "1");
+            let response = response.to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{response}",
+                response.len()
+            )
+            .unwrap();
+        });
+        let reporter = Reporter::new(
+            AuditConfig {
+                origin,
+                token: format!("native-report.{}", "a".repeat(32)),
+            },
+            policy.id,
+        )
+        .unwrap();
+        let authorized = reporter.authorize(&identity, &context).unwrap();
+        assert_eq!(authorized.message, transaction.message);
+        assert_eq!(authorized.partial_transaction, partial);
+        server.join().unwrap();
     }
     #[test]
     fn durable_exact_proof_is_acknowledged_before_chain_broadcast() {
