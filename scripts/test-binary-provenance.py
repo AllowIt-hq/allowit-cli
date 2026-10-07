@@ -61,6 +61,13 @@ class ProvenanceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "snapshot differs"):
             provenance.manifest(self.repo, self.binary, "aarch64-apple-darwin")
 
+    def test_refuses_changed_sdk_license_attribution(self):
+        (self.repo / "vendor/native-sdk-licenses/LICENSE").write_text("changed attribution\n")
+        self.git("add", ".")
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "license drift")
+        with self.assertRaisesRegex(ValueError, "license snapshot differs"):
+            provenance.manifest(self.repo, self.binary, "aarch64-apple-darwin")
+
     def test_refuses_wrong_binary_architecture(self):
         with self.assertRaisesRegex(ValueError, "architecture"):
             provenance.manifest(self.repo, self.binary, "x86_64-apple-darwin")

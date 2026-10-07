@@ -1,10 +1,10 @@
 {
   "repository": "https://github.com/ackrate/AllowIt-sdk",
-  "commit": "6406b1ab26906868c7669e92ad64e96386b0f031",
+  "commit": "d9bad971e29f83c73bdc6a125760aa2f8bc39e63",
   "crate": "native-rust",
   "files": {
     "Cargo.lock": "9db53ba03334edc68fb6ffc6f886f706ea6c2ee1b163d4fb147b717a4fb22da2",
-    "Cargo.toml": "272c63263e5459f5701f7ae2ba4e4145d09121899d540dfb952fb7d4dc741cec",
+    "Cargo.toml": "dae5b65355d9bb937065aaf675f25ccf281ee966020db7fc7cca56423438d4c6",
     "src/client.rs": "b4d6df8236686847629fcc4651f304014cff09fb2cc6be50fc934ebbee947b41",
     "src/crypto.rs": "83a9a5a8138382b387845f223128d58f0c3e0e725f836841cc086dda3a7286e9",
     "src/error.rs": "c4b9e48e7dcfc00650ce28fd2e36d213fb986d35c4a66fbc431804899e2662a3",
@@ -19,5 +19,10 @@
     "tests/lifecycle.rs": "f7d82cede9cd60f2805439fbdfdd26c6949a0c08e27357b83e74238cc6ec6a81",
     "tests/reference.json": "6decd0974fb99ffb5633b99321a25bd524ffdb5b92c95137ffb6241b408f3378",
     "tests/reference.rs": "6e16ab4a19987ee2bc2fb1b6ab104c137688e640218a5a9265e37a51fe1d09a3"
+  },
+  "licenses": {
+    "LICENSE": "750548edc096b7599f0aa6816b3a6dfb983d75ba81bc8c4925f968ef048a4734",
+    "THIRD_PARTY_NOTICES.md": "16e5dbbe0d95f445ee34440d1d8b3296e9131a409ba654077eefdb158d361715",
+    "licenses/Aeneas-Apache-2.0.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
   }
 }

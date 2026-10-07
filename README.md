@@ -1,33 +1,34 @@
 # allowit
 
-`allowit` sends an agent's actions through an AllowIt policy. It is a thin, strict client for one policy's harness API; the policy itself (restricted Rust, evaluated by the shared SDK WASM on the AllowIt server) decides. The CLI cannot bypass the policy, the owner-input gate or the server's request schema.
+`allowit` is a native Rust CLI for AllowIt policies. Its HTTP commands send agent requests through the AllowIt service; its native policy commands use the pinned Rust SDK locally for generation, signing, receipt validation and recovery. The CLI cannot bypass the policy, owner approval or server request schema.
 
-Rust migration candidate. All commands call Rust modules directly, including the pinned native SDK for policy generation, signing, receipt validation and recovery. The candidate requires final review and platform checks before release. The Go implementation is retained under `reference/go/` as a differential test oracle; it is not the default command or distribution build.
+All commands call Rust modules directly. The binary needs no Node runtime. The Go implementation under `reference/go/` is a differential test oracle; the default command and distribution build use Rust.
 
-This branch is the untagged `0.3.0-dev` candidate. Build from this checkout to use its gateway compatibility fixes and the `allowit policy` owner lifecycle commands. The tagged `v0.1.1` installation below remains the earlier release.
+Main contains the untagged `0.3.0-dev` implementation. No native Rust GitHub Release has been published. The existing `v0.1.0` and `v0.1.1` tags identify earlier Go releases.
 
-## Install
+## Build from source
 
-`github.com/ackrate/allowit-cli` is private; installing needs authorized GitHub access. There is no public download.
+Use Rust 1.85 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
 
 ```sh
-GOPRIVATE=github.com/ackrate/* go install github.com/ackrate/allowit-cli/cmd/allowit@v0.1.1
-allowit version
+git clone https://github.com/ackrate/allowit-cli.git
+cd allowit-cli
+cargo build --locked --release
+./target/release/allowit version
 ```
 
-Or build the Rust candidate from a checkout (Rust 1.85 or later):
+Validation and distribution builds:
 
 ```sh
-cargo build --locked --release         # target/release/allowit
 make test                             # Rust tests + Go reference regressions
 make parity                           # original harness cases against Rust
 make integration APP_REPO=/path/to/AllowIt-app
 make dist                             # static Linux/musl distribution
 ```
 
-`make dist` requires the `x86_64-unknown-linux-musl` target and a suitable musl linker. CI installs both and uploads `dist/allowit-linux-amd64` with its SHA-256. The lockfile pins the complete dependency graph. The old Go installation above remains available for the earlier tagged release.
+`make dist` requires the `x86_64-unknown-linux-musl` target and a suitable musl linker. CI installs both and uploads `dist/allowit-linux-amd64` with its SHA-256. The lockfile pins the complete dependency graph.
 
-The **Native binaries** workflow validates PRs and supports manual builds of Linux x64 (static musl), macOS Apple Silicon and macOS Intel, with checksums and a source-free smoke test whose PATH has no Node installation. It uploads private workflow artifacts; it does not publish a GitHub Release. Windows is not yet validated. These distribution checks must pass on the complete native lifecycle port before a release is accepted.
+The **Native binaries** workflow validates PRs and supports manual builds of Linux x64 (static musl), macOS Apple Silicon and macOS Intel, with checksums and a source-free smoke test whose PATH has no Node installation. It uploads workflow artifacts; it does not publish a GitHub Release. Windows is not yet validated. Distribution checks must pass for the exact release revision before a release is accepted.
 
 The CLI is independent of the optional hosted-agent runtime. A host can install the same binary used by an external agent; this repository contains no sandbox launcher, supervisor or model proxy.
 
@@ -181,28 +182,14 @@ The configured token is redacted in full from all output, whatever its length. I
 
 ## API used
 
-`GET /api/harness/{owner}/{policy}/skill`, `POST …/judge`, `POST …/transactions`, `POST …/status`, with `Authorization: Bearer owner.policy.secret`. See `AllowIt-app/server/app/policy_requests.go` for validation.
+HTTP action commands use `GET /api/harness/{owner}/{policy}/skill` and `POST` routes for `judge`, `transactions` and `status`, with the policy-scoped bearer token. The frontend proxies this public API to the Rust backend in `ackrate/AllowIt-engine/server/`. The CLI does not link backend or engine crates.
 
-## Server compatibility
+The HTTP commands report server states and preserve owner approval. Native `policy execute` uses the executor's local key and standing policy approval; it cannot sign owner operations. An exported bundle with an audit capability additionally requires the server acknowledgment described above.
 
-The agent interface is exactly these four commands (`show`, `eval`, `exec`, `status`). `allowit policy` is the owner's tool, not the agent's; see [Owner policy lifecycle](#owner-policy-lifecycle). Otherwise policy creation, editing, allocation and owner approval stay in the AllowIt web app; the token cannot answer owner questions, sign or change the policy.
+The [integration checks](integration/README.md) retain pinned Go gateways and their Rust SDK runtimes as compatibility fixtures. They do not represent a production deployment. Run `make integration APP_REPO=/path/to/AllowIt-app` alongside `make test` when both fixture commits are available locally.
 
-| Server | `/skill` shape | CLI behaviour |
-|---|---|---|
-| AllowIt backend with typed skill assembly (`server/app/skill.go`, `skill_contract.go`) | `title`, `policyId`, `owner`, absolute `endpoints`, `executionMode`, legacy `capabilities`, typed `contract` (profile, binding, capabilities, `contextU64Keys`). Results carry `kind`, `revision`, `sourceHash`. A policy whose skill cannot be assembled gets HTTP 409. | All checks above apply. `show` also prints the IR binding and the integer `context` fields the policy may read. On a 409, `show`/`eval`/`exec` stop with exit 4; `status` still reads existing requests. |
-| Customer-workspace frontend server (AllowIt-app PR6) | `name`, `network`, `executionMode`, relative `endpoints`; no `title`, `policyId`, `owner`, `capabilities` or `contract`. Results omit `kind`, `revision` and `sourceHash`. | Supported as described: relative endpoints must resolve to the canonical routes and the network must be supported. A wallet policy allows `--rail solana --op transferUSDC` or plain USDC requests with `--action transfer` or `--action research`. Without `kind`, a `ready` status result is reported as `ready` (exit 10, not complete), never as passed or awaiting signature. |
-| Older backends | No `endpoints`, `owner` or `contract`. | Supported as before, except that `--action` is now required. |
+## License and binary notices
 
-The CLI reports the server's states. It has not been exercised against live wallet settlement, and no paid service is delivered through this interface.
-
-**Remaining backend handoff work** (none of it is in this CLI):
-
-- Customer server: publish `policyId`, `owner`, absolute canonical `endpoints`, and the typed `contract` (profile, binding, capabilities) in `/skill`. Return `kind` in results so a ready `status` can be classified.
-- Preserve the tested `executionMode` values (`local` and `owner_signed`); a new execution profile needs an explicit CLI implementation.
-- Customer UI: explicit allocation activation, capability handoff, and the owner review and transaction path. Until those exist, `exec` on a wallet policy stops at `owner_signature`.
-- Wiring the frontend server to the standalone SDK/engine is later work. The engine's `/v1` API takes trusted service credentials and signed owner bindings, so a harness token must never be sent to it. The adapter must also keep `eval` non-reserving, request identity, revisions, owner continuations and settlement evidence.
-- The app's SKILL.md CLI adapter documents allowit `0.1.1`; update `cliVersion` there when this release is tagged.
-
-The [pinned integration checks](integration/README.md) exercise both actual Go gateways and their Rust SDK runtimes without editing the app checkout. Run `make integration APP_REPO=/path/to/AllowIt-app` in addition to `make test` when both backend commits are available locally.
+First-party code is licensed under [MIT](LICENSE). Dependency licenses remain their own; [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES/README.md) contains the exact dependency notices and runtime attribution for current and historical workflow binaries. Keep this companion directory with downloaded binaries. New workflow artifacts include it with `LICENSE`, the checksum and provenance manifest.
 
 Skill format: [Agent Skills specification](https://agentskills.io/specification) and [best practices](https://agentskills.io/skill-creation/best-practices).

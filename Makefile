@@ -5,6 +5,8 @@ RUST_TARGET ?= x86_64-unknown-linux-musl
 .PHONY: test parity integration build dist clean
 
 test:
+	python3 scripts/package-licenses.py
+	python3 scripts/test-package-licenses.py
 	$(CARGO) fmt --check
 	$(CARGO) clippy --locked --all-targets -- -D warnings
 	$(CARGO) test --locked
@@ -28,6 +30,7 @@ build:
 dist:
 	$(CARGO) build --locked --release --target $(RUST_TARGET)
 	mkdir -p dist
+	python3 scripts/package-licenses.py --dist dist
 	cp target/$(RUST_TARGET)/release/allowit dist/allowit-linux-amd64
 	cd dist && (command -v sha256sum >/dev/null && sha256sum allowit-linux-amd64 || shasum -a 256 allowit-linux-amd64) > allowit-linux-amd64.sha256
 

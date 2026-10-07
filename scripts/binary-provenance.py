@@ -48,6 +48,12 @@ def manifest(repo, binary, target):
             raise ValueError("SDK source must be a regular snapshot file")
         if hashlib.sha256(source.read_bytes()).hexdigest() != expected:
             raise ValueError("SDK snapshot differs from its pin")
+    for name, expected in sdk.get("licenses", {}).items():
+        if name not in {"LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/Aeneas-Apache-2.0.txt"}:
+            raise ValueError("Invalid SDK license snapshot path")
+        source = repo / "vendor/native-sdk-licenses" / name
+        if source.is_symlink() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
+            raise ValueError("SDK license snapshot differs from its pin")
     release = json.loads((repo / "vendor/allowit-native/src/release.json").read_text())
     version = re.search(r'^version = "([^"]+)"$', (repo / "Cargo.toml").read_text(), re.M)[1]
     value = {

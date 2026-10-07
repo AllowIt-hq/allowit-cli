@@ -35,7 +35,14 @@ if 'Cargo.toml' not in files or 'src/lib.rs' not in files:
     raise SystemExit('native Rust SDK source missing')
 root = Path(__file__).resolve().parents[1]
 vendored = root / 'vendor' / 'allowit-native'
+legal = {}
+for name in ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/Aeneas-Apache-2.0.txt']:
+    present = subprocess.run(['git', '-C', str(args.sdk_repo), 'cat-file', '-e', revision + ':' + name], capture_output=True)
+    if present.returncode == 0:
+        legal[name] = subprocess.check_output(['git', '-C', str(args.sdk_repo), 'show', revision + ':' + name])
 manifest = {'repository': 'https://github.com/ackrate/AllowIt-sdk', 'commit': revision, 'crate': 'native-rust', 'files': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(files.items())}}
+if legal:
+    manifest['licenses'] = {name: hashlib.sha256(data).hexdigest() for name, data in sorted(legal.items())}
 manifest_text = json.dumps(manifest, indent=2) + '\n'
 if args.check:
     if (root / 'vendor' / 'native-sdk.json').read_text() != manifest_text:
@@ -43,11 +50,19 @@ if args.check:
     actual = {p.relative_to(vendored).as_posix(): p.read_bytes() for p in vendored.rglob('*') if p.is_file()}
     if actual != files:
         raise SystemExit('vendored SDK source differs from pinned commit')
+    actual_legal = {p.relative_to(root / 'vendor/native-sdk-licenses').as_posix(): p.read_bytes() for p in (root / 'vendor/native-sdk-licenses').rglob('*') if p.is_file()}
+    if actual_legal != legal:
+        raise SystemExit('vendored SDK license material differs from pinned commit')
 else:
     # Remove only tracked-snapshot files from the old manifest, never walk-delete
     # a working directory, build output or a developer's unrelated files.
     old_manifest = root / 'vendor' / 'native-sdk.json'
     old = json.loads(old_manifest.read_text())['files'] if old_manifest.exists() else {}
+    old_legal = json.loads(old_manifest.read_text()).get('licenses', {}) if old_manifest.exists() else {}
+    for name in set(old_legal) - set(legal):
+        if name not in {'LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/Aeneas-Apache-2.0.txt'}:
+            raise SystemExit('unsafe old SDK license name')
+        (root / 'vendor/native-sdk-licenses' / name).unlink(missing_ok=True)
     for name in set(old) - set(files):
         path = vendored / name
         if '..' in Path(name).parts or Path(name).is_absolute():
@@ -58,5 +73,9 @@ else:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
     old_manifest.parent.mkdir(parents=True, exist_ok=True)
+    for name, data in legal.items():
+        path = root / 'vendor/native-sdk-licenses' / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
     old_manifest.write_text(manifest_text)
 print('Verified native Rust SDK snapshot ' + revision if args.check else 'Pinned native Rust SDK snapshot ' + revision)

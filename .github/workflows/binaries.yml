@@ -69,6 +69,8 @@ jobs:
           assert policy['network'] == 'solana:testnet'
           assert policy['profile'] == 'solana-native-v1'
           PY
+      - name: Package license notices
+        run: python3 scripts/package-licenses.py --dist dist
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
