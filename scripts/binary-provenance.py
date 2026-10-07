@@ -49,7 +49,7 @@ def manifest(repo, binary, target):
         if hashlib.sha256(source.read_bytes()).hexdigest() != expected:
             raise ValueError("SDK snapshot differs from its pin")
     for name, expected in sdk.get("licenses", {}).items():
-        if name not in {"LICENSE", "THIRD_PARTY_NOTICES.md"}:
+        if name not in {"LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/Aeneas-Apache-2.0.txt"}:
             raise ValueError("Invalid SDK license snapshot path")
         source = repo / "vendor/native-sdk-licenses" / name
         if source.is_symlink() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:

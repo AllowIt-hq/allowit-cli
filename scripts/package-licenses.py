@@ -69,7 +69,7 @@ def validate(root):
     if 'LICENSE' not in sdk.get('licenses', {}):
         raise ValueError('Pinned SDK license snapshot is missing')
     for name, digest in sdk['licenses'].items():
-        if name not in {'LICENSE', 'THIRD_PARTY_NOTICES.md'}:
+        if name not in {'LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/Aeneas-Apache-2.0.txt'}:
             raise ValueError('SDK license path is invalid')
         file = root / 'vendor/native-sdk-licenses' / name
         if file.is_symlink() or hashlib.sha256(file.read_bytes()).hexdigest() != digest:
