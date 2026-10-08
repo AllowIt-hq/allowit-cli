@@ -166,7 +166,7 @@ Decimals are plain digits with an optional fraction: no sign, exponent, separato
 **SDK source pin.** Cargo builds `allowit-native` from `repos/AllowIt-hq--allowit-sdk/native-rust`, a Git submodule of `https://github.com/AllowIt-hq/allowit-sdk.git`. The parent repository's gitlink pins the exact SDK commit. `vendor/native-sdk.json` records that commit, the submodule path and URL, SHA-256 hashes of the crate files Cargo consumes, the crate's unconsumed SDK tooling, and the SDK's upstream license files. The repository keeps no copies of SDK source or license text.
 
 ```sh
-python3 scripts/sync-native-sdk.py verify              # every make build target, CI, provenance and license packaging run this
+python3 scripts/sync-native-sdk.py verify              # run by make test/parity/build/dist, CI, provenance and license packaging
 python3 scripts/sync-native-sdk.py update FULL_COMMIT  # check out an exact SDK commit, record and stage it
 python3 scripts/sync-native-sdk.py pin                 # record and stage the checked-out submodule commit
 ```
@@ -175,8 +175,9 @@ python3 scripts/sync-native-sdk.py pin                 # record and stage the ch
 
 - `.gitmodules` names only the canonical URL.
 - The index holds a mode `160000` gitlink at the recorded commit.
-- The submodule is initialized and clean, with its `HEAD` at that commit.
+- The submodule is initialized and clean, including untracked and ignored files, with its `HEAD` at that commit.
 - `native-rust/` contains exactly the recorded files, including untracked or ignored files such as an injected `build.rs`. That file set must also match the pinned commit's Git tree.
+- The SDK root's Cargo discovery inputs (`Cargo.toml`, `Cargo.lock` and everything under `.cargo/`) are regular files, not symlinks, and their checked-out and tracked file sets and bytes match the pinned commit's tree and blobs. They are checked but not recorded in the metadata.
 - The recorded hashes of the crate files and the SDK root's license files match the blobs at the pinned commit, read from Git's object store. The checked-out bytes must match those same blobs.
 
 Hashes cover the bytes with CRLF read as LF in files Git treats as text (no NUL in the first 8000 bytes), so a clean Windows `core.autocrlf` checkout verifies against the same metadata. Any other byte change fails, including one hidden by a local Git filter, `assume-unchanged`/`skip-worktree` or a replace ref. Inherited `GIT_*` variables are ignored. License packaging copies the checkout's notice files unchanged.
@@ -209,7 +210,7 @@ The configured token is redacted in full from all output, whatever its length. I
 
 ## API used
 
-HTTP action commands use `GET /api/harness/{owner}/{policy}/skill` and `POST` routes for `judge`, `transactions` and `status`, with the policy-scoped bearer token. The frontend proxies this public API to the Rust backend in `AllowIt-hq/allowit-engine/server/`. The CLI does not link backend or engine crates.
+HTTP action commands use `GET /api/harness/{owner}/{policy}/skill` and `POST` routes for `judge`, `transactions` and `status`, with the policy-scoped bearer token. The frontend proxies this public API to the Rust backend in `AllowIt-hq/allowit-engine/crates/server/` (the engine's root `server/` is its deployment wrapper). The CLI does not link backend or engine crates.
 
 The HTTP commands report server states and preserve owner approval. Native `policy execute` uses the executor's local key plus the trusted server authority signature and cannot sign owner operations. Owner withdrawal and closure never depend on the executor, authority, or semantic provider.
 

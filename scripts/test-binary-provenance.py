@@ -91,12 +91,21 @@ class ProvenanceTests(unittest.TestCase):
         fixture.exclude(self.repo, "/native-rust/build.rs")
         (self.sdk / "native-rust/build.rs").write_bytes(b"fn main() {}\r\n")
         self.assertEqual(fixture.git(self.sdk, "status", "--porcelain", "--untracked-files=all"), "")
-        with self.assertRaisesRegex(ValueError, "file set"):
+        with self.assertRaisesRegex(ValueError, "submodule must be clean"):
             self.manifest()
 
     def test_refuses_uncommitted_source(self):
         with (self.repo / "Cargo.toml").open("a") as handle:
             handle.write("\n# edited\n")
+        with self.assertRaisesRegex(ValueError, "committed"):
+            self.manifest()
+
+    def test_refuses_untracked_parent_cargo_config_hidden_by_status_config(self):
+        self.git("config", "status.showUntrackedFiles", "no")
+        config = self.repo / ".cargo/config.toml"
+        config.parent.mkdir()
+        config.write_text('[build]\nrustflags = ["--cfg", "injected"]\n')
+        self.assertEqual(self.git("status", "--porcelain"), "")
         with self.assertRaisesRegex(ValueError, "committed"):
             self.manifest()
 
@@ -180,7 +189,7 @@ class ProvenanceTests(unittest.TestCase):
         fixture.exclude(self.repo, "/native-rust/build.rs")
         (self.sdk / "native-rust/build.rs").write_text("fn main() {}\n")
         self.assertEqual(fixture.git(self.sdk, "status", "--porcelain", "--untracked-files=all"), "")
-        with self.assertRaisesRegex(ValueError, "file set"):
+        with self.assertRaisesRegex(ValueError, "submodule must be clean"):
             self.manifest()
 
     def test_refuses_hidden_sdk_source_change(self):
@@ -230,6 +239,121 @@ class ProvenanceTests(unittest.TestCase):
             self.manifest()
         with self.assertRaisesRegex(ValueError, "checkout differs from its pinned commit: LICENSE"):
             provenance.native_sdk.describe(self.repo)
+
+    def discovery(self):
+        return provenance.native_sdk.discovery(self.sdk, fixture.git(self.sdk, "rev-parse", "HEAD"))
+
+    def test_refuses_ignored_sdk_root_cargo_config(self):
+        self.assertFalse(os.path.lexists(self.sdk / ".cargo"))
+        fixture.exclude(self.repo, "/.cargo/")
+        config = self.sdk / ".cargo/config.toml"
+        config.parent.mkdir()
+        config.write_text('[build]\nrustflags = ["--cfg", "injected"]\n')
+        self.assertEqual(fixture.git(self.sdk, "status", "--porcelain", "--untracked-files=all"), "")
+        for action in [self.manifest, lambda: provenance.native_sdk.describe(self.repo)]:
+            with self.assertRaisesRegex(ValueError, "submodule must be clean"):
+                action()
+        with self.assertRaisesRegex(ValueError, "Cargo discovery file set"):
+            self.discovery()
+
+    def test_refuses_sdk_root_cargo_config_symlink(self):
+        target = Path(self.tmp.name) / "config"
+        target.mkdir()
+        (target / "config.toml").write_text('[build]\nrustflags = ["--cfg", "injected"]\n')
+        fixture.exclude(self.repo, "/.cargo")
+        (self.sdk / ".cargo").symlink_to(target, target_is_directory=True)
+        self.assertEqual(fixture.git(self.sdk, "status", "--porcelain", "--untracked-files=all"), "")
+        with self.assertRaisesRegex(ValueError, "submodule must be clean"):
+            self.manifest()
+        with self.assertRaisesRegex(ValueError, "regular file or directory: .cargo"):
+            self.discovery()
+
+    def test_refuses_hidden_sdk_workspace_manifest(self):
+        original = (self.sdk / "Cargo.toml").read_bytes()
+        workspace = original + b'\n[workspace]\nmembers = ["native-rust"]\n'
+        for flag in ["--skip-worktree", "--assume-unchanged"]:
+            with self.subTest(flag=flag):
+                fixture.hide(self.repo, "Cargo.toml", workspace, flag)
+                with self.assertRaisesRegex(ValueError, "checkout differs from its pinned commit: Cargo.toml"):
+                    self.manifest()
+                fixture.git(self.sdk, "update-index", flag.replace("--", "--no-", 1), "--", "Cargo.toml")
+                (self.sdk / "Cargo.toml").write_bytes(original)
+        self.manifest()
+
+    def test_refuses_hidden_sdk_lockfile_change_or_removal(self):
+        self.assertEqual(fixture.git(self.sdk, "ls-files", "--", "Cargo.lock"), "Cargo.lock")
+        lock = self.sdk / "Cargo.lock"
+        original = lock.read_bytes()
+        fixture.hide(self.repo, "Cargo.lock", original + b"\n# hidden\n", "--assume-unchanged")
+        with self.assertRaisesRegex(ValueError, "checkout differs from its pinned commit: Cargo.lock"):
+            self.manifest()
+        fixture.git(self.sdk, "update-index", "--no-assume-unchanged", "--", "Cargo.lock")
+        lock.write_bytes(original)
+        fixture.git(self.sdk, "update-index", "--skip-worktree", "--", "Cargo.lock")
+        lock.unlink()
+        self.assertEqual(fixture.git(self.sdk, "status", "--porcelain", "--untracked-files=all", "--ignored"), "")
+        with self.assertRaisesRegex(ValueError, "Cargo discovery file set"):
+            self.manifest()
+
+    def test_pin_and_describe_refuse_hidden_sdk_workspace_manifest(self):
+        metadata = (self.repo / "vendor/native-sdk.json").read_bytes()
+        gitlink = self.git("ls-files", "--stage", "--", fixture.SDK)
+        workspace = (self.sdk / "Cargo.toml").read_bytes() + b'\n[workspace]\nmembers = ["native-rust"]\n'
+        fixture.hide(self.repo, "Cargo.toml", workspace)
+        for action in [provenance.native_sdk.describe, provenance.native_sdk.pin]:
+            with self.subTest(action=action.__name__):
+                with self.assertRaisesRegex(ValueError, "checkout differs from its pinned commit: Cargo.toml"):
+                    action(self.repo)
+        self.assertEqual((self.repo / "vendor/native-sdk.json").read_bytes(), metadata)
+        self.assertEqual(self.git("ls-files", "--stage", "--", fixture.SDK), gitlink)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+
+    def test_refuses_hidden_tracked_sdk_cargo_config(self):
+        # Fixture-local SDK commit with a tracked config; the production pin is unchanged.
+        config = self.sdk / ".cargo/config.toml"
+        config.parent.mkdir()
+        config.write_text("[net]\noffline = true\n")
+        fixture.commit(self.sdk, "cargo config")
+        fixture.repin(self.repo)
+        recorded = json.loads((self.repo / "vendor/native-sdk.json").read_text())
+        self.assertEqual(self.manifest()["sdk"], recorded)
+        self.assertEqual(provenance.native_sdk.describe(self.repo), recorded)
+
+        fixture.hide(self.repo, ".cargo/config.toml", b'[build]\nrustflags = ["--cfg", "hidden"]\n')
+        for action in [self.manifest, lambda: provenance.native_sdk.describe(self.repo)]:
+            with self.assertRaisesRegex(ValueError, "checkout differs from its pinned commit: .cargo/config.toml"):
+                action()
+
+        # Hidden removal of the tracked config changes the discovered file set.
+        config.unlink()
+        self.assertEqual(fixture.git(self.sdk, "status", "--porcelain", "--untracked-files=all", "--ignored"), "")
+        for action in [self.manifest, lambda: provenance.native_sdk.pin(self.repo)]:
+            with self.assertRaisesRegex(ValueError, "Cargo discovery file set"):
+                action()
+        fixture.git(self.sdk, "update-index", "--no-skip-worktree", "--", ".cargo/config.toml")
+        fixture.git(self.sdk, "checkout", "-q", "--", ".cargo/config.toml")
+        self.assertEqual(self.manifest()["sdk"], recorded)
+
+        # An ignored nested config is an extra discovery input.
+        fixture.exclude(self.repo, "/.cargo/nested/")
+        nested = self.sdk / ".cargo/nested/config.toml"
+        nested.parent.mkdir()
+        nested.write_text('[build]\nrustflags = ["--cfg", "nested"]\n')
+        self.assertEqual(fixture.git(self.sdk, "status", "--porcelain", "--untracked-files=all"), "")
+        with self.assertRaisesRegex(ValueError, "submodule must be clean"):
+            self.manifest()
+        with self.assertRaisesRegex(ValueError, "Cargo discovery file set"):
+            self.discovery()
+
+    def test_accepts_tracked_sdk_cargo_config_in_autocrlf_checkout(self):
+        config = self.sdk / ".cargo/config.toml"
+        config.parent.mkdir()
+        config.write_text("[net]\noffline = true\n")
+        fixture.commit(self.sdk, "cargo config")
+        fixture.repin(self.repo)
+        fixture.autocrlf(self.repo)
+        self.assertIn(b"\r\n", config.read_bytes())
+        self.assertEqual(self.manifest()["sdk"], json.loads((self.repo / "vendor/native-sdk.json").read_text()))
 
     def test_pin_rerecords_unchanged_sdk_bytes(self):
         path = self.repo / "vendor/native-sdk.json"

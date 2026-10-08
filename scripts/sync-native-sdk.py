@@ -22,6 +22,8 @@ METADATA = 'vendor/native-sdk.json'
 LICENSES = ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/Aeneas-Apache-2.0.txt')
 REQUIRED = {'Cargo.toml', 'Cargo.lock', 'src/lib.rs', 'src/release.json'}
 COPIES = ('vendor/allowit-native', 'vendor/native-sdk-licenses')
+# SDK-root inputs Cargo discovers above the crate: workspace manifest, lockfile, config.
+DISCOVERY = ('Cargo.toml', 'Cargo.lock', '.cargo')
 
 
 def environment():
@@ -112,13 +114,37 @@ def inventory(crate):
     return names
 
 
+def discovery(sdk, commit):
+    """Bind the SDK root's Cargo discovery inputs to COMMIT's tree and blobs.
+
+    Cargo reads them whether they are ignored, untracked or hidden by
+    skip-worktree/assume-unchanged, so the checkout's files and the index's
+    tracked files must both equal the pinned set, byte for byte.
+    """
+    blobs = pinned(sdk, commit, *DISCOVERY)
+    present = set()
+    for name in DISCOVERY:
+        path = sdk / name
+        if not os.path.lexists(path):
+            continue
+        if path.is_symlink() or not (path.is_dir() if name == '.cargo' else path.is_file()):
+            raise ValueError('SDK Cargo discovery input must be a regular file or directory: ' + name)
+        if name == '.cargo':
+            present.update(f'{name}/{file}' for file in inventory(path))
+        else:
+            present.add(name)
+    if present != set(blobs) or set(listed(sdk, *DISCOVERY)) != set(blobs):
+        raise ValueError('SDK Cargo discovery file set differs from its pinned commit')
+    unchanged(sdk, blobs)
+
+
 def checkout(root):
     """Return the initialized submodule worktree, never the parent repository."""
     sdk = root / SUBMODULE
     top = command(sdk, 'rev-parse', '--show-toplevel', capture_output=True, text=True) if sdk.is_dir() else None
     if not top or top.returncode or Path(top.stdout.strip()).resolve() != sdk.resolve():
         raise ValueError('SDK submodule is not initialized; run git submodule update --init --recursive')
-    if git(sdk, 'status', '--porcelain', '--untracked-files=all'):
+    if git(sdk, 'status', '--porcelain', '--untracked-files=all', '--ignored'):
         raise ValueError('SDK submodule must be clean')
     return sdk
 
@@ -163,6 +189,7 @@ def verify(root):
         if digest(source[name]) != value:
             raise ValueError('SDK source differs from its pin: ' + name)
     unchanged(crate, source)
+    discovery(sdk_root, commit)
 
     licenses = sdk.get('licenses')
     if not isinstance(licenses, dict) or 'LICENSE' not in licenses:
@@ -200,6 +227,7 @@ def describe(root):
         raise ValueError('SDK license set differs from its commit')
     unchanged(crate, source)
     unchanged(sdk, legal)
+    discovery(sdk, commit)
     return {
         'repository': REPOSITORY,
         'commit': commit,

@@ -30,7 +30,7 @@ def git(repo, *args):
 def manifest(repo, binary, target):
     repo, binary = Path(repo).resolve(), Path(binary).resolve()
     sdk = native_sdk.verify(repo)
-    if git(repo, "status", "--porcelain", "--ignore-submodules=none"):
+    if git(repo, "status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all"):
         raise ValueError("Tracked source must be committed before recording provenance")
     asset, magic, cpu = TARGETS[target]
     raw = binary.read_bytes()
