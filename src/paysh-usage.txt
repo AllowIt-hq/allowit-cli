@@ -24,10 +24,16 @@ OPERATION_ID: an unknown result may still have paid. Check it with status, or
 rerun the identical call with the same OPERATION_ID. INPUT_JSON is limited to
 4096 bytes. Each request is sent once; nothing is retried automatically.
 
+awaiting_input means wait for, or ask, the owner to answer in AllowIt Requests.
+Do not generate a replacement operation. owner_approved records a signed Yes
+for the bounded original request; it is not payment or API delivery. Continue
+explicitly with status, or rerun the identical call with the same OPERATION_ID
+and original input. The CLI never answers for the owner or continues automatically.
+
 Exit codes: 0 delivered (the API response received), 2 usage,
 3 config or auth, 4 rejected request, 5 unknown result (keep the OPERATION_ID
 and check status) or status unknown/settlement_unknown (operation unresolved;
-payment may have been sent, never pay again for it), 12 pending (payment or delivery not complete; check
+payment may have been sent, never pay again for it), 12 pending (owner answer, payment or delivery not complete; check
 status), 20 failed or denied (no delivery). No HTTP error from call, including
 401, 404 and 429, proves that nothing was paid; it exits 5 with the original
 OPERATION_ID. JSON output includes paymentFinalized, derived from a pay receipt

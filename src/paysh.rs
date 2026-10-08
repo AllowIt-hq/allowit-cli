@@ -15,8 +15,10 @@ const USAGE: &str = include_str!("paysh-usage.txt");
 const MAX_INPUT: usize = 4096;
 const MAX_REPLY: usize = 1 << 20;
 const MAX_SHOWN: usize = 16 << 10;
-const PENDING: [&str; 7] = [
+const PENDING: [&str; 9] = [
     "evaluating",
+    "awaiting_input",
+    "owner_approved",
     "approved",
     "preparing",
     "signed",
@@ -396,6 +398,8 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
         "finalized"
     } else {
         match phase.as_str() {
+            "awaiting_input" => "not confirmed; waiting for the owner's signed answer",
+            "owner_approved" => "not confirmed; owner approval does not establish payment",
             "evaluating" | "approved" | "preparing" => {
                 "not sent; the policy is still checking this call"
             }
@@ -411,6 +415,8 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
         }
     };
     let delivery = match phase.as_str() {
+        "awaiting_input" => "waiting for the owner's answer in AllowIt Requests",
+        "owner_approved" => "not complete; the owner's signed Yes is recorded for this request",
         "delivered" if paid => "delivered",
         "delivered" => "response received; payment remains unresolved",
         "delivering" if paid => {
@@ -444,6 +450,12 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
         0 => {
             "The API response was received. No finalized payment receipt was provided.".to_string()
         }
+        12 if phase == "awaiting_input" => format!(
+            "Ask the owner to answer this request in AllowIt Requests, then check: allowit paysh status {policy} {op}. Keep the same OPERATION_ID; never create a replacement operation."
+        ),
+        12 if phase == "owner_approved" => format!(
+            "The signed Yes remains bounded to this original request. Continue with: allowit paysh status {policy} {op}, or explicitly rerun the identical call with the same OPERATION_ID and original input. No payment is established by the answer."
+        ),
         12 => format!(
             "Not complete. Check again with: allowit paysh status {policy} {op}. Never retry with a new OPERATION_ID."
         ),

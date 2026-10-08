@@ -195,9 +195,103 @@ fn status_posts_policy_and_operation_and_reports_pending() {
 }
 
 #[test]
+fn awaiting_owner_answer_reports_pending_and_sends_only_the_original_request() {
+    for command in ["call", "status"] {
+        let reply = json!({"operationId":"op-1","status":"awaiting_input","signatures":[],"receipts":[],"response":null});
+        let (url, seen) = serve(vec![http(200, &reply.to_string())]);
+        let args = if command == "call" {
+            vec!["paysh", "call", POLICY, "op-1", SERVICE, INPUT]
+        } else {
+            vec!["paysh", "status", POLICY, "op-1"]
+        };
+        let out = run(&url, &args, Some(TOKEN));
+        assert_eq!(out.status.code(), Some(12));
+        let (stdout, _) = text(&out);
+        assert!(stdout.contains("state: pending"));
+        assert!(stdout.contains("waiting for the owner's answer in AllowIt Requests"));
+        assert!(stdout.contains("never create a replacement operation"));
+        assert!(stdout.contains(&format!("allowit paysh status {POLICY} op-1")));
+        assert!(!stdout.contains("payment: finalized"));
+        let seen = seen.recv().unwrap();
+        assert_eq!(
+            seen.len(),
+            1,
+            "No automatic retry, poll, approval or replacement call"
+        );
+        assert_eq!(seen[0].path, format!("/api/paysh/{command}"));
+        assert_eq!(seen[0].json()["operationId"], "op-1");
+        if command == "call" {
+            assert_eq!(
+                seen[0].json()["input"],
+                serde_json::from_str::<Value>(INPUT).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn signed_yes_is_pending_until_explicit_same_operation_continuation_and_receipt() {
+    let approved = json!({"operationId":"op-1","status":"owner_approved","signatures":[],"receipts":[],"response":null});
+    let delivered = json!({"operationId":"op-1","status":"delivered","signatures":["paySig"],"receipts":[
+        {"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}],"response":{"aqi":42}});
+    let (url, seen) = serve(vec![
+        http(200, &approved.to_string()),
+        http(200, &delivered.to_string()),
+    ]);
+    let out = run(
+        &url,
+        &["paysh", "status", POLICY, "op-1", "--json"],
+        Some(TOKEN),
+    );
+    assert_eq!(out.status.code(), Some(12));
+    let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["state"], "pending");
+    assert_eq!(value["status"], "owner_approved");
+    assert_eq!(value["paymentFinalized"], false);
+    assert!(value["response"].is_null());
+    // A separate user command explicitly continues the original immutable call.
+    // The first CLI invocation must not have consumed the second response itself.
+    let out = run(
+        &url,
+        &["paysh", "call", POLICY, "op-1", SERVICE, INPUT, "--json"],
+        Some(TOKEN),
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["paymentFinalized"], true);
+    assert_eq!(value["operationId"], "op-1");
+    let seen = seen.recv().unwrap();
+    assert_eq!(
+        seen.len(),
+        2,
+        "Exactly the two explicit commands, never an automatic retry"
+    );
+    assert_eq!(seen[0].path, "/api/paysh/status");
+    assert_eq!(
+        seen[0].json(),
+        json!({"policyId":POLICY,"operationId":"op-1"})
+    );
+    assert_eq!(seen[1].path, "/api/paysh/call");
+    assert_eq!(
+        seen[1].json(),
+        json!({"policyId":POLICY,"operationId":"op-1","serviceId":SERVICE,"input":serde_json::from_str::<Value>(INPUT).unwrap()})
+    );
+    let (url, seen) = serve(vec![http(200, &approved.to_string())]);
+    let out = run(&url, &["paysh", "status", POLICY, "op-1"], Some(TOKEN));
+    assert_eq!(out.status.code(), Some(12));
+    let (stdout, _) = text(&out);
+    assert!(stdout.contains("owner approval does not establish payment"));
+    assert!(stdout.contains("signed Yes remains bounded to this original request"));
+    assert!(stdout.contains("identical call with the same OPERATION_ID and original input"));
+    assert_eq!(seen.recv().unwrap().len(), 1);
+}
+
+#[test]
 fn only_delivery_exits_zero() {
     for (status, code) in [
         ("evaluating", 12),
+        ("awaiting_input", 12),
+        ("owner_approved", 12),
         ("signed", 12),
         ("confirmed", 12),
         ("delivering", 12),
@@ -450,6 +544,14 @@ fn json_payment_finality_is_derived_from_receipts_and_failed_payments_remain_unk
             json!([{"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}]),
             true,
             5,
+        ),
+        ("awaiting_input", json!([]), false, 12),
+        ("owner_approved", json!([]), false, 12),
+        (
+            "owner_approved",
+            json!([{"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}]),
+            true,
+            12,
         ),
         (
             "denied",
