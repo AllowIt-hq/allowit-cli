@@ -1,0 +1,31 @@
+allowit paysh calls one PaySH API through an owner-deployed AllowIt policy.
+
+The owner deploys and funds the policy in the AllowIt app and issues a scoped
+capability. The capability can only call the policy's API and read its
+operations. This command holds no signing key and never reads one.
+
+Configuration (environment only):
+  ALLOWIT_URL          service origin, e.g. https://allowit.example
+                       (http is allowed only for localhost)
+  ALLOWIT_PAYSH_TOKEN  the policy's scoped capability (call and status)
+  ALLOWIT_CA_FILE      optional extra PEM root certificates
+
+Commands:
+  allowit paysh services [--json]
+                 list the PaySH catalog; no token needed
+  allowit paysh call POLICY OPERATION_ID SERVICE_ID INPUT_JSON [--json]
+                 pay for and call SERVICE_ID once with INPUT_JSON
+  allowit paysh status POLICY OPERATION_ID [--json]
+                 read, and advance, an earlier call
+
+OPERATION_ID is chosen by the agent: 1 to 128 characters from A-Z a-z 0-9 _ -.
+Use a new OPERATION_ID for each intended call. Never retry a call with a new
+OPERATION_ID: an unknown result may still have paid. Check it with status, or
+rerun the identical call with the same OPERATION_ID. INPUT_JSON is limited to
+4096 bytes. Each request is sent once; nothing is retried automatically.
+
+Exit codes: 0 delivered (the API response received), 2 usage,
+3 config or auth, 4 rejected request, 5 unknown result (keep the OPERATION_ID
+and check status) or status unknown/settlement_unknown (operation unresolved;
+payment may have been sent, never pay again for it), 12 pending (payment or delivery not complete; check
+status), 20 failed or denied (no delivery).

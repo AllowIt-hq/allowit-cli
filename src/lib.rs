@@ -4,6 +4,7 @@ mod config;
 mod error;
 mod native_audit;
 mod output;
+mod paysh;
 mod policy;
 mod policy_native;
 mod request;
@@ -32,7 +33,6 @@ pub fn run(args: Vec<String>) -> i32 {
             e.code
         }
     };
-    let token = env_value("ALLOWIT_TOKEN");
     let stdout = if args.first().is_some_and(|a| a == "policy")
         && serde_json::from_str::<Value>(&stdout).is_ok()
     {
@@ -54,9 +54,20 @@ pub fn run(args: Vec<String>) -> i32 {
     } else {
         stdout
     };
-    let _ = std::io::stdout().write_all(output::clean(stdout, &token).as_bytes());
-    let _ = std::io::stderr().write_all(output::clean(stderr, &token).as_bytes());
+    let _ = std::io::stdout().write_all(redact(stdout).as_bytes());
+    let _ = std::io::stderr().write_all(redact(stderr).as_bytes());
     code
+}
+/// Removes the harness token and the PaySH capability from any output.
+fn redact(s: String) -> String {
+    output::clean(
+        output::clean(s, &env_value("ALLOWIT_TOKEN")),
+        &env_value(paysh::TOKEN_ENV),
+    )
+}
+/// Writes pending stderr now, before a request can leave the process.
+pub(crate) fn flush_stderr(stderr: &mut String) {
+    let _ = std::io::stderr().write_all(redact(std::mem::take(stderr)).as_bytes());
 }
 fn execute(args: &[String], stdout: &mut String, stderr: &mut String) -> Result<i32> {
     if args.is_empty() {
@@ -73,6 +84,7 @@ fn execute(args: &[String], stdout: &mut String, stderr: &mut String) -> Result<
             Ok(0)
         }
         "policy" => policy::run(&args[1..], stdout, stderr),
+        "paysh" => paysh::run(&args[1..], stdout, stderr),
         "show" | "eval" | "exec" | "status" => action(&args[0], &args[1..], stdout, stderr),
         _ => Err(Error::usage(format!(
             "unknown command {} (show, eval, exec, status, policy)",
@@ -156,8 +168,7 @@ fn action(command: &str, argv: &[String], stdout: &mut String, stderr: &mut Stri
         );
     }
     // Flush recovery instructions before a POST can leave the process.
-    let token = env_value("ALLOWIT_TOKEN");
-    let _ = std::io::stderr().write_all(output::clean(std::mem::take(stderr), &token).as_bytes());
+    flush_stderr(stderr);
     let mut r = match c.call(
         "POST",
         if command == "exec" {

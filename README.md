@@ -158,6 +158,20 @@ Decimals are plain digits with an optional fraction: no sign, exponent, separato
 
 **Hosted executor audit.** A backend-exported executor bundle may additionally contain `audit: {origin, token}`. Import saves this capability in the private local journal. It grants only reporting of that policy's executor-signed operations to `POST /api/native/report`; it grants no owner, approval or signing authority. For this profile the CLI persists the exact signed proof, requires a durable SQL acknowledgment before broadcasting, then reports recovered/finalized status. Missing, redirected or inconsistent acknowledgments block broadcast or produce exit 5; retain the journal and retry the identical request ID. `policy status` retries reporting without signing or broadcasting. The token is never printed; the executor bundle and journal contain this private report capability and must not be shared publicly. Local denials before signing create no chain operation and are outside this signed-operation audit. Owner browser operations use the backend owner lifecycle; standalone owner CLI operations remain local. This audit is cooperative client behavior; the backend must independently reconcile chain receipts and vault nonces.
 
+## PaySH agent calls
+
+An owner deploys and funds a PaySH policy in the AllowIt app (`?paysh=1`) and issues a scoped capability there. The agent sets `ALLOWIT_URL` and `ALLOWIT_PAYSH_TOKEN`; no signing key is read.
+
+```sh
+allowit paysh services
+allowit paysh call POLICY OPERATION_ID SERVICE_ID '{"location":{"latitude":43.6532,"longitude":-79.3832},"universalAqi":true}'
+allowit paysh status POLICY OPERATION_ID
+```
+
+`call` sends `POST /api/paysh/call` with `{policyId, operationId, serviceId, input}` and the capability as bearer; `status` sends `POST /api/paysh/status` with `{policyId, operationId}`; `services` sends `GET /api/paysh/catalog` without credentials. Each request is sent once with no redirect. `ALLOWIT_URL` must be an HTTPS origin, or HTTP on loopback. `INPUT_JSON` is limited to 4096 bytes and replies to 1 MiB. Payment and delivery are printed separately; `--json` adds `state` and `exitCode` to the server reply.
+
+Exits: 0 only when the API response was delivered; 12 pending (payment or delivery not complete); 20 failed or denied, with no delivery; 5 unknown (network or server failure, redirect, unreadable or mismatched reply, HTTP 409, a `status` that finds no operation, or operation status `unknown`/`settlement_unknown`: the operation remains unresolved and payment may have been sent, neither failed nor delivered); 2 usage; 3 configuration or auth. After exit 5, never use a new `OPERATION_ID` for the same call: run the printed `allowit paysh status` command or rerun the identical call. The capability is redacted from all output.
+
 ## States and exit codes
 
 | Exit | State | Meaning |
