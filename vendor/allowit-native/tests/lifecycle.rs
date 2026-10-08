@@ -954,6 +954,10 @@ fn server_reconciliation_requires_no_file_journal_or_signing() {
             last_valid_block_height: 1,
             nonce: prepared.nonce,
             revision: prepared.revision,
+            signatures: vec![signature_text.clone()],
+            expires_at: None,
+            commitment: None,
+            instance_slot: None,
             transaction_url: f.sdk.transaction_url(&signature_text).unwrap(),
             extra: Default::default(),
         };
