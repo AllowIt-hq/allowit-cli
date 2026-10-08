@@ -4030,5 +4030,49 @@
     "repository": "https://github.com/dtolnay/zmij",
     "status": "covered",
     "cargoChecksum": "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+  },
+  {
+    "name": "orca_whirlpools_core",
+    "version": "1.0.4",
+    "url": "https://static.crates.io/crates/orca_whirlpools_core/orca_whirlpools_core-1.0.4.crate",
+    "files": [
+      {
+        "path": "orca_whirlpools_core/1.0.4/LICENSE-2.0.txt",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "bytes": 11358
+      }
+    ],
+    "crateSha256": "b884e3d6f39337baeb00c096b9d2d30682aeff8ead301303d039f84dcac24bec",
+    "licenseExpression": "Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/orca-so/whirlpools",
+    "status": "covered",
+    "cargoChecksum": "b884e3d6f39337baeb00c096b9d2d30682aeff8ead301303d039f84dcac24bec",
+    "noticeBasis": [
+      "checksum-verified published crate declares Apache-2.0; standard authoritative license text; published archive omits LICENSE"
+    ],
+    "licenseSource": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+  },
+  {
+    "name": "orca_whirlpools_macros",
+    "version": "1.0.4",
+    "url": "https://static.crates.io/crates/orca_whirlpools_macros/orca_whirlpools_macros-1.0.4.crate",
+    "files": [
+      {
+        "path": "orca_whirlpools_macros/1.0.4/LICENSE-2.0.txt",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "bytes": 11358
+      }
+    ],
+    "crateSha256": "3db647505a145cbb680f08725e0112b1691d984334cd1abe0d9f5c5a6e2ec91e",
+    "licenseExpression": "Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/orca-so/whirlpools",
+    "status": "covered",
+    "cargoChecksum": "3db647505a145cbb680f08725e0112b1691d984334cd1abe0d9f5c5a6e2ec91e",
+    "noticeBasis": [
+      "checksum-verified published crate declares Apache-2.0; standard authoritative license text; published archive omits LICENSE"
+    ],
+    "licenseSource": "https://www.apache.org/licenses/LICENSE-2.0.txt"
   }
 ]

@@ -9,7 +9,9 @@ publish = false
 [dependencies]
 allowit-paysh-interface = { path = "../crates/paysh-interface" }
 borsh = "=1.6.0"
-orca_whirlpools_core = { version = "=2.1.1", default-features = false, features = ["swap"] }
+# Exact Apache-2.0 releases; a semver macro range would select the later custom license.
+orca_whirlpools_core = { version = "=1.0.4", default-features = false }
+orca_whirlpools_macros = "=1.0.4"
 base64 = "0.22.1"
 bs58 = "0.5.1"
 curve25519-dalek = "4.1.3"

@@ -7,3 +7,5 @@ This directory is companion documentation for all `allowit` binaries built by th
 `toolchains/` preserves Go's BSD license and vendored standard-library notices, plus Rust's standard-library copyright attribution and referenced license texts, plus the complete musl 1.2.5 copyright and component notices for Rust's self-contained static Linux target. OpenSSL and other bundled C notices are included in the original dependency package files. The root MIT license applies to first-party AllowIt code; it does not replace third-party licenses.
 
 Future artifact builds validate every current registry dependency against this collection and bundle this directory with the binary. If a lockfile introduces a new version, refresh its notices before publishing the artifact.
+
+The current PaySH quote path pins `orca_whirlpools_core` and `orca_whirlpools_macros` 1.0.4. Their checksum-verified published manifests declare Apache-2.0 and omit license files, so their companion directories retain the complete authoritative Apache-2.0 text with provenance in the index. Historical 2.1.1/1.0.5 Orca License texts remain preserved for earlier binaries.

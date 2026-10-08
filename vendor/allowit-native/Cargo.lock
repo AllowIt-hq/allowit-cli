@@ -23,6 +23,7 @@ dependencies = [
  "ed25519-dalek",
  "libc",
  "orca_whirlpools_core",
+ "orca_whirlpools_macros",
  "regex",
  "reqwest",
  "serde",
@@ -770,9 +771,9 @@ dependencies = [
 
 [[package]]
 name = "orca_whirlpools_core"
-version = "2.1.1"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fa5a2318d63ef4c7241234b3aa53690bf76b7bd797c90b90ec38f494d847cc6"
+checksum = "b884e3d6f39337baeb00c096b9d2d30682aeff8ead301303d039f84dcac24bec"
 dependencies = [
  "ethnum",
  "orca_whirlpools_macros",
@@ -780,9 +781,9 @@ dependencies = [
 
 [[package]]
 name = "orca_whirlpools_macros"
-version = "1.0.5"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b093a9e60ca608c1dff40fcd841a2d5680b96f877080b6279044c159ebd50b78"
+checksum = "3db647505a145cbb680f08725e0112b1691d984334cd1abe0d9f5c5a6e2ec91e"
 dependencies = [
  "proc-macro2",
  "quote",

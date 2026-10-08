@@ -209,10 +209,7 @@ impl PayShClient {
         max_lamports: u64,
         slippage_bps: u16,
     ) -> Result<Action> {
-        use orca_whirlpools_core::{
-            MIN_SQRT_PRICE, TickArrayFacade, WhirlpoolFacade, WhirlpoolRewardInfoFacade,
-            swap_quote_by_input_token,
-        };
+        use orca_whirlpools_core::{TickArrayFacade, WhirlpoolFacade, WhirlpoolRewardInfoFacade};
         if needed == 0 || slippage_bps > 100 {
             return Err(Error::config(
                 "Swap needs positive output and slippage at most one percent",
@@ -274,7 +271,6 @@ impl PayShClient {
             return Err(Error::config("Invalid canonical pool or oracle address"));
         }
         let whirlpool = WhirlpoolFacade {
-            fee_tier_index_seed: d[43..45].try_into().unwrap(),
             tick_spacing: spacing,
             fee_rate: fee,
             protocol_fee_rate: u16_at(47),
@@ -311,20 +307,8 @@ impl PayShClient {
         let arrays: [TickArrayFacade; 3] = arrays
             .try_into()
             .map_err(|_| Error::config("Missing tick arrays"))?;
-        let (_, timestamp) = self.clock()?;
-        let quote = |amount| {
-            swap_quote_by_input_token(
-                amount,
-                true,
-                slippage_bps,
-                whirlpool,
-                None,
-                arrays.into(),
-                timestamp.max(0) as u64,
-                None,
-                None,
-            )
-        };
+        let sqrt_price_limit = admitted_swap_boundary(whirlpool, &arrays)?;
+        let quote = |amount| bounded_whirlpool_quote(amount, slippage_bps, whirlpool, arrays);
         let max = max_lamports
             .min(c.max_swap_lamports_per_call)
             .min(
@@ -336,20 +320,7 @@ impl PayShClient {
                     .saturating_sub(p.total_sol_debits)
                     .saturating_sub(c.service_fee_lamports),
             );
-        let best = quote(max)
-            .map_err(|_| Error::denied("Approved pool liquidity cannot satisfy this swap"))?;
-        if max == 0 || best.token_min_out < needed {
-            return Err(Error::denied(
-                "Required USDC exceeds the approved swap or available liquidity",
-            ));
-        }
-        let (mut low, mut high) = (1, max);
-        while low < high {
-            let mid = low + (high - low) / 2;
-            let enough = quote(mid).is_ok_and(|q| q.token_min_out >= needed);
-            if enough { high = mid } else { low = mid + 1 }
-        }
-        let q = quote(low).map_err(|_| Error::denied("No admissible swap quote"))?;
+        let (low, q) = minimum_swap_input(max, needed, quote)?;
         if q.token_in > low
             || u128::from(q.token_min_out) * 1_000_000_000
                 < u128::from(low) * u128::from(c.min_usdc_per_sol)
@@ -361,7 +332,7 @@ impl PayShClient {
         Ok(Action::SwapSolToUsdc {
             amount_in_lamports: low,
             min_out_usdc: q.token_min_out,
-            sqrt_price_limit: MIN_SQRT_PRICE,
+            sqrt_price_limit,
             tick_arrays: keys,
         })
     }
@@ -1855,9 +1826,252 @@ fn compact(out: &mut Vec<u8>, mut n: usize) {
     }
 }
 
+// The Apache core's unrestricted quote can revisit the last array indefinitely.
+// Stop at the authenticated third array's lower boundary instead. This same limit
+// is signed into the CPI action, so execution cannot traverse beyond quoted data.
+fn admitted_swap_boundary(
+    pool: orca_whirlpools_core::WhirlpoolFacade,
+    arrays: &[orca_whirlpools_core::TickArrayFacade; 3],
+) -> Result<u128> {
+    use orca_whirlpools_core::{
+        MAX_SQRT_PRICE, MAX_TICK_INDEX, MIN_TICK_INDEX, tick_index_to_sqrt_price,
+    };
+    if pool.tick_spacing == 0
+        || !(MIN_TICK_INDEX..=MAX_TICK_INDEX).contains(&pool.tick_current_index)
+    {
+        return Err(Error::config("Invalid tick spacing"));
+    }
+    let span = i32::from(pool.tick_spacing) * 88;
+    let start = pool.tick_current_index.div_euclid(span) * span;
+    for (i, array) in arrays.iter().enumerate() {
+        if Some(array.start_tick_index) != start.checked_sub(i as i32 * span) {
+            return Err(Error::config("Quote arrays differ from the admitted order"));
+        }
+    }
+    let limit = tick_index_to_sqrt_price(arrays[2].start_tick_index.max(MIN_TICK_INDEX));
+    if pool.sqrt_price <= limit || pool.sqrt_price > MAX_SQRT_PRICE {
+        return Err(Error::denied(
+            "Pool price is outside the admitted swap range",
+        ));
+    }
+    Ok(limit)
+}
+
+fn bounded_whirlpool_quote(
+    amount: u64,
+    slippage_bps: u16,
+    pool: orca_whirlpools_core::WhirlpoolFacade,
+    arrays: [orca_whirlpools_core::TickArrayFacade; 3],
+) -> Result<orca_whirlpools_core::ExactInSwapQuote> {
+    use orca_whirlpools_core::{
+        ExactInSwapQuote, TickArraySequence, compute_swap,
+        try_get_min_amount_with_slippage_tolerance,
+    };
+    if amount == 0 || slippage_bps > 100 {
+        return Err(Error::denied("Invalid bounded swap amount or slippage"));
+    }
+    let limit = admitted_swap_boundary(pool, &arrays)?;
+    let sequence = TickArraySequence::new(
+        [
+            Some(arrays[0]),
+            Some(arrays[1]),
+            Some(arrays[2]),
+            None,
+            None,
+        ],
+        pool.tick_spacing,
+    )
+    .map_err(|_| Error::denied("Invalid bounded tick sequence"))?;
+    let swap = compute_swap(amount, limit, pool, sequence, true, true, 0)
+        .map_err(|_| Error::denied("Approved pool liquidity cannot satisfy this swap"))?;
+    if swap.token_a != amount {
+        return Err(Error::denied("Swap exceeds the admitted tick array range"));
+    }
+    Ok(ExactInSwapQuote {
+        token_in: swap.token_a,
+        token_est_out: swap.token_b,
+        token_min_out: try_get_min_amount_with_slippage_tolerance(swap.token_b, slippage_bps)
+            .map_err(|_| Error::denied("Invalid integer swap slippage"))?,
+        trade_fee: swap.trade_fee,
+    })
+}
+
+fn minimum_swap_input(
+    max: u64,
+    needed: u64,
+    quote: impl Fn(u64) -> Result<orca_whirlpools_core::ExactInSwapQuote>,
+) -> Result<(u64, orca_whirlpools_core::ExactInSwapQuote)> {
+    // Deliberately deny an out-of-range cap instead of searching beyond the
+    // three approved arrays or silently selecting a different pool profile.
+    if max == 0 || needed == 0 || quote(max)?.token_min_out < needed {
+        return Err(Error::denied(
+            "Required USDC exceeds the approved swap or available liquidity",
+        ));
+    }
+    let (mut low, mut high) = (1, max);
+    while low < high {
+        let mid = low + (high - low) / 2;
+        let enough = quote(mid).is_ok_and(|q| q.token_min_out >= needed);
+        if enough { high = mid } else { low = mid + 1 }
+    }
+    Ok((low, quote(low)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn fixed_quote_fixture() -> (
+        orca_whirlpools_core::WhirlpoolFacade,
+        [orca_whirlpools_core::TickArrayFacade; 3],
+    ) {
+        use orca_whirlpools_core::{TickArrayFacade, TickFacade, WhirlpoolFacade};
+        // Public Testnet snapshot used by the real direct swap proof. Only
+        // quote-relevant state is reproduced; these are not private keys.
+        let pool = WhirlpoolFacade {
+            tick_spacing: 64,
+            fee_rate: 400,
+            liquidity: 100_000_000,
+            sqrt_price: 1_844_674_407_370_955_161,
+            tick_current_index: -46055,
+            ..Default::default()
+        };
+        let mut arrays = [-50688, -56320, -61952].map(|start_tick_index| TickArrayFacade {
+            start_tick_index,
+            ticks: [TickFacade::default(); 88],
+        });
+        arrays[1].ticks[80] = TickFacade {
+            initialized: true,
+            liquidity_net: 100_000_000,
+            liquidity_gross: 100_000_000,
+            ..Default::default()
+        };
+        (pool, arrays)
+    }
+
+    #[test]
+    fn bounded_quote_matches_actual_testnet_swap_and_integer_slippage() {
+        let (pool, arrays) = fixed_quote_fixture();
+        let q = bounded_whirlpool_quote(1_000_000, 50, pool, arrays).unwrap();
+        assert_eq!(
+            (q.token_in, q.token_est_out, q.token_min_out, q.trade_fee),
+            (1_000_000, 9986, 9936, 400)
+        );
+        assert_eq!(
+            bounded_whirlpool_quote(1_000_000, 0, pool, arrays)
+                .unwrap()
+                .token_min_out,
+            9986
+        );
+        assert!(bounded_whirlpool_quote(0, 50, pool, arrays).is_err());
+        assert!(bounded_whirlpool_quote(1, 101, pool, arrays).is_err());
+    }
+
+    #[test]
+    fn bounded_quote_matches_independent_core_2_1_1_fixed_fee_vectors() {
+        let (pool, arrays) = fixed_quote_fixture();
+        // Independently computed against the preserved 2.1.1 quote binary.
+        // Both releases agree on input/output/minOut/fee within the range.
+        for (amount, output, min_out, fee) in [
+            (1, 0, 0, 1),
+            (99, 0, 0, 1),
+            (1000, 9, 8, 1),
+            (10_000, 99, 98, 4),
+            (100_000, 999, 994, 40),
+            (1_000_000, 9986, 9936, 400),
+            (2_000_000, 19952, 19852, 800),
+            (10_000_000, 98970, 98475, 4000),
+            (50_000_000, 476009, 473628, 20_000),
+            (100_000_000, 908760, 904216, 40_000),
+            (250_000_000, 1999359, 1989362, 100_000),
+        ] {
+            let q = bounded_whirlpool_quote(amount, 50, pool, arrays).unwrap();
+            assert_eq!(
+                (q.token_in, q.token_est_out, q.token_min_out, q.trade_fee),
+                (amount, output, min_out, fee)
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_quote_stops_at_third_array_for_oversized_and_sparse_inputs() {
+        let (mut pool, mut arrays) = fixed_quote_fixture();
+        for amount in [1_000_000_000, u64::MAX] {
+            assert!(bounded_whirlpool_quote(amount, 50, pool, arrays).is_err());
+        }
+        arrays[1].ticks[80] = Default::default();
+        assert!(bounded_whirlpool_quote(u64::MAX, 50, pool, arrays).is_err());
+        pool.liquidity = 0;
+        assert!(bounded_whirlpool_quote(1, 50, pool, arrays).is_err());
+        let (pool, mut arrays) = fixed_quote_fixture();
+        // Force all 264 initialized ticks to be visited, including the exact
+        // lower boundary. Exhausting them must still end without revisiting it.
+        for array in &mut arrays {
+            for tick in &mut array.ticks {
+                *tick = orca_whirlpools_core::TickFacade {
+                    initialized: true,
+                    liquidity_gross: 1,
+                    ..Default::default()
+                };
+            }
+        }
+        assert!(bounded_whirlpool_quote(u64::MAX, 50, pool, arrays).is_err());
+    }
+
+    #[test]
+    fn bounded_quote_denies_equal_price_limit_and_unordered_arrays() {
+        let (mut pool, mut arrays) = fixed_quote_fixture();
+        let boundary = admitted_swap_boundary(pool, &arrays).unwrap();
+        pool.sqrt_price = boundary;
+        assert!(bounded_whirlpool_quote(1, 50, pool, arrays).is_err());
+        let (pool, _) = fixed_quote_fixture();
+        arrays.swap(0, 1);
+        assert!(bounded_whirlpool_quote(1, 50, pool, arrays).is_err());
+        let (mut pool, arrays) = fixed_quote_fixture();
+        pool.tick_current_index = i32::MIN;
+        assert!(bounded_whirlpool_quote(1, 50, pool, arrays).is_err());
+        pool.tick_spacing = 0;
+        assert!(bounded_whirlpool_quote(1, 50, pool, arrays).is_err());
+    }
+
+    #[test]
+    fn bounded_quote_clamps_near_min_tick_and_rejects_partial_input() {
+        use orca_whirlpools_core::{
+            MIN_SQRT_PRICE, MIN_TICK_INDEX, TickArrayFacade, TickFacade, tick_index_to_sqrt_price,
+        };
+        let (mut pool, _) = fixed_quote_fixture();
+        pool.tick_current_index = MIN_TICK_INDEX + 1;
+        pool.sqrt_price = tick_index_to_sqrt_price(pool.tick_current_index);
+        let span = i32::from(pool.tick_spacing) * 88;
+        let start = pool.tick_current_index.div_euclid(span) * span;
+        let arrays = std::array::from_fn(|i| TickArrayFacade {
+            start_tick_index: start - i as i32 * span,
+            ticks: [TickFacade::default(); 88],
+        });
+        assert_eq!(
+            admitted_swap_boundary(pool, &arrays).unwrap(),
+            MIN_SQRT_PRICE
+        );
+        assert!(bounded_whirlpool_quote(u64::MAX, 50, pool, arrays).is_err());
+        pool.sqrt_price = MIN_SQRT_PRICE;
+        assert!(bounded_whirlpool_quote(1, 50, pool, arrays).is_err());
+    }
+
+    #[test]
+    fn bounded_minimum_search_preserves_exact_min_out_and_cap() {
+        let (pool, arrays) = fixed_quote_fixture();
+        let quote = |amount| bounded_whirlpool_quote(amount, 50, pool, arrays);
+        let (amount, q) = minimum_swap_input(1_000_000, 1000, quote).unwrap();
+        assert!(q.token_min_out >= 1000);
+        assert!(quote(amount - 1).unwrap().token_min_out < 1000);
+        assert_eq!(minimum_swap_input(amount, 1000, quote).unwrap().0, amount);
+        assert!(minimum_swap_input(amount - 1, 1000, quote).is_err());
+        assert!(minimum_swap_input(0, 1000, quote).is_err());
+        assert!(minimum_swap_input(1_000_000, 0, quote).is_err());
+        // Conservatively deny the entire request when its cap needs more than
+        // the authenticated arrays, even if a smaller quote would suffice.
+        assert!(minimum_swap_input(u64::MAX, 1000, quote).is_err());
+    }
+
     #[test]
     fn approval_uses_self_contained_offsets_and_exact_signature() {
         let secret = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
