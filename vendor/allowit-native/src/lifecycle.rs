@@ -651,14 +651,28 @@ impl<'a> PolicyLifecycle<'a> {
             {
                 return Err(Error::config("Server approval or vault state changed"));
             }
-            if self.block_height()? > authorized.last_valid_block_height {
-                return Err(Error::config("The unsigned execution approval expired. Request a fresh authorization; no executor proof was signed."));
+            // Use the live tip, not lagging finality, before requesting a signature.
+            // Both bounds need enough remaining lifetime for signing and submission.
+            let floor = safe_height(&json!(authorized.simulation.context_slot))?;
+            let slot = safe_height(&self.sdk.client().rpc.call("getSlot",
+                json!([{"commitment":"processed", "minContextSlot":floor}]))?)?;
+            if slot < floor {
+                return Err(Error::config("The authorization observation is stale. Request a fresh authorization; no executor proof was signed."));
             }
-            let slot = self.sdk.client().rpc.call("getSlot", json!([{"commitment":"finalized"}]))?;
-            let slot = safe_height(&slot)?;
-            let now = self.sdk.client().rpc.call("getBlockTime", json!([slot]))?;
-            if safe_height(&now)? >= authorized.approval.expires_at {
-                return Err(Error::config("The unsigned execution approval expired. Request a fresh authorization; no executor proof was signed."));
+            let height = safe_height(&self.sdk.client().rpc.call("getBlockHeight",
+                json!([{"commitment":"processed", "minContextSlot":slot}]))?)?;
+            let now = safe_height(&self.sdk.client().rpc.call("getBlockTime", json!([slot]))?)?;
+            if authorized.last_valid_block_height.checked_sub(height).is_none_or(|remaining| remaining < 32)
+                || authorized.approval.expires_at.checked_sub(now).is_none_or(|remaining| remaining < 30)
+            {
+                return Err(Error::config("The unsigned execution approval lacks a safe signing window. Request a fresh authorization; no executor proof was signed."));
+            }
+            let validity = self.sdk.client().rpc.call("isBlockhashValid",
+                json!([authorized.blockhash,{"commitment":"processed", "minContextSlot":slot}]))?;
+            if validity["value"].as_bool() != Some(true)
+                || safe_height(&validity["context"]["slot"])? < slot
+            {
+                return Err(Error::config("The authorization blockhash is unavailable at the live tip. Request a fresh authorization; no executor proof was signed."));
             }
             let options = authorized.approval.options()?;
             let intent = intent_for(self.sdk.client(), policy, owner, "execute", &options)?;

@@ -25,6 +25,9 @@ use std::sync::{
 };
 struct Network {
     height: u64,
+    processed_height: Option<u64>,
+    processed_slot: Option<u64>,
+    processed_time: Option<u64>,
     block_height: u64,
     chain_time: u64,
     nonce: String,
@@ -44,19 +47,39 @@ impl Rpc for FakeRpc {
     fn call(&self, method: &str, params: Value) -> Result<Value> {
         let mut d = self.data.lock().unwrap();
         Ok(match method {
-            "getBlockHeight" => json!(d.height),
+            "getBlockHeight" => {
+                if params[0]["commitment"] == "processed" {
+                    assert_eq!(params[0]["minContextSlot"], d.processed_slot.unwrap_or(99));
+                    json!(d.processed_height.unwrap_or(d.height))
+                } else {
+                    json!(d.height)
+                }
+            }
             "isBlockhashValid" => {
                 let valid = if params[1]["commitment"] == "processed" {
-                    assert_eq!(params[1]["minContextSlot"], 99);
+                    assert_eq!(params[1]["minContextSlot"], d.processed_slot.unwrap_or(99));
                     d.processed_blockhash_valid.unwrap_or(d.blockhash_valid)
                 } else {
                     assert_eq!(params[1]["commitment"], "finalized");
                     d.blockhash_valid
                 };
-                json!({"value":valid,"context":{"slot":99}})
+                json!({"value":valid,"context":{"slot":d.processed_slot.unwrap_or(99)}})
             }
-            "getSlot" => json!(99),
-            "getBlockTime" => json!(d.chain_time),
+            "getSlot" => {
+                if params[0]["commitment"] == "processed" {
+                    assert_eq!(params[0]["minContextSlot"], 99);
+                    json!(d.processed_slot.unwrap_or(99))
+                } else {
+                    json!(99)
+                }
+            }
+            "getBlockTime" => {
+                if Some(params[0].as_u64().unwrap()) == d.processed_slot {
+                    json!(d.processed_time.unwrap_or(d.chain_time))
+                } else {
+                    json!(d.chain_time)
+                }
+            }
             "getBlock" => {
                 assert_eq!(params[1]["transactionDetails"], "none");
                 assert_eq!(params[1]["rewards"], false);
@@ -109,6 +132,9 @@ impl Fixture {
         let rpc = Arc::new(FakeRpc {
             data: Mutex::new(Network {
                 height: 10,
+                processed_height: None,
+                processed_slot: None,
+                processed_time: None,
                 block_height: 10,
                 chain_time: 100,
                 nonce: "0".into(),
@@ -182,6 +208,7 @@ impl Fixture {
         .unwrap()
     }
     fn authorized(&self, identity: &ExecutionRequestIdentity) -> AuthorizedExecution {
+        self.rpc.data.lock().unwrap().processed_blockhash_valid = Some(true);
         let owner = self.owner.public_key();
         let state = self
             .state(&self.policy, owner, false, None)
@@ -1050,4 +1077,75 @@ fn server_reconciliation_requires_no_file_journal_or_signing() {
     let mut substituted = record;
     substituted.intent = substituted.intent.replace("\"1\"", "\"2\"");
     assert!(reconcile_record(&f, substituted, &f.policy, owner).is_err());
+}
+
+#[test]
+fn live_tip_expiry_and_stale_observations_never_request_executor_signatures() {
+    for case in ["height", "time", "stale", "invalid-blockhash"] {
+        let f = Fixture::new();
+        let identity = f.identity("live-tip-expiry-001", "fetch fixed fixture");
+        let response = f.authorized(&identity);
+        {
+            let mut network = f.rpc.data.lock().unwrap();
+            // Finalized observations are still fresh. Only the processed tip changed.
+            assert_eq!(network.height, 10);
+            assert_eq!(network.chain_time, 100);
+            network.processed_slot = Some(if case == "stale" { 98 } else { 150 });
+            if case == "height" {
+                network.processed_height = Some(response.last_valid_block_height + 1);
+            }
+            if case == "time" {
+                network.processed_time = Some(response.approval.expires_at);
+            }
+            if case == "invalid-blockhash" {
+                network.processed_blockhash_valid = Some(false);
+            }
+        }
+        let signatures = AtomicUsize::new(0);
+        assert!(
+            f.life()
+                .submit_authorized(
+                    &f.policy,
+                    f.owner.public_key(),
+                    &identity,
+                    || Ok(response.clone()),
+                    |transaction| {
+                        signatures.fetch_add(1, Ordering::Relaxed);
+                        Ok(f.executor.sign(&transaction.message))
+                    }
+                )
+                .is_err(),
+            "{case}"
+        );
+        assert_eq!(signatures.load(Ordering::Relaxed), 0, "{case}");
+        assert!(f.journal.entries::<Record>().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn unsigned_signing_requires_both_exact_lifetime_margins() {
+    for (height, now, allowed) in [(68, 170, true), (69, 170, false), (68, 171, false)] {
+        let f = Fixture::new();
+        let identity = f.identity("signing-margin-001", "fetch fixed fixture");
+        let response = f.authorized(&identity);
+        {
+            let mut network = f.rpc.data.lock().unwrap();
+            network.processed_slot = Some(150);
+            network.processed_height = Some(height);
+            network.processed_time = Some(now);
+        }
+        let signatures = AtomicUsize::new(0);
+        let result = f.life().submit_authorized(
+            &f.policy,
+            f.owner.public_key(),
+            &identity,
+            || Ok(response.clone()),
+            |transaction| {
+                signatures.fetch_add(1, Ordering::Relaxed);
+                Ok(f.executor.sign(&transaction.message))
+            },
+        );
+        assert_eq!(result.is_ok(), allowed, "height={height}, time={now}");
+        assert_eq!(signatures.load(Ordering::Relaxed), usize::from(allowed));
+    }
 }
