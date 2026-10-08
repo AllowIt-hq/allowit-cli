@@ -287,6 +287,35 @@ fn signed_yes_is_pending_until_explicit_same_operation_continuation_and_receipt(
 }
 
 #[test]
+fn expired_original_request_is_terminal_without_retry_or_owner_denial() {
+    let reply = json!({"operationId":"op-1","status":"expired","signatures":[],"receipts":[],"response":null});
+    for command in ["call", "status"] {
+        let (url, seen) = serve(vec![http(200, &reply.to_string())]);
+        let args = if command == "call" {
+            vec!["paysh", "call", POLICY, "op-1", SERVICE, INPUT]
+        } else {
+            vec!["paysh", "status", POLICY, "op-1"]
+        };
+        let out = run(&url, &args, Some(TOKEN));
+        assert_eq!(out.status.code(), Some(20));
+        let (stdout, _) = text(&out);
+        assert!(stdout.contains("status: expired"));
+        assert!(stdout.contains("not delivered; the original request expired"));
+        assert!(stdout.contains("expiry is not an owner denial"));
+        assert!(!stdout.contains("state: pending"));
+        assert!(!stdout.contains("payment: finalized"));
+        let seen = seen.recv().unwrap();
+        assert_eq!(
+            seen.len(),
+            1,
+            "Expiry never retries or creates another operation"
+        );
+        assert_eq!(seen[0].path, format!("/api/paysh/{command}"));
+        assert_eq!(seen[0].json()["operationId"], "op-1");
+    }
+}
+
+#[test]
 fn only_delivery_exits_zero() {
     for (status, code) in [
         ("evaluating", 12),
@@ -298,6 +327,7 @@ fn only_delivery_exits_zero() {
         ("delivered", 0),
         ("denied", 20),
         ("failed", 20),
+        ("expired", 20),
         ("unknown", 5),
         ("settlement_unknown", 5),
         ("absent", 5),
@@ -541,6 +571,19 @@ fn json_payment_finality_is_derived_from_receipts_and_failed_payments_remain_unk
         ("delivered", json!([]), false, 0),
         (
             "failed",
+            json!([{"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}]),
+            true,
+            5,
+        ),
+        ("expired", json!([]), false, 20),
+        (
+            "expired",
+            json!([{"signature":"swapSig","finalizedSlot":9,"action":{"type":"swap"}}]),
+            false,
+            20,
+        ),
+        (
+            "expired",
             json!([{"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}]),
             true,
             5,

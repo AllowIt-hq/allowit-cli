@@ -34,8 +34,8 @@ Exit codes: 0 delivered (the API response received), 2 usage,
 3 config or auth, 4 rejected request, 5 unknown result (keep the OPERATION_ID
 and check status) or status unknown/settlement_unknown (operation unresolved;
 payment may have been sent, never pay again for it), 12 pending (owner answer, payment or delivery not complete; check
-status), 20 failed or denied (no delivery). No HTTP error from call, including
+status), 20 failed, denied or expired (no delivery). Expiry is not an owner denial. No HTTP error from call, including
 401, 404 and 429, proves that nothing was paid; it exits 5 with the original
 OPERATION_ID. JSON output includes paymentFinalized, derived from a pay receipt
-with a signature and a finalized slot. A failed or denied operation with any receipt
+with a signature and a finalized slot. A failed, denied or expired operation with any receipt
 other than a swap stays unknown (exit 5).

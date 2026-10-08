@@ -26,7 +26,7 @@ const PENDING: [&str; 9] = [
     "confirmed",
     "delivering",
 ];
-const FAILED: [&str; 2] = ["denied", "failed"];
+const FAILED: [&str; 3] = ["denied", "failed", "expired"];
 /// Set by the owner for an unresolved operation, which may lack a verified payment transaction.
 const UNKNOWN: &str = "unknown";
 
@@ -400,6 +400,7 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
         match phase.as_str() {
             "awaiting_input" => "not confirmed; waiting for the owner's signed answer",
             "owner_approved" => "not confirmed; owner approval does not establish payment",
+            "expired" => "not confirmed; the original request expired",
             "evaluating" | "approved" | "preparing" => {
                 "not sent; the policy is still checking this call"
             }
@@ -436,12 +437,13 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
         UNKNOWN => {
             "unknown; the owner marked the operation unresolved. Payment may have been sent. It is neither failed nor delivered. Never retry or create a replacement payment; no refund is reported"
         }
-        "denied" | "failed" if paid => {
+        "denied" | "failed" | "expired" if paid => {
             "unresolved after finalized payment. Never retry or create a replacement payment"
         }
-        "denied" | "failed" if unsettled => {
+        "denied" | "failed" | "expired" if unsettled => {
             "unresolved; payment may have been sent. Never retry or create a replacement payment"
         }
+        "expired" => "not delivered; the original request expired",
         "denied" | "failed" => "not delivered",
         _ => "waiting for payment",
     };
@@ -460,6 +462,7 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
             "Not complete. Check again with: allowit paysh status {policy} {op}. Never retry with a new OPERATION_ID."
         ),
         5 => "Operation unresolved. Never create a replacement payment for this call.".to_string(),
+        20 if phase == "expired" => "The original request expired. No API response was delivered; expiry is not an owner denial.".to_string(),
         _ => "No API response was delivered.".to_string(),
     };
     if json {
