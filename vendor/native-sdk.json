@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-  "commit": "2b5168f61d6062df46f04f7096a7c95d0709bcd1",
+  "commit": "7750d5df77710057189edecc29b07d719e727f34",
   "crate": "native-rust",
   "files": {
     "Cargo.lock": "1cf0627701165205a22dfafeafb836d285c0c9c2ddd7841ead222e813452182d",
@@ -27,7 +27,7 @@
   },
   "licenses": {
     "LICENSE": "750548edc096b7599f0aa6816b3a6dfb983d75ba81bc8c4925f968ef048a4734",
-    "THIRD_PARTY_NOTICES.md": "4f303ae507f6eb2d33894494c5a6b2cf3670f68fbefd4b5a1c2b66f13e9a0613",
+    "THIRD_PARTY_NOTICES.md": "49a6e92e0aebb320dc553d5c3c207cdf9bcb04af9f492123da6b79d8afd6126a",
     "licenses/Aeneas-Apache-2.0.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
   }
 }
