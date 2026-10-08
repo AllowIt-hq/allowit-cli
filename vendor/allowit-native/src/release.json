@@ -1,16 +1,16 @@
 {
-  "contractRevision": "756eed28b67c45d03b5ea529724248eeeced6b73",
+  "contractRevision": "622f8b8054b4a8c533ae9ebd4978c48f7ea9c628",
   "sourceBundle": "793db01595fbcb15503914744e49b45f470e9ca1d2805aceadeac00a0d843fc7",
   "artifacts": [
     {
       "name": "allowit_policy.so",
       "bytes": 1696,
-      "sha256": "9acadf0b057b9a4f6c5c0fcbe86ced37c621c294bead508ea74774f9af400815"
+      "sha256": "cb55e2015dbc437cce58a53727c947cd1d8db75453623c5e53a4e4ea15b40dde"
     },
     {
       "name": "allowit_vault.so",
-      "bytes": 100280,
-      "sha256": "b7359562591dcef60a43115f7441be00b8205752af3393c4adbb089c8500cb6f"
+      "bytes": 110680,
+      "sha256": "92e1849f9072fb0c342b8cd4513faa5e575b77ee903397dde1fe06bb0f3fcae0"
     }
   ],
   "sources": {
