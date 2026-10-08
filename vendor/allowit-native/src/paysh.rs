@@ -29,6 +29,9 @@ pub struct Deployment {
     pub module_digest: [u8; 32],
     pub program_artifact: [u8; 32],
     pub upgrade_authority: Option<Key>,
+    pub pool_program: Key,
+    pub pool_program_artifact: [u8; 32],
+    pub pool_upgrade_authority: Option<Key>,
     pub lookup_table: Option<Key>,
     pub compute_limit: u32,
 }
@@ -58,6 +61,27 @@ pub struct PreparedSetup {
     pub allocation_lamports: u64,
     pub message: String,
     pub unsigned_transaction: String,
+    #[serde(default)]
+    pub blockhash_context_slot: Option<u64>,
+    #[serde(default)]
+    pub last_valid_block_height: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Settlement {
+    pub signature: String,
+    pub finalized_slot: u64,
+    pub invocation_index: u16,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExecutionStatus {
+    Pending,
+    Finalized(Settlement),
+    /// Both expiry clocks passed at finalized commitment and nonce is absent.
+    ProvenAbsent,
+    /// Nonce receipt proves execution, but finalized transaction metadata is unavailable.
+    ConsumedUnlocated,
 }
 
 pub struct PayShClient {
@@ -81,8 +105,26 @@ impl PayShClient {
                 "PaySH RPC network differs from the approved deployment",
             ));
         }
+        self.verify_program(
+            self.deployment.program,
+            self.deployment.program_artifact,
+            self.deployment.upgrade_authority,
+        )?;
+        self.verify_program(
+            self.deployment.pool_program,
+            self.deployment.pool_program_artifact,
+            self.deployment.pool_upgrade_authority,
+        )
+    }
+
+    fn verify_program(
+        &self,
+        program: Key,
+        artifact: [u8; 32],
+        expected_authority: Option<Key>,
+    ) -> Result<()> {
         let loader = Key::parse("BPFLoaderUpgradeab1e11111111111111111111111")?;
-        let p = account(&*self.rpc, self.deployment.program, None)?
+        let p = account(&*self.rpc, program, None)?
             .ok_or_else(|| Error::config("PaySH program is not deployed"))?;
         if !p.executable
             || p.owner != loader
@@ -92,7 +134,7 @@ impl PayShClient {
             return Err(Error::config("Invalid PaySH program account"));
         }
         let linked = Key(p.data[4..36].try_into().unwrap());
-        let canonical = Key::find_program_address(&[&self.deployment.program.0], loader)?.0;
+        let canonical = Key::find_program_address(&[&program.0], loader)?.0;
         if linked != canonical {
             return Err(Error::config("Invalid PaySH program data binding"));
         }
@@ -110,12 +152,11 @@ impl PayShClient {
             1 => Some(Key(data.data[13..45].try_into().unwrap())),
             _ => return Err(Error::config("Invalid program upgrade authority")),
         };
-        if authority != self.deployment.upgrade_authority
-            || <[u8; 32]>::from(Sha256::digest(&data.data[45..]))
-                != self.deployment.program_artifact
+        if authority != expected_authority
+            || <[u8; 32]>::from(Sha256::digest(&data.data[45..])) != artifact
         {
             return Err(Error::config(
-                "PaySH executable or upgrade authority changed",
+                "Approved executable or upgrade authority changed",
             ));
         }
         Ok(())
@@ -341,11 +382,12 @@ impl PayShClient {
             &[interface::POLICY_SEED, &p.owner, &p.config.instance_id],
             self.deployment.program,
         )?;
-        if p.version != 1
+        if !matches!(p.version, 1 | 2)
             || p.bump != expected.1
             || expected.0 != address
             || p.config.network != self.deployment.genesis.0
             || p.config.module_digest != self.deployment.module_digest
+            || p.config.pool.program != self.deployment.pool_program.0
         {
             return Err(Error::config(
                 "PaySH policy differs from its approved binding",
@@ -366,6 +408,7 @@ impl PayShClient {
         if !owner.on_curve()
             || config.network != self.deployment.genesis.0
             || config.module_digest != self.deployment.module_digest
+            || config.pool.program != self.deployment.pool_program.0
             || allocation_lamports == 0
             || allocation_lamports > config.allocation_lamports
             || config.period_seconds == 0
@@ -412,6 +455,16 @@ impl PayShClient {
             allocation_lamports,
             message: STANDARD.encode(message),
             unsigned_transaction: STANDARD.encode(unsigned),
+            blockhash_context_slot: Some(
+                block["context"]["slot"]
+                    .as_u64()
+                    .ok_or_else(|| Error::config("Missing blockhash context"))?,
+            ),
+            last_valid_block_height: Some(
+                block["value"]["lastValidBlockHeight"]
+                    .as_u64()
+                    .ok_or_else(|| Error::config("Missing blockhash expiry height"))?,
+            ),
         })
     }
 
@@ -696,15 +749,6 @@ impl PayShClient {
             ));
         }
         let encoded = STANDARD.encode(&raw);
-        let simulation = self.rpc.call(
-            "simulateTransaction",
-            json!([encoded,{"encoding":"base64","sigVerify":true,"commitment":"finalized"}]),
-        )?;
-        if !simulation["value"]["err"].is_null() || simulation.get("value").is_none() {
-            return Err(Error::denied(
-                "Native PaySH simulation rejected the exact transaction",
-            ));
-        }
         Ok(PreparedExecution {
             signature: bs58::encode(signature).into_string(),
             signed_bytes: encoded,
@@ -844,6 +888,7 @@ impl PayShClient {
             || prepared.sol_vault != sol_vault
             || config.network != self.deployment.genesis.0
             || config.module_digest != self.deployment.module_digest
+            || config.pool.program != self.deployment.pool_program.0
             || prepared.allocation_lamports == 0
             || prepared.allocation_lamports > config.allocation_lamports
         {
@@ -948,7 +993,13 @@ impl PayShClient {
     pub fn broadcast(&self, prepared: &PreparedExecution) -> Result<()> {
         verify_packet(prepared)?;
         self.check_execution_packet(prepared, None)?;
-        let result = self.rpc.call("sendTransaction", json!([prepared.signed_bytes,{"encoding":"base64","skipPreflight":false,"preflightCommitment":"finalized","maxRetries":0}]))?;
+        let simulation = self.rpc.call("simulateTransaction", json!([prepared.signed_bytes,{"encoding":"base64","sigVerify":true,"commitment":"finalized"}])).map_err(|_| Error::uncertain("Simulation RPC failed after receiving the saved approval; reconcile its nonce"))?;
+        if simulation.get("value").is_none() || !simulation["value"]["err"].is_null() {
+            return Err(Error::uncertain(
+                "Native simulation rejected the saved approval. Reconcile its nonce before any replacement.",
+            ));
+        }
+        let result = self.rpc.call("sendTransaction", json!([prepared.signed_bytes,{"encoding":"base64","skipPreflight":false,"preflightCommitment":"finalized","maxRetries":0}])).map_err(|_| Error::uncertain("Broadcast RPC failed after receiving the saved approval; reconcile its nonce"))?;
         if result.as_str() != Some(&prepared.signature) {
             return Err(Error::uncertain(
                 "RPC returned a different signature; reconcile the saved packet",
@@ -956,54 +1007,262 @@ impl PayShClient {
         }
         Ok(())
     }
-    pub fn finalized(&self, prepared: &PreparedExecution) -> Result<bool> {
+    /// Reconcile the authorization's nonce, not just the sponsor signature.
+    /// Another permitted relayer may have finalized the same request first.
+    pub fn settlement(&self, prepared: &PreparedExecution) -> Result<ExecutionStatus> {
         verify_packet(prepared)?;
-        let statuses = self.rpc.call(
-            "getSignatureStatuses",
-            json!([[prepared.signature],{"searchTransactionHistory":true}]),
-        )?;
-        let s = &statuses["value"][0];
-        if s.is_null() || s["confirmationStatus"] != "finalized" {
-            return Ok(false);
-        }
-        if !s["err"].is_null() {
-            return Err(Error::denied(
-                "PaySH transaction finalized with an execution error",
-            ));
-        }
-        let tx = self.rpc.call("getTransaction", json!([prepared.signature,{"encoding":"base64","commitment":"finalized","maxSupportedTransactionVersion":0}]))?;
-        if tx.is_null() {
-            return Ok(false);
-        }
-        if !tx["meta"]["err"].is_null()
-            || tx["transaction"][1] != "base64"
-            || tx["transaction"][0] != prepared.signed_bytes
-        {
-            return Err(Error::config(
-                "Finalized PaySH transaction differs from the saved exact packet",
-            ));
-        }
-        self.check_execution_packet(prepared, Some(&tx["meta"]))?;
-        let a = account(&*self.rpc, prepared.receipt, s["slot"].as_u64())?
-            .ok_or_else(|| Error::config("Finalized execution has no receipt"))?;
-        let r = Receipt::try_from_slice(&a.data)
-            .map_err(|_| Error::config("Invalid execution receipt"))?;
         let request: Request = borsh::from_slice(
             &STANDARD
                 .decode(&prepared.request_bytes)
                 .map_err(|_| Error::config("Invalid saved request"))?,
         )
         .map_err(|_| Error::config("Invalid saved request"))?;
-        if a.owner != self.deployment.program
-            || r.version != 1
-            || r.request_hash != prepared.request_hash
-            || r.operation_id != request.operation_id
-            || r.signing_timestamp != request.signing_timestamp
+        let policy = self.policy(Key(request.policy))?;
+        let raw = STANDARD
+            .decode(&prepared.signed_bytes)
+            .map_err(|_| Error::config("Invalid saved packet"))?;
+        let decoded = packet_message(&raw[65..])?;
+        if request.program != self.deployment.program.0
+            || request.owner != policy.owner
+            || request.network != self.deployment.genesis.0
+            || request.module_digest != policy.config.module_digest
+            || request.service_fee_lamports != policy.config.service_fee_lamports
+            || decoded.instructions[1].1[16..48] != policy.config.evaluator
         {
-            return Err(Error::config("Receipt does not bind this policy execution"));
+            return Err(Error::config(
+                "Saved approval differs from the installed scope",
+            ));
         }
-        Ok(true)
+        let genesis = self.rpc.call("getGenesisHash", json!([]))?;
+        if genesis.as_str() != Some(&self.deployment.genesis.to_string()) {
+            return Err(Error::config("Recovery RPC network differs"));
+        }
+        let (slot, timestamp) = self.clock()?;
+        let Some(a) = account(&*self.rpc, prepared.receipt, Some(slot))? else {
+            return Ok(
+                if slot > request.expires_slot && timestamp > request.expires_timestamp {
+                    ExecutionStatus::ProvenAbsent
+                } else {
+                    ExecutionStatus::Pending
+                },
+            );
+        };
+        let receipt = Receipt::try_from_slice(&a.data)
+            .map_err(|_| Error::config("Invalid execution receipt"))?;
+        if a.owner != self.deployment.program
+            || a.executable
+            || receipt.version != 1
+            || receipt.request_hash != prepared.request_hash
+            || receipt.operation_id != request.operation_id
+            || receipt.signing_timestamp != request.signing_timestamp
+        {
+            return Err(Error::config(
+                "Receipt does not bind the saved authorization",
+            ));
+        }
+        let expected = borsh::to_vec(&interface::Instruction::Execute(request))
+            .map_err(|_| Error::config("Invalid saved request"))?;
+        // First check the original sponsor packet. If it lost a permissionless
+        // race, use finalized address history to locate the successful relayer.
+        let mut candidates = vec![prepared.signature.clone()];
+        let mut before: Option<String> = None;
+        for page in 0..=4 {
+            for signature in candidates.drain(..) {
+                let tx = self.rpc.call("getTransaction", json!([signature,{"encoding":"json","commitment":"finalized","maxSupportedTransactionVersion":0}]))?;
+                if tx.is_null() || tx["meta"].get("err").is_none() || !tx["meta"]["err"].is_null() {
+                    continue;
+                }
+                if let Some(settled) =
+                    settlement_transaction(&tx, &signature, self.deployment.program, &expected)?
+                {
+                    return Ok(ExecutionStatus::Finalized(settled));
+                }
+            }
+            if page == 4 {
+                break;
+            }
+            let mut options = json!({"limit":100,"commitment":"finalized","minContextSlot":slot});
+            if let Some(before) = &before {
+                options["before"] = json!(before);
+            }
+            let history = self.rpc.call(
+                "getSignaturesForAddress",
+                json!([prepared.receipt, options]),
+            )?;
+            let history = history
+                .as_array()
+                .ok_or_else(|| Error::config("Invalid receipt address history"))?;
+            if history.is_empty() {
+                break;
+            }
+            before = history
+                .last()
+                .and_then(|v| v["signature"].as_str())
+                .map(str::to_owned);
+            for entry in history {
+                if entry.get("err").is_some() && entry["err"].is_null() {
+                    candidates.push(
+                        entry["signature"]
+                            .as_str()
+                            .ok_or_else(|| Error::config("Invalid settlement signature"))?
+                            .to_owned(),
+                    );
+                }
+            }
+        }
+        Ok(ExecutionStatus::ConsumedUnlocated)
     }
+
+    pub fn finalized(&self, prepared: &PreparedExecution) -> Result<bool> {
+        match self.settlement(prepared)? {
+            ExecutionStatus::Finalized(_) => Ok(true),
+            ExecutionStatus::Pending => Ok(false),
+            ExecutionStatus::ConsumedUnlocated => Err(Error::uncertain(
+                "Authorization consumed; finalized transaction unavailable. Do not create another payment",
+            )),
+            ExecutionStatus::ProvenAbsent => Err(Error::denied(
+                "Authorization expired without a finalized receipt",
+            )),
+        }
+    }
+
+    /// Refresh only an unsigned installation after its old blockhash has
+    /// positively expired. Signed owner proofs remain separately durable.
+    pub fn setup_expired(&self, prepared: &PreparedSetup) -> Result<bool> {
+        let raw = STANDARD
+            .decode(&prepared.unsigned_transaction)
+            .map_err(|_| Error::config("Invalid setup packet"))?;
+        if raw.len() < 65
+            || raw.len() > 1232
+            || raw[0] != 1
+            || raw[1..65] != [0; 64]
+            || STANDARD.encode(&raw[65..]) != prepared.message
+        {
+            return Err(Error::config("Invalid unsigned setup proof"));
+        }
+        self.check_setup_packet(prepared, &prepared.unsigned_transaction, None)?;
+        let decoded = packet_message(&raw[65..])?;
+        self.setup_blockhash_expired(prepared, decoded.blockhash)
+    }
+
+    fn setup_blockhash_expired(&self, prepared: &PreparedSetup, blockhash: Key) -> Result<bool> {
+        let (Some(context_slot), Some(last_valid_height)) = (
+            prepared.blockhash_context_slot,
+            prepared.last_valid_block_height,
+        ) else {
+            return Ok(false); // Legacy journals cannot prove coherent expiry.
+        };
+        let options = json!({"commitment":"finalized", "minContextSlot":context_slot});
+        let height = self
+            .rpc
+            .call("getBlockHeight", json!([options.clone()]))?
+            .as_u64()
+            .ok_or_else(|| Error::config("Invalid finalized block height"))?;
+        if height <= last_valid_height {
+            return Ok(false);
+        }
+        let valid = self
+            .rpc
+            .call("isBlockhashValid", json!([blockhash, options]))?;
+        if valid["context"]["slot"]
+            .as_u64()
+            .is_none_or(|slot| slot < context_slot)
+        {
+            return Err(Error::config("Lagging finalized blockhash context"));
+        }
+        valid["value"]
+            .as_bool()
+            .map(|valid| !valid)
+            .ok_or_else(|| Error::config("Invalid finalized blockhash status"))
+    }
+
+    /// A signed owner installation can be abandoned only after finalized
+    /// blockhash expiry and finalized absence of its permanent policy account.
+    pub fn setup_proven_absent(&self, prepared: &PreparedSetup, signed: &str) -> Result<bool> {
+        Self::verify_setup_signature(prepared, signed)?;
+        self.check_setup_packet(prepared, signed, None)?;
+        let raw = STANDARD
+            .decode(signed)
+            .map_err(|_| Error::config("Invalid setup packet"))?;
+        let decoded = packet_message(&raw[65..])?;
+        if !self.setup_blockhash_expired(prepared, decoded.blockhash)? {
+            return Ok(false);
+        }
+        Ok(account(&*self.rpc, prepared.policy, prepared.blockhash_context_slot)?.is_none())
+    }
+}
+
+fn settlement_transaction(
+    tx: &serde_json::Value,
+    signature: &str,
+    program: Key,
+    expected: &[u8],
+) -> Result<Option<Settlement>> {
+    if tx["meta"].get("err").is_none() || !tx["meta"]["err"].is_null() {
+        return Ok(None);
+    }
+    if tx["transaction"]["signatures"][0] != signature {
+        return Err(Error::config("Settlement signature differs"));
+    }
+    let message = &tx["transaction"]["message"];
+    let mut keys = Vec::new();
+    for list in [
+        &message["accountKeys"],
+        &tx["meta"]["loadedAddresses"]["writable"],
+        &tx["meta"]["loadedAddresses"]["readonly"],
+    ] {
+        if list.is_null() {
+            continue;
+        }
+        for value in list
+            .as_array()
+            .ok_or_else(|| Error::config("Invalid settlement accounts"))?
+        {
+            keys.push(Key::parse(
+                value
+                    .as_str()
+                    .ok_or_else(|| Error::config("Invalid settlement account"))?,
+            )?);
+        }
+    }
+    let mut found = None;
+    for (index, instruction) in message["instructions"]
+        .as_array()
+        .ok_or_else(|| Error::config("Invalid settlement instructions"))?
+        .iter()
+        .enumerate()
+    {
+        let program_index: usize = instruction["programIdIndex"]
+            .as_u64()
+            .ok_or_else(|| Error::config("Invalid settlement program index"))?
+            .try_into()
+            .map_err(|_| Error::config("Invalid settlement program index"))?;
+        if keys.get(program_index) != Some(&program) {
+            continue;
+        }
+        let bytes = bs58::decode(
+            instruction["data"]
+                .as_str()
+                .ok_or_else(|| Error::config("Invalid settlement instruction"))?,
+        )
+        .into_vec()
+        .map_err(|_| Error::config("Invalid settlement instruction"))?;
+        if bytes == expected {
+            if found.is_some() {
+                return Err(Error::config("Repeated settlement execution"));
+            }
+            found = Some(Settlement {
+                signature: signature.into(),
+                finalized_slot: tx["slot"]
+                    .as_u64()
+                    .ok_or_else(|| Error::config("Missing finalized settlement slot"))?,
+                invocation_index: index
+                    .try_into()
+                    .map_err(|_| Error::config("Invalid settlement invocation index"))?,
+            });
+        }
+    }
+    Ok(found)
 }
 
 fn setup_instructions(
@@ -1753,9 +2012,411 @@ mod tests {
     }
 
     #[test]
+    fn settlement_identifies_the_actual_relayer_and_loaded_program() {
+        let program = Key([2; 32]);
+        let data = vec![1, 2, 3];
+        let tx = json!({"slot":42,"meta":{"err":null,"loadedAddresses":{"writable":[],"readonly":[program.to_string()]}},
+            "transaction":{"signatures":["winning-relayer"],"message":{"accountKeys":[Key([1;32]).to_string()],
+            "instructions":[{"programIdIndex":0,"data":""},{"programIdIndex":1,"data":bs58::encode(&data).into_string()}]}}});
+        assert_eq!(
+            settlement_transaction(&tx, "winning-relayer", program, &data).unwrap(),
+            Some(Settlement {
+                signature: "winning-relayer".into(),
+                finalized_slot: 42,
+                invocation_index: 1
+            })
+        );
+        assert!(settlement_transaction(&tx, "original-sponsor", program, &data).is_err());
+        assert_eq!(
+            settlement_transaction(&tx, "winning-relayer", program, &[9]).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn settlement_requires_success_metadata_and_one_exact_execution() {
+        let program = Key([2; 32]);
+        let ix = json!({"programIdIndex":0,"data":bs58::encode([1,2,3]).into_string()});
+        let mut tx = json!({"slot":42,"meta":{"err":null},"transaction":{"signatures":["relayer"],
+            "message":{"accountKeys":[program.to_string()],"instructions":[ix.clone()]}}});
+        assert!(
+            settlement_transaction(&tx, "relayer", program, &[1, 2, 3])
+                .unwrap()
+                .is_some()
+        );
+        tx["meta"] = json!({});
+        assert_eq!(
+            settlement_transaction(&tx, "relayer", program, &[1, 2, 3]).unwrap(),
+            None
+        );
+        tx["meta"] = json!({"err":{"InstructionError":[0,"Custom"]}});
+        assert_eq!(
+            settlement_transaction(&tx, "relayer", program, &[1, 2, 3]).unwrap(),
+            None
+        );
+        tx["meta"] = json!({"err":null});
+        tx["transaction"]["message"]["instructions"] = json!([ix.clone(), ix]);
+        assert!(settlement_transaction(&tx, "relayer", program, &[1, 2, 3]).is_err());
+    }
+
+    #[test]
+    fn setup_expiry_requires_height_and_coherent_finalized_context() {
+        struct ExpiryRpc {
+            height: u64,
+            slot: u64,
+            valid: bool,
+        }
+        impl Rpc for ExpiryRpc {
+            fn call(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+                match method {
+                    "getBlockHeight" => {
+                        assert_eq!(params[0]["minContextSlot"], 100);
+                        Ok(json!(self.height))
+                    }
+                    "isBlockhashValid" => {
+                        assert_eq!(params[1]["minContextSlot"], 100);
+                        Ok(json!({"context":{"slot":self.slot},"value":self.valid}))
+                    }
+                    _ => panic!("unexpected RPC {method}"),
+                }
+            }
+        }
+        let proof = PreparedSetup {
+            owner: Key([1; 32]),
+            policy: Key([2; 32]),
+            sol_vault: Key([3; 32]),
+            config_bytes: String::new(),
+            allocation_lamports: 1,
+            message: String::new(),
+            unsigned_transaction: String::new(),
+            blockhash_context_slot: Some(100),
+            last_valid_block_height: Some(200),
+        };
+        let client = |height, slot, valid| {
+            PayShClient::new(
+                Deployment {
+                    program: Key([4; 32]),
+                    genesis: Key([5; 32]),
+                    module_digest: [6; 32],
+                    program_artifact: [7; 32],
+                    upgrade_authority: None,
+                    pool_program: Key([8; 32]),
+                    pool_program_artifact: [9; 32],
+                    pool_upgrade_authority: None,
+                    lookup_table: None,
+                    compute_limit: 100_000,
+                },
+                Arc::new(ExpiryRpc {
+                    height,
+                    slot,
+                    valid,
+                }),
+            )
+            .unwrap()
+        };
+        let hash = Key([10; 32]);
+        assert!(
+            !client(200, 100, false)
+                .setup_blockhash_expired(&proof, hash)
+                .unwrap()
+        );
+        assert!(
+            !client(201, 101, true)
+                .setup_blockhash_expired(&proof, hash)
+                .unwrap()
+        );
+        assert!(
+            client(201, 99, false)
+                .setup_blockhash_expired(&proof, hash)
+                .is_err()
+        );
+        assert!(
+            client(201, 101, false)
+                .setup_blockhash_expired(&proof, hash)
+                .unwrap()
+        );
+        let mut legacy = proof;
+        legacy.blockhash_context_slot = None;
+        assert!(
+            !client(201, 101, false)
+                .setup_blockhash_expired(&legacy, hash)
+                .unwrap()
+        );
+    }
+
+    #[test]
     fn checked_budgets_cannot_wrap() {
         assert!(bounded_sum(u64::MAX, 1, u64::MAX).is_err());
         assert!(bounded_sum(7, 4, 10).is_err());
         assert!(bounded_sum(7, 3, 10).is_ok());
+    }
+
+    /// Public protocol fixture; the RPC transport never connects to a cluster
+    /// or loads signing keys.
+    struct RecoveryFixture {
+        deployment: Deployment,
+        policy: Policy,
+        request: Request,
+        original: PreparedExecution,
+        alternative: PreparedExecution,
+    }
+    impl RecoveryFixture {
+        fn new() -> Self {
+            // Public packets captured from the finalized Testnet relayer-race
+            // regression. No signing secrets or live RPC calls are required.
+            let deployment: Deployment = serde_json::from_str(r#"{"computeLimit":900000,"genesis":"4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY","lookupTable":"H7YaW5WvJekYrQxMAxTvUQbi5ofp5Dx6Ffmm11RKNdJd","moduleDigest":[219,159,224,2,254,58,128,163,7,138,167,61,245,149,171,29,105,42,45,138,47,45,199,179,87,3,207,6,181,252,253,104],"poolProgram":"7vNu5JwjiDSvyDaVv5eykQvXjHeXh24iAFCSq21sBkg3","poolProgramArtifact":[31,74,161,0,195,208,39,191,181,112,186,113,238,146,238,246,215,190,210,16,176,147,180,120,88,57,201,228,238,68,206,104],"poolUpgradeAuthority":"5LRTaca6jgPzTSgG9vV5YonL7VmFpKBTbLBSBKUPRALX","program":"CLaqn7vJ2VQyaLBLWyj3YgynVo7jcG8eoy21mJT6nYe6","programArtifact":[165,108,123,214,82,41,144,230,78,250,115,218,5,187,99,194,224,2,187,31,60,67,73,250,29,128,131,189,190,67,90,199],"upgradeAuthority":"7a6zuZXTVaNcrY8BkoTeRasuqj7qmQkZWgd8xH7RYSg2"}"#).unwrap();
+            let original: PreparedExecution = serde_json::from_str(r#"{"expiresSlot":449830346,"expiresTimestamp":1791419275,"payer":"DM34nWejgGkuj51F8jrfCvWAXJrsj9PiEY7uAMS4vuqG","policy":"Bbe81FrevbMKmo1Gbt2GQJwPTXCQbp8xGvRSu9MQZqHx","receipt":"6x6XGeY3DEmt9ZveDwRqDPHM3ACKKinWvD36vaahtDd3","requestBytes":"OhMuzhAwXsGDByVQL6K35+uBV+kSPUwfZUpxeHFh3CGodNsPP1aBN4E4wW0/veQVDHWdxYKOOh30pzQr9I2+m510luAFFvv2t7ONIAjr8NtltFepGC3TaW91QDNtclWHYaESFi79/A83XgaZth9TgCGW3+r/1RsEPmT+MqNmz/Pbn+AC/jqAoweKpz31lasdaSotii8tx7NXA88Gtfz9aCkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKiorKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKywsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsFt3PGgAAAABP48ZqAAAAAMrdzxoAAAAAi+PGagAAAADoAwAAAAAAAAABAAAAAAAAAA==","requestHash":[5,91,229,250,237,182,1,200,66,94,76,101,162,82,31,126,81,169,212,186,77,32,97,130,221,147,39,149,146,219,140,157],"signature":"4PU2pk1yiXS4HhdgH2DspAcUHfG6YvK4mPtCCmsE4fWCEnP4AtNUx1MTghMuNtkcYXwGnymYJ1Pxg8hFmrh7zPsR","signedBytes":"AalsxGYx/wEdFr+n8qqXKk1mFXS4e6nBrG5YyAqcoXBYUvN5EtE9yCOB7BiG0n1ltjWbkm385yLwYxWs0EX0EQwBAAcQt24xyeLF6lGBQukDx40uMieiqLo5yER1yC435d49g9dAaHApQexteBeFXE3+ChFNrcdmHVk8JT+MmR0ZSfWoMFhnn2zdneA5RfauOjq32uKIsi18hlgKkHk38RJZE+uyYEzhuiuf93TQ5t7hC9cmxX1OaRKaLXEwISeSGTW8LTeAVDe/19PrSSevU7s9HTmyo8olE8SKViRuafZTr8OOm510luAFFvv2t7ONIAjr8NtltFepGC3TaW91QDNtclWHotZ35m/yVZpg3d226HMfI1fK7e3NAHqImdleJvp33PrTwXXGnvdBPirMkVSxtuee1gmnhSNg/Rk09k5Ocl3sBvAW37ZcQJp3ArNj5VdfkWHlf/RkFp+KZRp7Ch+v6C3TAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACodNsPP1aBN4E4wW0/veQVDHWdxYKOOh30pzQr9I2+mwMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAAA31G1nyT+74S+UKPg41A/wVwdEkn9Ipk/MpwRIAAAADzKTpjc+b3MwD3QOwtEiVkzIDEpiH+2d1Puq93rd8NgQan1RcYe9FmNdrUBFX9wsDBJMaPIVZ1pdu6y18IAAAABt324ddloZPZy+FGzut5rBy0he1fWzeROoz1hX7/AKlCyLfq4SAAbbMxDitb98Lcl6KKJMDpUWkShUG30AojKwMLAAUCoLsNAAwAqAEBADAA//8QAP//cAA4AP//VYzzAmKP/48GOza+ZXe23DS7puEyRivupM4Vc7ojWdCXY0IZT86g2rfMDk1Uy3dwwzsdZhomJEa0t0Mpv3BldqI6l3w50+dWzk2sSCypEUoZmO56Lvm2vTUC9Tp1UAkJYWxsb3dpdC1wYXlzaC1yZXF1ZXN0LXYx8QfbFFc9skuC7qUGhJFm4j019453R1quJYLDPoAJFo0KDQUAAgcBCAYEDQ8JDgPSAgE6Ey7OEDBewYMHJVAvorfn64FX6RI9TB9lSnF4cWHcIah02w8/VoE3gTjBbT+95BUMdZ3Fgo46HfSnNCv0jb6bnXSW4AUW+/a3s40gCOvw22W0V6kYLdNpb3VAM21yVYdhoRIWLv38DzdeBpm2H1OAIZbf6v/VGwQ+ZP4yo2bP89uf4AL+OoCjB4qnPfWVqx1pKi2KLy3Hs1cDzwa1/P1oKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKisrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwW3c8aAAAAAE/jxmoAAAAAyt3PGgAAAACL48ZqAAAAAOgDAAAAAAAAAAEAAAAAAAAA"}"#).unwrap();
+            let alternative: PreparedExecution = serde_json::from_str(r#"{"expiresSlot":449830346,"expiresTimestamp":1791419275,"payer":"7a6zuZXTVaNcrY8BkoTeRasuqj7qmQkZWgd8xH7RYSg2","policy":"Bbe81FrevbMKmo1Gbt2GQJwPTXCQbp8xGvRSu9MQZqHx","receipt":"6x6XGeY3DEmt9ZveDwRqDPHM3ACKKinWvD36vaahtDd3","requestBytes":"OhMuzhAwXsGDByVQL6K35+uBV+kSPUwfZUpxeHFh3CGodNsPP1aBN4E4wW0/veQVDHWdxYKOOh30pzQr9I2+m510luAFFvv2t7ONIAjr8NtltFepGC3TaW91QDNtclWHYaESFi79/A83XgaZth9TgCGW3+r/1RsEPmT+MqNmz/Pbn+AC/jqAoweKpz31lasdaSotii8tx7NXA88Gtfz9aCkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKiorKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKywsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsFt3PGgAAAABP48ZqAAAAAMrdzxoAAAAAi+PGagAAAADoAwAAAAAAAAABAAAAAAAAAA==","requestHash":[5,91,229,250,237,182,1,200,66,94,76,101,162,82,31,126,81,169,212,186,77,32,97,130,221,147,39,149,146,219,140,157],"signature":"2NwsGigyduazGcCqMnfhfk6cYoCG9HViuobmqQ7xyEdbckg3F7RYL76STsWY9J9te9GGBsWSDHdx9NV447ECDWKh","signedBytes":"AUTxP57xrQVo4LwkjlKmJIVKlHhmOi3eltvyBHUNpD+ZGmTNqLK7eyQ6BsxTVTXE9HFAhNlrEDkYBftYlURUKAABAAcQYaESFi79/A83XgaZth9TgCGW3+r/1RsEPmT+MqNmz/NAaHApQexteBeFXE3+ChFNrcdmHVk8JT+MmR0ZSfWoMFhnn2zdneA5RfauOjq32uKIsi18hlgKkHk38RJZE+uyYEzhuiuf93TQ5t7hC9cmxX1OaRKaLXEwISeSGTW8LTeAVDe/19PrSSevU7s9HTmyo8olE8SKViRuafZTr8OOm510luAFFvv2t7ONIAjr8NtltFepGC3TaW91QDNtclWHotZ35m/yVZpg3d226HMfI1fK7e3NAHqImdleJvp33PrTwXXGnvdBPirMkVSxtuee1gmnhSNg/Rk09k5Ocl3sBvAW37ZcQJp3ArNj5VdfkWHlf/RkFp+KZRp7Ch+v6C3TAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACodNsPP1aBN4E4wW0/veQVDHWdxYKOOh30pzQr9I2+mwMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAAA31G1nyT+74S+UKPg41A/wVwdEkn9Ipk/MpwRIAAAADzKTpjc+b3MwD3QOwtEiVkzIDEpiH+2d1Puq93rd8NgQan1RcYe9FmNdrUBFX9wsDBJMaPIVZ1pdu6y18IAAAABt324ddloZPZy+FGzut5rBy0he1fWzeROoz1hX7/AKnFkLmRhbKlzLBIjykmcWjW+Tr9ci1tjChTSyU20udRGQMLAAUCoLsNAAwAqAEBADAA//8QAP//cAA4AP//VYzzAmKP/48GOza+ZXe23DS7puEyRivupM4Vc7ojWdCXY0IZT86g2rfMDk1Uy3dwwzsdZhomJEa0t0Mpv3BldqI6l3w50+dWzk2sSCypEUoZmO56Lvm2vTUC9Tp1UAkJYWxsb3dpdC1wYXlzaC1yZXF1ZXN0LXYx8QfbFFc9skuC7qUGhJFm4j019453R1quJYLDPoAJFo0KDQUAAgcBCAYEDQ8JDgPSAgE6Ey7OEDBewYMHJVAvorfn64FX6RI9TB9lSnF4cWHcIah02w8/VoE3gTjBbT+95BUMdZ3Fgo46HfSnNCv0jb6bnXSW4AUW+/a3s40gCOvw22W0V6kYLdNpb3VAM21yVYdhoRIWLv38DzdeBpm2H1OAIZbf6v/VGwQ+ZP4yo2bP89uf4AL+OoCjB4qnPfWVqx1pKi2KLy3Hs1cDzwa1/P1oKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKisrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwW3c8aAAAAAE/jxmoAAAAAyt3PGgAAAACL48ZqAAAAAOgDAAAAAAAAAAEAAAAAAAAA"}"#).unwrap();
+            let config: interface::Config = borsh::from_slice(&STANDARD.decode("PlQnvUCF43GQvMfeVVfeywMFy0ok0TBHAnRY9gz/RuE6Ey7OEDBewYMHJVAvorfn64FX6RI9TB9lSnF4cWHcIduf4AL+OoCjB4qnPfWVqx1pKi2KLy3Hs1cDzwa1/P1oVYzzAmKP/48GOza+ZXe23DS7puEyRivupM4Vc7ojWdBAaHApQexteBeFXE3+ChFNrcdmHVk8JT+MmR0ZSfWoMPMpOmNz5vczAPdA7C0SJWTMgMSmIf7Z3U+6r3et3w2B8BbftlxAmncCs2PlV1+RYeV/9GQWn4plGnsKH6/oLdOi1nfmb/JVmmDd3bbocx8jV8rt7c0AeoiZ2V4m+nfc+oBUN7/X0+tJJ69Tuz0dObKjyiUTxIpWJG5p9lOvw46bZtKqFfSwLvpOOqM2mHXq1G5fiqwhKPnpacjHCcwe9dSseu0XUCaTYTsV64+8wTL+raFAiQnL09VibW252Qi4tpdNgkpsKM6oMAxqxnPxYoJHcuHLziawRQwNzZp7mEcSsX/R5LYnljofiWMjIyiyNk7GZfN7jrQnLQf4JJTf0gb8fFKEc7HD+BI+2JGSOw/t35fSleX8EHKDRAWrKuN/TRAOAAAAAAAAUMMAAAAAAADAxi0AAAAAABAnAAAAAAAAQEtMAAAAAADAxi0AAAAAAMDGLQAAAAAAQEtMAAAAAADoAwAAAAAAAAASegAAAAAACgAAAAAAAAC0AAAAAAAAADwAAAAAAAAAGvHGagAAAAAA").unwrap()).unwrap();
+            let request: Request =
+                borsh::from_slice(&STANDARD.decode(&original.request_bytes).unwrap()).unwrap();
+            let (policy_key, bump) = Key::find_program_address(
+                &[interface::POLICY_SEED, &request.owner, &config.instance_id],
+                deployment.program,
+            )
+            .unwrap();
+            assert_eq!(policy_key, original.policy);
+            let policy = Policy {
+                version: 1,
+                bump,
+                owner: request.owner,
+                paused: false,
+                total_swap_lamports: 0,
+                total_sol_debits: 0,
+                config,
+            };
+            Self {
+                deployment,
+                policy,
+                request,
+                original,
+                alternative,
+            }
+        }
+        fn rpc(&self, receipt_present: bool, slot: u64, timestamp: i64) -> RecoveryRpc {
+            let mut policy_bytes = borsh::to_vec(&self.policy).unwrap();
+            policy_bytes.resize(interface::POLICY_BYTES, 0);
+            let receipt = interface::Receipt {
+                version: 1,
+                request_hash: self.original.request_hash,
+                operation_id: self.request.operation_id,
+                signing_timestamp: self.request.signing_timestamp,
+            };
+            RecoveryRpc {
+                deployment: self.deployment.clone(),
+                policy_key: self.original.policy,
+                policy_bytes,
+                receipt_key: self.original.receipt,
+                receipt_bytes: receipt_present.then(|| borsh::to_vec(&receipt).unwrap()),
+                slot,
+                timestamp,
+                receipt_context_slot: slot,
+                original_signature: self.original.signature.clone(),
+                // The original sponsor can fail after another relayer consumes the nonce.
+                original_transaction: json!({"slot":self.request.signing_slot + 1,"meta":{"err":{"InstructionError":[2,{"Custom":203}]}}}),
+                alternative_signature: self.alternative.signature.clone(),
+                alternative_transaction: serde_json::Value::Null,
+                history: json!([]),
+                calls: std::sync::Mutex::new(vec![]),
+            }
+        }
+        fn winning_transaction(&self) -> serde_json::Value {
+            json!({"slot":self.request.signing_slot + 1,"meta":{"err":null},
+                "transaction":{"signatures":[self.alternative.signature],"message":{
+                    "accountKeys":[self.alternative.payer.to_string(),
+                        "ComputeBudget111111111111111111111111111111",
+                        ED25519,self.deployment.program.to_string()],
+                    "instructions":[{"programIdIndex":1,"data":""},
+                        {"programIdIndex":2,"data":""},
+                        {"programIdIndex":3,"data":bs58::encode(
+                            borsh::to_vec(&interface::Instruction::Execute(self.request.clone())).unwrap()
+                        ).into_string()}]}}})
+        }
+    }
+    struct RecoveryRpc {
+        deployment: Deployment,
+        policy_key: Key,
+        policy_bytes: Vec<u8>,
+        receipt_key: Key,
+        receipt_bytes: Option<Vec<u8>>,
+        slot: u64,
+        timestamp: i64,
+        receipt_context_slot: u64,
+        original_signature: String,
+        original_transaction: serde_json::Value,
+        alternative_signature: String,
+        alternative_transaction: serde_json::Value,
+        history: serde_json::Value,
+        calls: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+    }
+    impl Rpc for RecoveryRpc {
+        fn call(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((method.into(), params.clone()));
+            let value = |owner: Key, bytes: &[u8]| {
+                json!({"owner":owner.to_string(),
+                "executable":false,"data":[STANDARD.encode(bytes),"base64"]})
+            };
+            match method {
+                "getGenesisHash" => Ok(json!(self.deployment.genesis.to_string())),
+                "getAccountInfo" => {
+                    assert_eq!(params[1]["commitment"], "finalized");
+                    let key = Key::parse(params[0].as_str().unwrap()).unwrap();
+                    if key == self.policy_key {
+                        Ok(
+                            json!({"context":{"slot":self.slot},"value":value(self.deployment.program,&self.policy_bytes)}),
+                        )
+                    } else if key
+                        == Key::parse("SysvarC1ock11111111111111111111111111111111").unwrap()
+                    {
+                        let mut clock = vec![0; 40];
+                        clock[..8].copy_from_slice(&self.slot.to_le_bytes());
+                        clock[32..40].copy_from_slice(&self.timestamp.to_le_bytes());
+                        Ok(
+                            json!({"context":{"slot":self.slot},"value":value(Key::parse("Sysvar1111111111111111111111111111111111111").unwrap(),&clock)}),
+                        )
+                    } else {
+                        assert_eq!(key, self.receipt_key);
+                        assert_eq!(params[1]["minContextSlot"], self.slot);
+                        Ok(json!({"context":{"slot":self.receipt_context_slot},
+                            "value":self.receipt_bytes.as_ref().map(|bytes|value(self.deployment.program,bytes))}))
+                    }
+                }
+                "getTransaction" => {
+                    assert_eq!(params[1]["commitment"], "finalized");
+                    let signature = params[0].as_str().unwrap();
+                    if signature == self.original_signature {
+                        Ok(self.original_transaction.clone())
+                    } else {
+                        assert_eq!(signature, self.alternative_signature);
+                        Ok(self.alternative_transaction.clone())
+                    }
+                }
+                "getSignaturesForAddress" => {
+                    assert_eq!(params[0], self.receipt_key.to_string());
+                    assert_eq!(params[1]["commitment"], "finalized");
+                    assert_eq!(params[1]["minContextSlot"], self.slot);
+                    if params[1].get("before").is_some() {
+                        Ok(json!([]))
+                    } else {
+                        Ok(self.history.clone())
+                    }
+                }
+                _ => panic!("Unexpected recovery RPC {method}"),
+            }
+        }
+    }
+    #[test]
+    fn settlement_retains_consumed_nonce_when_transaction_is_unlocated() {
+        let fixture = RecoveryFixture::new();
+        let rpc = Arc::new(fixture.rpc(
+            true,
+            fixture.request.expires_slot + 1,
+            fixture.request.expires_timestamp + 1,
+        ));
+        let client = PayShClient::new(fixture.deployment.clone(), rpc.clone()).unwrap();
+        assert_eq!(
+            client.settlement(&fixture.original).unwrap(),
+            ExecutionStatus::ConsumedUnlocated
+        );
+        // Expiry does not make a consumed authorization replaceable.
+        assert_eq!(client.finalized(&fixture.original).unwrap_err().code, 5);
+        let calls = rpc.calls.lock().unwrap();
+        assert!(
+            calls
+                .iter()
+                .any(|(method, _)| method == "getSignaturesForAddress")
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|(method, params)| method == "getTransaction"
+                    && params[0] == fixture.original.signature)
+        );
+    }
+    #[test]
+    fn settlement_proves_absence_only_after_both_coherent_finalized_clocks() {
+        let fixture = RecoveryFixture::new();
+        for (slot, timestamp, expected) in [
+            (
+                fixture.request.expires_slot,
+                fixture.request.expires_timestamp,
+                ExecutionStatus::Pending,
+            ),
+            (
+                fixture.request.expires_slot + 1,
+                fixture.request.expires_timestamp,
+                ExecutionStatus::Pending,
+            ),
+            (
+                fixture.request.expires_slot,
+                fixture.request.expires_timestamp + 1,
+                ExecutionStatus::Pending,
+            ),
+            (
+                fixture.request.expires_slot + 1,
+                fixture.request.expires_timestamp + 1,
+                ExecutionStatus::ProvenAbsent,
+            ),
+        ] {
+            let rpc = Arc::new(fixture.rpc(false, slot, timestamp));
+            let client = PayShClient::new(fixture.deployment.clone(), rpc.clone()).unwrap();
+            assert_eq!(client.settlement(&fixture.original).unwrap(), expected);
+            assert!(!rpc.calls.lock().unwrap().iter().any(|(method, _)| method
+                == "getTransaction"
+                || method == "getSignaturesForAddress"));
+        }
+        let mut stale = fixture.rpc(
+            false,
+            fixture.request.expires_slot + 1,
+            fixture.request.expires_timestamp + 1,
+        );
+        stale.receipt_context_slot = fixture.request.expires_slot;
+        let client = PayShClient::new(fixture.deployment, Arc::new(stale)).unwrap();
+        assert!(client.settlement(&fixture.original).is_err());
+    }
+    #[test]
+    fn settlement_recovers_alternate_relayer_after_original_sponsor_failed() {
+        let fixture = RecoveryFixture::new();
+        assert_ne!(fixture.original.payer, fixture.alternative.payer);
+        assert_ne!(fixture.original.signature, fixture.alternative.signature);
+        assert_eq!(
+            fixture.original.request_hash,
+            fixture.alternative.request_hash
+        );
+        let mut rpc = fixture.rpc(
+            true,
+            fixture.request.expires_slot + 1,
+            fixture.request.expires_timestamp + 1,
+        );
+        rpc.alternative_transaction = fixture.winning_transaction();
+        rpc.history = json!([{"signature":"missing-success-metadata"},
+            {"signature":fixture.original.signature,"err":{"InstructionError":[2,{"Custom":203}]}},
+            {"signature":fixture.alternative.signature,"err":null}]);
+        let rpc = Arc::new(rpc);
+        let client = PayShClient::new(fixture.deployment, rpc.clone()).unwrap();
+        assert_eq!(
+            client.settlement(&fixture.original).unwrap(),
+            ExecutionStatus::Finalized(Settlement {
+                signature: fixture.alternative.signature.clone(),
+                finalized_slot: fixture.request.signing_slot + 1,
+                invocation_index: 2,
+            })
+        );
+        let calls = rpc.calls.lock().unwrap();
+        let queries: Vec<_> = calls
+            .iter()
+            .filter(|(method, _)| method == "getTransaction")
+            .map(|(_, params)| params[0].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            queries,
+            vec![
+                fixture.original.signature.as_str(),
+                fixture.alternative.signature.as_str()
+            ]
+        );
     }
 }
