@@ -239,6 +239,10 @@ fn services(json: bool, stdout: &mut String) -> Result<i32> {
         *stdout += &output::json(&catalog);
         return Ok(0);
     }
+    if catalog.get("services").is_some() || catalog.get("profile").is_some() {
+        *stdout += &cooperating(&catalog)?;
+        return Ok(0);
+    }
     let providers = catalog["providers"]
         .as_array()
         .ok_or_else(|| Error::unsupported("the PaySH catalog has no provider list"))?;
@@ -255,6 +259,75 @@ fn services(json: bool, stdout: &mut String) -> Result<i32> {
         );
     }
     Ok(0)
+}
+
+/// A cooperating backend's own list, `{profile: "cooperating-v1", reputation: null,
+/// services: [{id, name, network, priceUsdcUnits}]}`. Prices are six-decimal token
+/// units on the service's network, never USD; only Solana Testnet names the token.
+fn cooperating(catalog: &Value) -> Result<String> {
+    let bad = |field: &str, why: &str| {
+        Error::unsupported(format!(
+            "the PaySH catalog {field} {why}; nothing is listed"
+        ))
+    };
+    if catalog["profile"].as_str() != Some("cooperating-v1") {
+        return Err(bad("profile", "is not cooperating-v1"));
+    }
+    if catalog.get("providers").is_some() {
+        return Err(bad("reply", "lists both services and providers"));
+    }
+    if !catalog["reputation"].is_null() {
+        return Err(bad("reputation", "is not null"));
+    }
+    let services = catalog["services"]
+        .as_array()
+        .ok_or_else(|| bad("services", "is not a list"))?;
+    let mut out = String::new();
+    for (i, s) in services.iter().enumerate().take(500) {
+        let field = |name: &str, max: usize| {
+            s[name]
+                .as_str()
+                .filter(|v| !v.is_empty() && v.chars().count() <= max)
+                .ok_or_else(|| bad(&format!("services[{i}].{name}"), "is missing or invalid"))
+        };
+        let id = field("id", 200).and_then(|id| {
+            service_id(id).map_err(|_| bad(&format!("services[{i}].id"), "is not a service ID"))
+        })?;
+        let (name, network) = (field("name", 200)?, field("network", 40)?);
+        let units = match &s["priceUsdcUnits"] {
+            Value::Number(n) => n.as_u64(),
+            Value::String(d)
+                if d == "0" || (!d.starts_with('0') && d.bytes().all(|b| b.is_ascii_digit())) =>
+            {
+                d.parse().ok()
+            }
+            _ => None,
+        }
+        .ok_or_else(|| {
+            bad(
+                &format!("services[{i}].priceUsdcUnits"),
+                "is not an unsigned 64-bit integer",
+            )
+        })?;
+        let price = if network == "solana:testnet" {
+            format!("{units} test-token units per call on Solana Testnet, not USD or USDC")
+        } else {
+            format!(
+                "listed for {}, not Solana Testnet; no price shown",
+                cell(network)
+            )
+        };
+        out += &format!("{id}\t{}\t{price}\n", cell(name));
+    }
+    Ok(out)
+}
+
+/// One tab-separated field: escaped like `one_line`, and quoted if it holds a tab.
+fn cell(s: &str) -> String {
+    match one_line(s) {
+        q if q == s && s.contains('\t') => quoted(s),
+        q => q,
+    }
 }
 
 fn unknown(e: impl std::fmt::Display, policy: &str, op: &str) -> Error {
@@ -385,11 +458,18 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
                 .or_else(|| r["finalizedSlot"].as_str()?.parse().ok())
                 .is_some_and(|slot| slot > 0)
     });
-    // A pay or unrecognized receipt without a finalized slot may still have paid.
+    // A pay or unrecognized receipt without a finalized slot may still have paid. Expiry
+    // is not evidence of absence: a signature without a receipt may still have executed.
+    let unverified = v["signatures"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|s| s.as_str().is_none_or(|s| !finalized.contains(&s)));
     let unsettled = !paid
-        && receipts
+        && (receipts
             .iter()
-            .any(|r| r["action"]["type"].as_str() != Some("swap"));
+            .any(|r| r["action"]["type"].as_str() != Some("swap"))
+            || (phase == "expired" && unverified));
     if FAILED.contains(&phase.as_str()) && (paid || unsettled) {
         state = "unknown";
         exit = 5;
@@ -400,7 +480,7 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
         match phase.as_str() {
             "awaiting_input" => "not confirmed; waiting for the owner's signed answer",
             "owner_approved" => "not confirmed; owner approval does not establish payment",
-            "expired" => "not confirmed; the original request expired",
+            "expired" if !unsettled => "not confirmed; the original request expired",
             "evaluating" | "approved" | "preparing" => {
                 "not sent; the policy is still checking this call"
             }

@@ -316,6 +316,62 @@ fn expired_original_request_is_terminal_without_retry_or_owner_denial() {
 }
 
 #[test]
+fn expired_with_unverified_signatures_or_a_pay_receipt_stays_unresolved() {
+    let swap = json!({"signature":"swapSig","finalizedSlot":9,"action":{"type":"swap","amountInLamports":1000,"minOutUsdc":990}});
+    let pay =
+        json!({"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}});
+    for (signatures, receipts, paid, exit) in [
+        (json!(["sigA"]), json!([]), false, 5),
+        (
+            json!(["swapSig", "paySig"]),
+            json!([swap.clone()]),
+            false,
+            5,
+        ),
+        (json!(["paySig"]), json!([pay]), true, 5),
+        // Every signature has a finalized swap receipt and none could have paid.
+        (json!(["swapSig"]), json!([swap]), false, 20),
+    ] {
+        let reply = json!({"operationId":"op-1","status":"expired","signatures":signatures,"receipts":receipts,"response":null});
+        let (url, seen) = serve(vec![http(200, &reply.to_string())]);
+        let out = run(&url, &["paysh", "status", POLICY, "op-1"], Some(TOKEN));
+        let (stdout, stderr) = text(&out);
+        assert_eq!(
+            out.status.code(),
+            Some(exit),
+            "{signatures}: {stdout}{stderr}"
+        );
+        assert_eq!(seen.recv().unwrap().len(), 1, "never retried");
+        assert!(
+            !stdout.contains("denied") && !stdout.contains("not sent"),
+            "{stdout}"
+        );
+        if exit == 5 {
+            assert!(stdout.contains("state: unknown"), "{stdout}");
+            assert_eq!(stdout.contains("payment: finalized"), paid, "{stdout}");
+            if !paid {
+                assert!(stdout.contains("payment: unresolved"), "{stdout}");
+            }
+            assert!(!stdout.contains("not delivered; the original request expired"));
+            assert!(stdout.contains("Never retry or create a replacement payment"));
+        } else {
+            assert!(stdout.contains("not delivered; the original request expired"));
+        }
+        let (url, _) = serve(vec![http(200, &reply.to_string())]);
+        let out = run(
+            &url,
+            &["paysh", "status", POLICY, "op-1", "--json"],
+            Some(TOKEN),
+        );
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(out.status.code(), Some(exit));
+        assert_eq!(v["exitCode"], json!(exit));
+        assert_eq!(v["paymentFinalized"], json!(paid));
+        assert_eq!(v["state"], if exit == 5 { "unknown" } else { "failed" });
+    }
+}
+
+#[test]
 fn only_delivery_exits_zero() {
     for (status, code) in [
         ("evaluating", 12),
@@ -327,7 +383,8 @@ fn only_delivery_exits_zero() {
         ("delivered", 0),
         ("denied", 20),
         ("failed", 20),
-        ("expired", 20),
+        // Its signatures have no receipts, so expiry does not show they never executed.
+        ("expired", 5),
         ("unknown", 5),
         ("settlement_unknown", 5),
         ("absent", 5),
@@ -460,6 +517,120 @@ fn services_reads_the_catalog_without_credentials() {
         ("GET", "/api/paysh/catalog")
     );
     assert_eq!(seen[0].header("authorization"), None);
+}
+
+/// The isolated cooperating backend's `GET /api/paysh/catalog` reply.
+fn cooperating() -> Value {
+    json!({"profile":"cooperating-v1","services":[{"id":"native-paysh-testnet-compatibility","name":"PaySH native Testnet compatibility","description":"Native payment fixture only. Google Air Quality is Mainnet-only and unavailable on Testnet.","network":"solana:testnet","priceUsdcUnits":1000,"mint":"Mint111","recipient":"Recipient111"}],"reputation":null})
+}
+
+#[test]
+fn services_lists_the_cooperating_catalog_in_test_token_units() {
+    let mut string_price = cooperating();
+    string_price["services"][0]["priceUsdcUnits"] = json!("1000");
+    let mut mainnet = cooperating();
+    mainnet["services"][0]["network"] = json!("solana:mainnet");
+    mainnet["services"][0]["name"] = json!("Air\tQuality\u{1b}[2J\nAPI");
+    mainnet["services"][0]["id"] = json!(SERVICE);
+    for (catalog, expected) in [
+        (
+            cooperating(),
+            "native-paysh-testnet-compatibility\tPaySH native Testnet compatibility\t1000 test-token units per call on Solana Testnet, not USD or USDC\n".to_string(),
+        ),
+        (
+            string_price,
+            "native-paysh-testnet-compatibility\tPaySH native Testnet compatibility\t1000 test-token units per call on Solana Testnet, not USD or USDC\n".to_string(),
+        ),
+        (
+            mainnet,
+            format!("{SERVICE}\t\"Air\\tQuality\\u001b[2J\\nAPI\"\tlisted for solana:mainnet, not Solana Testnet; no price shown\n"),
+        ),
+    ] {
+        let (url, seen) = serve(vec![http(200, &catalog.to_string())]);
+        let out = run(&url, &["paysh", "services"], Some(TOKEN));
+        let (stdout, stderr) = text(&out);
+        assert_eq!(out.status.code(), Some(0), "{stderr}");
+        assert_eq!(stdout, expected);
+        assert!(!stdout.contains("USD per") && !stdout.contains('\u{1b}'));
+        let seen = seen.recv().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].path, "/api/paysh/catalog");
+        assert_eq!(seen[0].header("authorization"), None);
+    }
+    let (url, _) = serve(vec![http(200, &cooperating().to_string())]);
+    let out = run(&url, &["paysh", "services", "--json"], None);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&out.stdout).unwrap(),
+        cooperating()
+    );
+}
+
+#[test]
+fn services_refuses_a_malformed_cooperating_catalog() {
+    let edit = |f: &dyn Fn(&mut Value)| {
+        let mut c = cooperating();
+        f(&mut c);
+        c
+    };
+    for (catalog, field) in [
+        (edit(&|c| c["profile"] = json!("cooperating-v2")), "profile"),
+        (
+            edit(&|c| {
+                c.as_object_mut().unwrap().remove("profile");
+            }),
+            "profile",
+        ),
+        (
+            edit(&|c| c["reputation"] = json!({"score":99})),
+            "reputation",
+        ),
+        (
+            edit(&|c| c["providers"] = json!([])),
+            "both services and providers",
+        ),
+        (edit(&|c| c["services"] = json!("x")), "services"),
+        (
+            edit(&|c| c["services"][0]["priceUsdcUnits"] = json!(0.001)),
+            "services[0].priceUsdcUnits",
+        ),
+        (
+            edit(&|c| c["services"][0]["priceUsdcUnits"] = json!("1e3")),
+            "services[0].priceUsdcUnits",
+        ),
+        (
+            edit(&|c| c["services"][0]["priceUsdcUnits"] = json!("01000")),
+            "services[0].priceUsdcUnits",
+        ),
+        (
+            edit(&|c| c["services"][0]["priceUsdcUnits"] = json!("18446744073709551616")),
+            "services[0].priceUsdcUnits",
+        ),
+        (
+            edit(&|c| c["services"][0]["priceUsdcUnits"] = json!(-1)),
+            "services[0].priceUsdcUnits",
+        ),
+        (
+            edit(&|c| c["services"][0]["id"] = json!("air quality")),
+            "services[0].id",
+        ),
+        (
+            edit(&|c| c["services"][0]["name"] = json!("")),
+            "services[0].name",
+        ),
+        (
+            edit(&|c| c["services"][0]["network"] = Value::Null),
+            "services[0].network",
+        ),
+    ] {
+        let (url, seen) = serve(vec![http(200, &catalog.to_string())]);
+        let out = run(&url, &["paysh", "services"], None);
+        let (stdout, stderr) = text(&out);
+        assert_eq!(out.status.code(), Some(3), "{field}: {stdout}{stderr}");
+        assert!(stdout.is_empty(), "{field}: {stdout}");
+        assert!(stderr.contains(field), "{field}: {stderr}");
+        assert_eq!(seen.recv().unwrap().len(), 1, "never retried");
+    }
 }
 
 #[test]

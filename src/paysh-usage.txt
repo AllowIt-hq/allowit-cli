@@ -12,7 +12,8 @@ Configuration (environment only):
 
 Commands:
   allowit paysh services [--json]
-                 list the PaySH catalog; no token needed
+                 list the PaySH catalog, or this server's cooperating-v1
+                 services in test-token units; no token needed
   allowit paysh call POLICY OPERATION_ID SERVICE_ID INPUT_JSON [--json]
                  pay for and call SERVICE_ID once with INPUT_JSON
   allowit paysh status POLICY OPERATION_ID [--json]
@@ -38,4 +39,5 @@ status), 20 failed, denied or expired (no delivery). Expiry is not an owner deni
 401, 404 and 429, proves that nothing was paid; it exits 5 with the original
 OPERATION_ID. JSON output includes paymentFinalized, derived from a pay receipt
 with a signature and a finalized slot. A failed, denied or expired operation with any receipt
-other than a swap stays unknown (exit 5).
+other than a swap, or an expired operation with a signature that has no receipt, stays
+unknown (exit 5).
