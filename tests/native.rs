@@ -24,7 +24,7 @@ fn unsupported_platform_refuses_before_creating_policy_state() {
     assert!(!directory.exists());
     for args in [
         vec!["policy", "generate", "Spend up to 5 test tokens per day"],
-        vec!["policy", "deploy"],
+        vec!["policy", "deploy", "1"],
         vec!["policy", "execute", "11111111111111111111111111111111", "1"],
     ] {
         let output = run_with(
