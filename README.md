@@ -128,35 +128,37 @@ Fields a service omits (`title`, `policyId`, `owner`, `endpoints`, `capabilities
 
 ```sh
 allowit policy generate "Spend up to 5 test tokens per day"   # prints the generated Rust source
-allowit policy deploy                       # prints the generated skill and the transaction's explorer link
+allowit policy deploy 25                    # create, configure, fund and activate atomically
 allowit policy fund 25                      # prints the transaction's explorer link
 allowit policy execute RECIPIENT_TOKEN_ACCOUNT 1.5
 allowit policy status
 allowit policy revoke
 allowit policy withdraw 10
+allowit policy close
 allowit policy tune 0.5
+allowit policy tune-action 0.25
 allowit policy help                         # or: allowit policy COMMAND --help
 ```
 
 | Command | Arguments |
 |---|---|
 | `generate` | Exactly one `PROMPT`. Quote it; several words unquoted are refused. Put `--` before a prompt that begins with `-`. |
-| `deploy`, `status`, `revoke` | None. |
-| `fund`, `withdraw` | One positive decimal `AMOUNT` (e.g. `5`, `0.25`). |
+| `status`, `revoke`, `close` | None. |
+| `deploy`, `fund`, `withdraw` | One positive decimal `AMOUNT` (e.g. `5`, `0.25`). `deploy` includes this initial funding in the one setup transaction. |
 | `execute` | `RECIPIENT` (a Solana token account address, checked offline) and a positive decimal `AMOUNT`. |
-| `tune` | One non-negative decimal `VALUE`. |
+| `tune`, `tune-action` | One non-negative daily or per-action limit `VALUE`. |
 
 Decimals are plain digits with an optional fraction: no sign, exponent, separator, leading zero or bare `.`, at most 40 characters. The SDK checks precision and limits. Every command accepts `--json`, which asks the SDK for a machine-readable result on stdout; any other flag is refused. Invalid arguments exit 2 before anything runs.
 
-**Network.** Testnet by default. `ALLOWIT_NETWORK=solana:devnet` selects Devnet explicitly; configure its RPC as well. Mainnet is refused. Generate never signs. Execute needs `ALLOWIT_OWNER` (public key) and the executor key only; status needs no secret key. Owner keys stay on the owner device.
+**Network.** Testnet by default. `ALLOWIT_NETWORK=solana:devnet` selects Devnet explicitly; configure its RPC as well. Mainnet is refused. Generate never signs. Execute needs `ALLOWIT_OWNER` (public key), the executor key, and the imported scoped server capability; the authority key remains server-side. Status needs no secret signing key. Owner keys stay on the owner device.
 
 **Native lifecycle exits.** 0 settled/new generation or status, 5 uncertain, 6 replay of an earlier settled operation, 20 policy denial or finalized failure, 3 configuration. `ALLOWIT_REQUEST_ID` identifies a new intended operation; keep it unchanged for retries.
 
-**Local configuration.** `ALLOWIT_POLICY_DIR` defaults to `.allowit`; `ALLOWIT_POLICY_FILE` may select another policy file. `ALLOWIT_NETWORK`, `ALLOWIT_RPC_URL`, `ALLOWIT_MINT`, `ALLOWIT_EXECUTOR`, and `ALLOWIT_DEPLOYMENT_FILE` configure the native profile. Import persists a public context and refuses conflicting configuration. `ALLOWIT_OWNER_KEYPAIR` is used for owner operations, `ALLOWIT_EXECUTOR_KEYPAIR` for execution, and `ALLOWIT_OWNER` supplies the public owner for execution/status. Keys are private local files. `ALLOWIT_REQUEST_ID` is the durable operation ID. Only an explicitly additional fund/withdraw uses both a fresh ID and `ALLOWIT_ADDITIONAL_OWNER_OPERATION=1` after an expired uncertain operation.
+**Local configuration.** `ALLOWIT_POLICY_DIR` defaults to `.allowit`; `ALLOWIT_POLICY_FILE` may select another policy file. `ALLOWIT_NETWORK`, `ALLOWIT_RPC_URL`, `ALLOWIT_MINT`, `ALLOWIT_EXECUTOR`, `ALLOWIT_AUTHORITY`, and `ALLOWIT_DEPLOYMENT_FILE` configure the native profile. Import persists a public context and refuses conflicting configuration. `ALLOWIT_OWNER_KEYPAIR` is used for owner operations, `ALLOWIT_EXECUTOR_KEYPAIR` for execution, and `ALLOWIT_OWNER` supplies the public owner for execution/status. Keys are private local files. `ALLOWIT_REQUEST_ID` is required for execution and is the durable operation ID. `ALLOWIT_EXECUTION_ACTION` defaults to `transfer`; `ALLOWIT_EXECUTION_MERCHANT` and one of `ALLOWIT_EXECUTION_CONTEXT_JSON` or `ALLOWIT_EXECUTION_CONTEXT_FILE` supply the exact policy input. Context is sent to the trusted backend, so do not put credentials in it. Only an explicitly additional fund/withdraw uses both a fresh ID and `ALLOWIT_ADDITIONAL_OWNER_OPERATION=1` after an expired uncertain operation.
 
 **SDK source pin.** `vendor/allowit-native/` contains the canonical SDK crate and its required build and test inputs. `vendor/native-sdk.json` records the exact SDK commit and file hashes. `scripts/sync-native-sdk.py SDK_REPO FULL_COMMIT --check` verifies the snapshot against canonical source; ordinary builds and CI require no private SDK checkout or cross-repository token.
 
-**Hosted executor audit.** A backend-exported executor bundle may additionally contain `audit: {origin, token}`. Import saves this capability in the private local journal. It grants only reporting of that policy's executor-signed operations to `POST /api/native/report`; it grants no owner, approval or signing authority. For this profile the CLI persists the exact signed proof, requires a durable SQL acknowledgment before broadcasting, then reports recovered/finalized status. Missing, redirected or inconsistent acknowledgments block broadcast or produce exit 5; retain the journal and retry the identical request ID. `policy status` retries reporting without signing or broadcasting. The token is never printed; the executor bundle and journal contain this private report capability and must not be shared publicly. Local denials before signing create no chain operation and are outside this signed-operation audit. Owner browser operations use the backend owner lifecycle; standalone owner CLI operations remain local. This audit is cooperative client behavior; the backend must independently reconcile chain receipts and vault nonces.
+**Hosted execution authorization.** A backend-exported executor bundle contains `audit: {origin, token}`. Import saves this policy-scoped capability in the private local journal. The CLI sends only the high-level action, merchant, context, recipient and amount to `POST /api/native/execute`; the backend evaluates the owner-bound policy and returns an authority-only signature over its exact prepared transaction. The CLI reconstructs and checks the approval commitment, signer set, instructions and message, adds only the executor signature, persists the complete proof, then requires a durable `POST /api/native/report` acknowledgment before chain broadcast. Identical retries reconcile the saved proof without obtaining another approval or allocating another payment. Missing, redirected or inconsistent responses block broadcast or produce exit 5. `policy status` retries reporting without signing or broadcasting. The token is never printed; the executor bundle and journal contain this private capability and must not be shared publicly. Denial, unresolved owner input, or a required provider failure produces no execution signature. Owner operations remain independent of the provider and authority.
 
 ## PaySH agent calls
 
@@ -198,7 +200,7 @@ The configured token is redacted in full from all output, whatever its length. I
 
 HTTP action commands use `GET /api/harness/{owner}/{policy}/skill` and `POST` routes for `judge`, `transactions` and `status`, with the policy-scoped bearer token. The frontend proxies this public API to the Rust backend in `AllowIt-hq/allowit-engine/server/`. The CLI does not link backend or engine crates.
 
-The HTTP commands report server states and preserve owner approval. Native `policy execute` uses the executor's local key and standing policy approval; it cannot sign owner operations. An exported bundle with an audit capability additionally requires the server acknowledgment described above.
+The HTTP commands report server states and preserve owner approval. Native `policy execute` uses the executor's local key plus the trusted server authority signature and cannot sign owner operations. Owner withdrawal and closure never depend on the executor, authority, or semantic provider.
 
 The [integration checks](integration/README.md) retain pinned Go gateways and their Rust SDK runtimes as compatibility fixtures. They do not represent a production deployment. Run `make integration APP_REPO=/path/to/AllowIt-app` alongside `make test` when both fixture commits are available locally.
 

@@ -4,7 +4,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-pub const PROFILE: &str = "solana-native-v1";
+pub const PROFILE: &str = "solana-native-v2";
 pub const MAX_DAILY_UNITS: u64 = 50_000_000;
 pub fn genesis(network: &str) -> Result<&'static str> {
     match network {
@@ -67,6 +67,13 @@ fn js_trim(value: &str) -> &str {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct ExecutionBinding {
+    pub policy_digest: String,
+    pub requirements_digest: String,
+    pub semantic_required: bool,
+}
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct Policy {
     pub version: u32,
     pub instance: String,
@@ -74,7 +81,11 @@ pub struct Policy {
     pub network: String,
     pub prompt: String,
     pub daily_limit: String,
+    pub action_limit: String,
     pub pay_discovery: bool,
+    pub execution_policy_digest: String,
+    pub execution_requirements_digest: String,
+    pub semantic_required: bool,
     pub source_bundle: String,
     pub id: String,
     pub policy_artifact: String,
@@ -88,7 +99,11 @@ struct Identity<'a> {
     network: &'a str,
     prompt: &'a str,
     daily_limit: &'a str,
+    action_limit: &'a str,
     pay_discovery: bool,
+    execution_policy_digest: &'a str,
+    execution_requirements_digest: &'a str,
+    semantic_required: bool,
     source_bundle: &'a str,
 }
 impl Policy {
@@ -99,12 +114,31 @@ impl Policy {
             network: &self.network,
             prompt: &self.prompt,
             daily_limit: &self.daily_limit,
+            action_limit: &self.action_limit,
             pay_discovery: self.pay_discovery,
+            execution_policy_digest: &self.execution_policy_digest,
+            execution_requirements_digest: &self.execution_requirements_digest,
+            semantic_required: self.semantic_required,
             source_bundle: &self.source_bundle,
         }
     }
+    pub fn execution_binding(&self) -> ExecutionBinding {
+        ExecutionBinding {
+            policy_digest: self.execution_policy_digest.clone(),
+            requirements_digest: self.execution_requirements_digest.clone(),
+            semantic_required: self.semantic_required,
+        }
+    }
+    pub fn with_execution_binding(mut self, binding: ExecutionBinding) -> Result<Self> {
+        self.execution_policy_digest = binding.policy_digest;
+        self.execution_requirements_digest = binding.requirements_digest;
+        self.semantic_required = binding.semantic_required;
+        self.id = digest(serde_json::to_vec(&self.identity()).unwrap());
+        self.validate()?;
+        Ok(self)
+    }
     pub fn validate(&self) -> Result<()> {
-        if self.version != 1 || self.profile != PROFILE || genesis(&self.network).is_err() {
+        if self.version != 2 || self.profile != PROFILE || genesis(&self.network).is_err() {
             return Err(Error::config("Unsupported policy profile/network"));
         }
         let r = release();
@@ -119,6 +153,25 @@ impl Policy {
             return Err(Error::config(
                 "Daily limit must be positive and within the native ceiling",
             ));
+        }
+        let action_limit = units(&self.action_limit)?;
+        if action_limit == 0 || action_limit > MAX_DAILY_UNITS {
+            return Err(Error::config(
+                "Action limit must be positive and within the native ceiling",
+            ));
+        }
+        for value in [
+            &self.execution_policy_digest,
+            &self.execution_requirements_digest,
+        ] {
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+                || value.bytes().all(|c| c == b'0')
+            {
+                return Err(Error::config("Invalid execution policy binding"));
+            }
         }
         if !regex::Regex::new(
             r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -144,15 +197,55 @@ impl Policy {
         let re=regex::Regex::new(r"(?i-u)^Spend up to ([0-9]+(?:\.[0-9]{1,6})?) (?:tokens|test tokens) per day(?P<discovery> with PaySH discovery)?\.?$").unwrap();
         let matched=re.captures(js_trim(prompt)).ok_or_else(||Error::denied("This native profile supports a daily token ceiling only. Use “Spend up to 5 test tokens per day” or configure the prompt author. Other rules must not be silently dropped."))?;
         let daily_limit = decimal(units(&matched[1])?);
+        let action_limit = daily_limit.clone();
+        let binding = ExecutionBinding {
+            policy_digest: digest(
+                serde_json::to_vec(&serde_json::json!({
+                    "kind":"allowit-native-numeric-v2",
+                    "dailyLimit":daily_limit.as_str(),
+                    "actionLimit":action_limit.as_str(),
+                }))
+                .unwrap(),
+            ),
+            requirements_digest: digest(b"{\"features\":[]}"),
+            semantic_required: false,
+        };
+        Self::generate_bound(
+            network,
+            prompt,
+            &daily_limit,
+            &action_limit,
+            matched.name("discovery").is_some(),
+            binding,
+        )
+    }
+    pub fn generate_bound(
+        network: &str,
+        prompt: &str,
+        daily_limit: &str,
+        action_limit: &str,
+        pay_discovery: bool,
+        binding: ExecutionBinding,
+    ) -> Result<Self> {
+        genesis(network)?;
+        if js_trim(prompt).is_empty() || prompt.encode_utf16().count() > 8000 {
+            return Err(Error::config("Supply one bounded policy prompt"));
+        }
+        let daily_limit = decimal(units(daily_limit)?);
+        let action_limit = decimal(units(action_limit)?);
         let r = release();
         let mut policy = Self {
-            version: 1,
+            version: 2,
             instance: uuid::Uuid::new_v4().to_string(),
             profile: PROFILE.into(),
             network: network.into(),
             prompt: prompt.into(),
             daily_limit,
-            pay_discovery: matched.name("discovery").is_some(),
+            action_limit,
+            pay_discovery,
+            execution_policy_digest: binding.policy_digest,
+            execution_requirements_digest: binding.requirements_digest,
+            semantic_required: binding.semantic_required,
             source_bundle: r.source_bundle.clone(),
             id: String::new(),
             policy_artifact: r.artifacts[0].sha256.clone(),

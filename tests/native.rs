@@ -25,17 +25,29 @@ fn run_with(directory: &Path, args: &[&str], extra: &[(&str, &str)]) -> Output {
         .unwrap()
 }
 #[test]
+fn native_parser_advertises_the_v2_owner_commands() {
+    let result = run(&temp(), &["policy", "mystery"]);
+    assert_eq!(result.status.code(), Some(2));
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(error.contains("close"), "{error}");
+    assert!(error.contains("tune-action"), "{error}");
+}
+#[test]
 fn status_uses_public_context_without_loading_any_signing_key() {
     use std::{
         io::{Read, Write},
         net::TcpListener,
     };
     let directory = temp();
-    let reference: Value = serde_json::from_str(include_str!(
-        "../vendor/allowit-native/tests/reference.json"
-    ))
-    .unwrap();
-    let bundle = json!({"version":1,"policy":reference["policy"],"context":{"policyId":reference["policy"]["id"],"owner":reference["owner"],"network":reference["config"]["network"],"mint":reference["config"]["mint"],"executor":reference["config"]["executor"],"deployment":reference["config"]["deployment"]}});
+    let owner = Key::parse("AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9").unwrap();
+    let executor = Key::parse("9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu").unwrap();
+    let authority = Key::parse("GyGKxMyg1p9SsHfm15MkNUu1u9TN2JtTspcdmrtGUdse").unwrap();
+    let policy = Policy::generate("solana:testnet", "Spend up to 5 test tokens per day").unwrap();
+    let program = Key([2; 32]);
+    let policy_data = Key::find_program_address(&[&program.0], Key::parse(LOADER).unwrap())
+        .unwrap()
+        .0;
+    let bundle = json!({"version":2,"policy":policy,"context":{"policyId":policy.id,"owner":owner,"network":policy.network,"mint":Key([4;32]),"executor":executor,"authority":authority,"deployment":{"network":policy.network,"sourceBundle":release().source_bundle,"policy":program,"policyData":policy_data,"custody":Key([7;32])}}});
     let source = directory.with_extension("executor.json");
     std::fs::write(&source, bundle.to_string()).unwrap();
     assert!(
@@ -118,6 +130,7 @@ fn generate_is_offline_native_and_preserves_policy_instance() {
         &[
             ("ALLOWIT_MINT", "unused-invalid-mint"),
             ("ALLOWIT_EXECUTOR", "unused-invalid-executor"),
+            ("ALLOWIT_AUTHORITY", "unused-invalid-authority"),
             ("ALLOWIT_RPC_URL", "unused-invalid-rpc"),
         ],
     );
@@ -165,8 +178,11 @@ fn import_is_public_only_and_cannot_replace_occupied_policy() {
     let pd = Key::find_program_address(&[&policy.0], Key::parse(LOADER).unwrap())
         .unwrap()
         .0;
-    let context = json!({"policyId":p.id,"owner":Key([3;32]),"network":p.network,"mint":Key([4;32]),"executor":Key([5;32]),"deployment":{"network":p.network,"sourceBundle":release().source_bundle,"policy":policy,"policyData":pd,"custody":Key([6;32])}});
-    let bundle = json!({"version":1,"policy":p,"context":context});
+    let owner = Key::parse("AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9").unwrap();
+    let executor = Key::parse("9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu").unwrap();
+    let authority = Key::parse("GyGKxMyg1p9SsHfm15MkNUu1u9TN2JtTspcdmrtGUdse").unwrap();
+    let context = json!({"policyId":p.id,"owner":owner,"network":p.network,"mint":Key([4;32]),"executor":executor,"authority":authority,"deployment":{"network":p.network,"sourceBundle":release().source_bundle,"policy":policy,"policyData":pd,"custody":Key([6;32])}});
+    let bundle = json!({"version":2,"policy":p,"context":context});
     let source = directory.with_extension("executor.json");
     std::fs::write(&source, serde_json::to_vec(&bundle).unwrap()).unwrap();
     let result = run_with(

@@ -62,6 +62,8 @@ fn compare(args: &[&str], env: &BTreeMap<&str, String>) {
 fn validation_and_help_match_reference() {
     let _guard = SERIAL.lock().unwrap();
     let env = BTreeMap::new();
+    // The native policy command set is versioned independently and covered in
+    // native.rs; the remaining shared CLI validation stays byte-for-byte.
     for args in [
         vec![],
         vec!["help"],
@@ -76,7 +78,6 @@ fn validation_and_help_match_reference() {
         vec!["policy", "tune", "-1"],
         vec!["policy", "generate", ""],
         vec!["policy", "generate", "several", "words"],
-        vec!["policy", "mystery"],
     ] {
         compare(&args, &env);
     }

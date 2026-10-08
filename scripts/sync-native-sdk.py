@@ -13,6 +13,12 @@ parser.add_argument('sdk_repo', type=Path)
 parser.add_argument('revision')
 parser.add_argument('--check', action='store_true')
 args = parser.parse_args()
+
+def canonical_text(data):
+    # Every accepted snapshot file is text. Git's autocrlf setting must not make
+    # the source manifest or Linux verification depend on the sync host.
+    return data.replace(b'\r\n', b'\n')
+
 revision = subprocess.check_output(['git', '-C', str(args.sdk_repo), 'rev-parse', args.revision + '^{commit}'], text=True).strip()
 if args.revision != revision:
     parser.error('revision must be a full exact commit SHA')
@@ -39,7 +45,7 @@ with tarfile.open(fileobj=io.BytesIO(archive)) as source:
             raise SystemExit('unexpected SDK crate file: ' + name)
         if name.startswith('tests/') and Path(name).suffix not in {'.rs', '.json'}:
             continue  # Reference-authoring JS is SDK tooling, not a Rust dependency.
-        files[name] = source.extractfile(entry).read()
+        files[name] = canonical_text(source.extractfile(entry).read())
 if 'Cargo.toml' not in files or 'src/lib.rs' not in files:
     raise SystemExit('native Rust SDK source missing')
 root = Path(__file__).resolve().parents[1]
@@ -49,7 +55,7 @@ legal = {}
 for name in ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/Aeneas-Apache-2.0.txt']:
     present = subprocess.run(['git', '-C', str(args.sdk_repo), 'cat-file', '-e', revision + ':' + name], capture_output=True)
     if present.returncode == 0:
-        legal[name] = subprocess.check_output(['git', '-C', str(args.sdk_repo), 'show', revision + ':' + name])
+        legal[name] = canonical_text(subprocess.check_output(['git', '-C', str(args.sdk_repo), 'show', revision + ':' + name]))
 manifest = {'repository': 'https://github.com/AllowIt-hq/allowit-sdk', 'commit': revision, 'crate': 'native-rust', 'files': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(files.items())}}
 if interface_files:
     manifest['payshInterface'] = {name: hashlib.sha256(data).hexdigest() for name, data in sorted(interface_files.items())}
@@ -62,13 +68,13 @@ if args.check:
     historical = manifest_text.replace('https://github.com/AllowIt-hq/allowit-sdk', 'https://github.com/ackrate/AllowIt-sdk')
     if captured not in {manifest_text, historical}:
         raise SystemExit('SDK source manifest differs')
-    actual = {p.relative_to(vendored).as_posix(): p.read_bytes() for p in vendored.rglob('*') if p.is_file()}
+    actual = {p.relative_to(vendored).as_posix(): canonical_text(p.read_bytes()) for p in vendored.rglob('*') if p.is_file()}
     if actual != files:
         raise SystemExit('vendored SDK source differs from pinned commit')
-    actual_interface = {p.relative_to(interface_root).as_posix(): p.read_bytes() for p in interface_root.rglob('*') if p.is_file()}
+    actual_interface = {p.relative_to(interface_root).as_posix(): canonical_text(p.read_bytes()) for p in interface_root.rglob('*') if p.is_file()}
     if actual_interface != interface_files:
         raise SystemExit('vendored PaySH interface differs from pinned commit')
-    actual_legal = {p.relative_to(root / 'vendor/native-sdk-licenses').as_posix(): p.read_bytes() for p in (root / 'vendor/native-sdk-licenses').rglob('*') if p.is_file()}
+    actual_legal = {p.relative_to(root / 'vendor/native-sdk-licenses').as_posix(): canonical_text(p.read_bytes()) for p in (root / 'vendor/native-sdk-licenses').rglob('*') if p.is_file()}
     if actual_legal != legal:
         raise SystemExit('vendored SDK license material differs from pinned commit')
 else:

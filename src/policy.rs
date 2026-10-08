@@ -16,13 +16,13 @@ pub(crate) fn run(args: &[String], stdout: &mut String, stderr: &mut String) -> 
     let parameters: &[&str] = match name {
         "generate" => &["PROMPT"],
         "import" => &["EXECUTOR_JSON"],
-        "deploy" | "status" | "revoke" => &[],
-        "fund" | "withdraw" => &["AMOUNT"],
+        "status" | "revoke" | "close" => &[],
+        "deploy" | "fund" | "withdraw" => &["AMOUNT"],
         "execute" => &["RECIPIENT", "AMOUNT"],
-        "tune" => &["VALUE"],
+        "tune" | "tune-action" => &["VALUE"],
         _ => {
             return Err(Error::usage(format!(
-                "unknown policy command {} (generate, import, deploy, fund, execute, status, revoke, withdraw, tune)",
+                "unknown policy command {} (generate, import, deploy, fund, execute, status, revoke, withdraw, close, tune, tune-action)",
                 quoted(name)
             )));
         }
@@ -77,7 +77,7 @@ pub(crate) fn run(args: &[String], stdout: &mut String, stderr: &mut String) -> 
         "generate" if pos[0].trim().is_empty() => {
             return Err(Error::usage("PROMPT must not be empty"));
         }
-        "fund" | "withdraw" => decimal("AMOUNT", &pos[0], true)?,
+        "deploy" | "fund" | "withdraw" => decimal("AMOUNT", &pos[0], true)?,
         "execute" => {
             if !solana_address(&pos[0]) {
                 return Err(Error::usage(format!(
@@ -87,7 +87,7 @@ pub(crate) fn run(args: &[String], stdout: &mut String, stderr: &mut String) -> 
             }
             decimal("AMOUNT", &pos[1], true)?;
         }
-        "tune" => decimal("VALUE", &pos[0], false)?,
+        "tune" | "tune-action" => decimal("VALUE", &pos[0], false)?,
         _ => {}
     }
     crate::policy_native::run(name, &pos, json, stdout, stderr)
