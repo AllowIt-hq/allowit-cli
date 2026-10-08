@@ -62,17 +62,17 @@ def autocrlf(repo):
     return sdk
 
 
-def hide(repo, name, data, flag='--skip-worktree'):
-    """Change SDK file NAME and hide it from git status with an index flag."""
-    sdk = repo / SDK
-    (sdk / name).write_bytes(data)
-    git(sdk, 'update-index', flag, '--', name)
-    assert git(sdk, 'status', '--porcelain', '--untracked-files=all') == ''
+def hide(repo, name, data, flag='--skip-worktree', within=SDK):
+    """Change file NAME in the submodule (or WITHIN='' for the parent) and hide it from git status."""
+    checkout = repo / within
+    (checkout / name).write_bytes(data)
+    git(checkout, 'update-index', flag, '--', name)
+    assert git(checkout, 'status', '--porcelain', '--untracked-files=all') == ''
 
 
-def exclude(repo, pattern):
-    """Ignore PATTERN inside the submodule without changing tracked files."""
-    path = repo / SDK / git(repo / SDK, 'rev-parse', '--git-path', 'info/exclude')
+def exclude(repo, pattern, within=SDK):
+    """Ignore PATTERN inside the submodule (or WITHIN='' for the parent) without changing tracked files."""
+    path = repo / within / git(repo / within, 'rev-parse', '--git-path', 'info/exclude')
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a') as handle:
         handle.write(pattern + '\n')

@@ -32,6 +32,9 @@ def manifest(repo, binary, target):
     sdk = native_sdk.verify(repo)
     if git(repo, "status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all"):
         raise ValueError("Tracked source must be committed before recording provenance")
+    # verify leaves the CLI root's Cargo inputs to development; a recorded build
+    # must use the committed ones, including ignored or index-hidden changes.
+    native_sdk.parent(repo, "")
     asset, magic, cpu = TARGETS[target]
     raw = binary.read_bytes()
     if raw[:4] != magic:

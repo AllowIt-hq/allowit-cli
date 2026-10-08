@@ -24,13 +24,16 @@ def load(name, file):
 
 provenance = load("provenance", "binary-provenance.py")
 fixture = load("native_sdk_fixture", "native-sdk-fixture.py")
+# The CLI root's committed Cargo discovery inputs, copied into each fixture.
+ROOT_CARGO = ["Cargo.toml", "Cargo.lock", ".cargo/config.toml"]
+INJECTED = '[build]\nrustflags = ["--cfg", "injected"]\n'
 
 
 class ProvenanceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.template = tempfile.TemporaryDirectory()
-        fixture.create(Path(cls.template.name) / "repo", ["Cargo.toml", "vendor/native-sdk.json"])
+        fixture.create(Path(cls.template.name) / "repo", [*ROOT_CARGO, "vendor/native-sdk.json"])
 
     @classmethod
     def tearDownClass(cls):
@@ -102,9 +105,8 @@ class ProvenanceTests(unittest.TestCase):
 
     def test_refuses_untracked_parent_cargo_config_hidden_by_status_config(self):
         self.git("config", "status.showUntrackedFiles", "no")
-        config = self.repo / ".cargo/config.toml"
-        config.parent.mkdir()
-        config.write_text('[build]\nrustflags = ["--cfg", "injected"]\n')
+        # Cargo also reads the legacy extensionless name beside the tracked config.toml.
+        (self.repo / ".cargo/config").write_text(INJECTED)
         self.assertEqual(self.git("status", "--porcelain"), "")
         with self.assertRaisesRegex(ValueError, "committed"):
             self.manifest()
@@ -362,6 +364,118 @@ class ProvenanceTests(unittest.TestCase):
         fixture.autocrlf(self.repo)
         self.assertEqual(provenance.native_sdk.pin(self.repo), recorded)
         self.assertEqual(json.loads(path.read_text()), recorded)
+
+    def test_inventory_refuses_ignored_sdk_build_script_without_status(self):
+        fixture.exclude(self.repo, "/native-rust/build.rs")
+        (self.sdk / "native-rust/build.rs").write_text("fn main() {}\n")
+        self.assertIn("build.rs", provenance.native_sdk.inventory(self.sdk / "native-rust"))
+        # The file-set layer still refuses it if the clean-status check were bypassed.
+        with patch.object(provenance.native_sdk, "checkout", lambda root: root / fixture.SDK):
+            with self.assertRaisesRegex(ValueError, "SDK source file set differs from its pin"):
+                provenance.native_sdk.verify(self.repo)
+            with self.assertRaisesRegex(ValueError, "SDK source file set differs from its commit"):
+                provenance.native_sdk.describe(self.repo)
+
+    def test_refuses_ignored_intermediate_cargo_inputs(self):
+        self.assertEqual(provenance.native_sdk.INTERMEDIATE, ("repos",))
+        metadata = (self.repo / "vendor/native-sdk.json").read_bytes()
+        gitlink = self.git("ls-files", "--stage", "--", fixture.SDK)
+        sdk = provenance.native_sdk
+        actions = [self.manifest, lambda: sdk.verify(self.repo), lambda: sdk.describe(self.repo), lambda: sdk.pin(self.repo)]
+        for name in ["repos/Cargo.toml", "repos/Cargo.lock", "repos/.cargo/config.toml"]:
+            with self.subTest(name=name):
+                fixture.exclude(self.repo, "/" + name, within="")
+                path = self.repo / name
+                path.parent.mkdir(exist_ok=True)
+                path.write_text('[workspace]\nmembers = ["AllowIt-hq--allowit-sdk/native-rust"]\n')
+                self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
+                for action in actions:
+                    with self.assertRaisesRegex(ValueError, "CLI Cargo discovery file set differs from its committed HEAD"):
+                        action()
+                self.assertEqual((self.repo / "vendor/native-sdk.json").read_bytes(), metadata)
+                self.assertEqual(self.git("ls-files", "--stage", "--", fixture.SDK), gitlink)
+                path.unlink()
+        self.manifest()
+
+    def test_refuses_intermediate_cargo_config_symlink(self):
+        target = Path(self.tmp.name) / "config"
+        target.mkdir()
+        (target / "config.toml").write_text(INJECTED)
+        fixture.exclude(self.repo, "/repos/.cargo", within="")
+        (self.repo / "repos/.cargo").symlink_to(target, target_is_directory=True)
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
+        for action in [self.manifest, lambda: provenance.native_sdk.verify(self.repo)]:
+            with self.assertRaisesRegex(ValueError, "regular file or directory: repos/.cargo"):
+                action()
+
+    def test_binds_committed_intermediate_cargo_config(self):
+        # Fixture-only: a committed intermediate config is accepted only at its HEAD bytes.
+        config = self.repo / "repos/.cargo/config.toml"
+        config.parent.mkdir()
+        config.write_text("[net]\noffline = true\n")
+        fixture.commit(self.repo, "intermediate config")
+        self.assertEqual(provenance.native_sdk.verify(self.repo)["commit"], fixture.git(self.sdk, "rev-parse", "HEAD"))
+        self.manifest()
+        fixture.hide(self.repo, "repos/.cargo/config.toml", INJECTED.encode(), within="")
+        for action in [self.manifest, lambda: provenance.native_sdk.verify(self.repo), lambda: provenance.native_sdk.describe(self.repo)]:
+            with self.assertRaisesRegex(ValueError, "CLI checkout differs from its committed HEAD: repos/.cargo/config.toml"):
+                action()
+
+    def test_accepts_committed_root_cargo_inputs_in_autocrlf_checkout(self):
+        self.assertEqual(sorted(self.git("ls-files", "--", *ROOT_CARGO).split("\n")), sorted(ROOT_CARGO))
+        self.git("config", "core.autocrlf", "true")
+        for name in ROOT_CARGO:
+            (self.repo / name).unlink()
+        self.git("checkout", "-q", "--", *ROOT_CARGO)
+        self.assertIn(b"\r\n", (self.repo / ".cargo/config.toml").read_bytes())
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
+        self.assertEqual(self.manifest()["cli"]["commit"], self.git("rev-parse", "HEAD"))
+
+    def test_sdk_verify_allows_root_cargo_development_that_provenance_refuses(self):
+        for name in ROOT_CARGO:
+            with (self.repo / name).open("a") as handle:
+                handle.write("\n# local development\n")
+        commit = fixture.git(self.sdk, "rev-parse", "HEAD")
+        self.assertEqual(provenance.native_sdk.verify(self.repo)["commit"], commit)
+        self.assertEqual(provenance.native_sdk.describe(self.repo)["commit"], commit)
+        with self.assertRaisesRegex(ValueError, "committed"):
+            self.manifest()
+
+    def test_refuses_ignored_root_cargo_config_despite_clean_status(self):
+        for name in [".cargo/config", ".cargo/nested/config.toml"]:
+            with self.subTest(name=name):
+                fixture.exclude(self.repo, "/" + name, within="")
+                path = self.repo / name
+                path.parent.mkdir(exist_ok=True)
+                path.write_text(INJECTED)
+                self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
+                provenance.native_sdk.verify(self.repo)
+                with self.assertRaisesRegex(ValueError, "CLI Cargo discovery file set differs from its committed HEAD"):
+                    self.manifest()
+                path.unlink()
+        self.manifest()
+
+    def test_refuses_hidden_tracked_root_cargo_inputs(self):
+        for name in ROOT_CARGO:
+            original = (self.repo / name).read_bytes()
+            for flag in ["--skip-worktree", "--assume-unchanged"]:
+                with self.subTest(name=name, flag=flag):
+                    fixture.hide(self.repo, name, original + b"\n# hidden\n", flag, within="")
+                    provenance.native_sdk.verify(self.repo)
+                    with self.assertRaisesRegex(ValueError, "CLI checkout differs from its committed HEAD: " + re.escape(name)):
+                        self.manifest()
+                    self.git("update-index", flag.replace("--", "--no-", 1), "--", name)
+                    (self.repo / name).write_bytes(original)
+        # Hidden removal of the tracked root config changes the discovered file set.
+        config = ".cargo/config.toml"
+        self.git("update-index", "--skip-worktree", "--", config)
+        (self.repo / config).unlink()
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
+        with self.assertRaisesRegex(ValueError, "CLI Cargo discovery file set differs from its committed HEAD"):
+            self.manifest()
+        self.git("update-index", "--no-skip-worktree", "--", config)
+        self.git("checkout", "-q", "--", config)
+        self.manifest()
 
     def test_ignores_inherited_git_environment(self):
         commit = fixture.git(self.sdk, "rev-parse", "HEAD")

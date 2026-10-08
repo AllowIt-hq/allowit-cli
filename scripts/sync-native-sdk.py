@@ -22,8 +22,10 @@ METADATA = 'vendor/native-sdk.json'
 LICENSES = ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/Aeneas-Apache-2.0.txt')
 REQUIRED = {'Cargo.toml', 'Cargo.lock', 'src/lib.rs', 'src/release.json'}
 COPIES = ('vendor/allowit-native', 'vendor/native-sdk-licenses')
-# SDK-root inputs Cargo discovers above the crate: workspace manifest, lockfile, config.
+# Inputs Cargo discovers in each directory above a crate: workspace manifest, lockfile, config.
 DISCOVERY = ('Cargo.toml', 'Cargo.lock', '.cargo')
+# CLI-owned directories between the CLI root and the SDK root, e.g. repos.
+INTERMEDIATE = tuple(path.as_posix() for path in reversed(PurePosixPath(SUBMODULE).parents) if path.parts)
 
 
 def environment():
@@ -84,12 +86,12 @@ def sha256(path):
     return digest(path.read_bytes())
 
 
-def unchanged(directory, blobs):
+def unchanged(directory, blobs, owner='SDK', against='its pinned commit'):
     """Refuse checkout bytes that differ from the commit's blobs, even when Git status hides it."""
     for name, data in blobs.items():
         path = directory / name
         if path.is_symlink() or not path.is_file() or sha256(path) != digest(data):
-            raise ValueError('SDK checkout differs from its pinned commit: ' + name)
+            raise ValueError(f'{owner} checkout differs from {against}: {name}')
 
 
 def consumed(name):
@@ -114,28 +116,44 @@ def inventory(crate):
     return names
 
 
-def discovery(sdk, commit):
-    """Bind the SDK root's Cargo discovery inputs to COMMIT's tree and blobs.
+def discovery(repo, commit, paths=DISCOVERY, owner='SDK', against='its pinned commit'):
+    """Bind REPO's Cargo discovery inputs at PATHS to COMMIT's tree and blobs.
 
     Cargo reads them whether they are ignored, untracked or hidden by
     skip-worktree/assume-unchanged, so the checkout's files and the index's
-    tracked files must both equal the pinned set, byte for byte.
+    tracked files must both equal the pinned set, byte for byte. A path named
+    `.cargo` is a config directory; the others are files.
     """
-    blobs = pinned(sdk, commit, *DISCOVERY)
+    blobs = pinned(repo, commit, *paths)
     present = set()
-    for name in DISCOVERY:
-        path = sdk / name
+    for name in paths:
+        path = repo / name
         if not os.path.lexists(path):
             continue
-        if path.is_symlink() or not (path.is_dir() if name == '.cargo' else path.is_file()):
-            raise ValueError('SDK Cargo discovery input must be a regular file or directory: ' + name)
-        if name == '.cargo':
+        config = PurePosixPath(name).name == '.cargo'
+        if path.is_symlink() or not (path.is_dir() if config else path.is_file()):
+            raise ValueError(f'{owner} Cargo discovery input must be a regular file or directory: {name}')
+        if config:
             present.update(f'{name}/{file}' for file in inventory(path))
         else:
             present.add(name)
-    if present != set(blobs) or set(listed(sdk, *DISCOVERY)) != set(blobs):
-        raise ValueError('SDK Cargo discovery file set differs from its pinned commit')
-    unchanged(sdk, blobs)
+    if present != set(blobs) or set(listed(repo, *paths)) != set(blobs):
+        raise ValueError(f'{owner} Cargo discovery file set differs from {against}')
+    unchanged(repo, blobs, owner, against)
+
+
+def parent(root, *directories):
+    """Bind the CLI's Cargo discovery inputs in DIRECTORIES ('' is the root) to its HEAD.
+
+    Each directory must be a real directory under ROOT, so no input resolves
+    outside the CLI checkout.
+    """
+    for directory in filter(None, directories):
+        path = root / directory
+        if path.is_symlink() or not path.is_dir():
+            raise ValueError('CLI Cargo discovery directory must be a real directory: ' + directory)
+    paths = [str(PurePosixPath(directory, name)) for directory in directories for name in DISCOVERY]
+    discovery(root, 'HEAD', paths, 'CLI', 'its committed HEAD')
 
 
 def checkout(root):
@@ -150,7 +168,8 @@ def checkout(root):
 
 
 def verify(root):
-    """Check the parent pin, clean submodule source and license bytes; return the metadata."""
+    """Check the parent pin, clean submodule source, license bytes and the Cargo
+    discovery inputs from the SDK root up to, not including, the CLI root; return the metadata."""
     root = Path(root).resolve()
     sdk = json.loads((root / METADATA).read_text())
     commit = sdk.get('commit')
@@ -190,6 +209,9 @@ def verify(root):
             raise ValueError('SDK source differs from its pin: ' + name)
     unchanged(crate, source)
     discovery(sdk_root, commit)
+    # The CLI root's own Cargo inputs are first-party development files; only
+    # binary provenance binds them. Directories in between are bound here.
+    parent(root, *INTERMEDIATE)
 
     licenses = sdk.get('licenses')
     if not isinstance(licenses, dict) or 'LICENSE' not in licenses:
@@ -228,6 +250,7 @@ def describe(root):
     unchanged(crate, source)
     unchanged(sdk, legal)
     discovery(sdk, commit)
+    parent(root, *INTERMEDIATE)
     return {
         'repository': REPOSITORY,
         'commit': commit,
