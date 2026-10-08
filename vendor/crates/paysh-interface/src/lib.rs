@@ -89,6 +89,8 @@ pub enum Instruction {
     Initialize(Config),
     Execute(Request),
     Pause(bool),
+    /// Owner recovery; leaves a permanent paused policy tombstone.
+    Withdraw,
 }
 #[derive(Clone, Debug, BorshDeserialize, BorshSerialize)]
 pub struct Policy {
