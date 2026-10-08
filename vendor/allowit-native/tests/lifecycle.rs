@@ -26,6 +26,7 @@ use std::sync::{
 struct Network {
     height: u64,
     block_height: u64,
+    chain_time: u64,
     nonce: String,
     revision: String,
     sends: Vec<String>,
@@ -55,6 +56,7 @@ impl Rpc for FakeRpc {
                 json!({"value":valid,"context":{"slot":99}})
             }
             "getSlot" => json!(99),
+            "getBlockTime" => json!(d.chain_time),
             "getBlock" => {
                 assert_eq!(params[1]["transactionDetails"], "none");
                 assert_eq!(params[1]["rewards"], false);
@@ -108,6 +110,7 @@ impl Fixture {
             data: Mutex::new(Network {
                 height: 10,
                 block_height: 10,
+                chain_time: 100,
                 nonce: "0".into(),
                 revision: "1".into(),
                 sends: vec![],
@@ -317,6 +320,29 @@ fn authority_partial_is_validated_completed_and_retried_without_reapproval() {
         .unwrap();
     assert_eq!(replay.extra["replayed"], true);
     assert_eq!(replay.signed_bytes, result.signed_bytes);
+    for key in [
+        "executionRequestDigest",
+        "approval",
+        "approvalRequest",
+        "simulation",
+    ] {
+        assert_eq!(replay.extra.get(key), result.extra.get(key));
+    }
+    let second_replay = f
+        .life()
+        .submit_authorized(
+            &f.policy,
+            f.owner.public_key(),
+            &identity,
+            || Err(Error::config("must not reauthorize")),
+            |_| Err(Error::config("must not resign")),
+        )
+        .unwrap();
+    assert_eq!(second_replay.signed_bytes, result.signed_bytes);
+    assert_eq!(
+        second_replay.extra["executionRequestDigest"],
+        identity.digest().unwrap()
+    );
 
     let changed = f.identity("authorized-request-001", "different action");
     assert!(
@@ -380,6 +406,40 @@ fn authority_partial_rejects_changed_envelope_message_and_signer_slots() {
                 )
                 .is_err()
         );
+        assert!(f.journal.entries::<Record>().unwrap().is_empty());
+    }
+}
+#[test]
+fn expired_authorization_never_requests_executor_signature() {
+    for expired_by_height in [false, true] {
+        let f = Fixture::new();
+        let identity = f.identity("expired-authority-001", "fetch fixed fixture");
+        let response = f.authorized(&identity);
+        {
+            let mut network = f.rpc.data.lock().unwrap();
+            if expired_by_height {
+                network.block_height = response.last_valid_block_height + 1;
+                network.height = response.last_valid_block_height + 1;
+            } else {
+                network.chain_time = response.approval.expires_at;
+            }
+        }
+        let signatures = AtomicUsize::new(0);
+        assert!(
+            f.life()
+                .submit_authorized(
+                    &f.policy,
+                    f.owner.public_key(),
+                    &identity,
+                    || Ok(response.clone()),
+                    |transaction| {
+                        signatures.fetch_add(1, Ordering::Relaxed);
+                        Ok(f.executor.sign(&transaction.message))
+                    },
+                )
+                .is_err()
+        );
+        assert_eq!(signatures.load(Ordering::Relaxed), 0);
         assert!(f.journal.entries::<Record>().unwrap().is_empty());
     }
 }
@@ -966,6 +1026,27 @@ fn server_reconciliation_requires_no_file_journal_or_signing() {
         assert!(!observed.expired());
         assert!(!observed.extra.contains_key("absence"));
     }
+    use allowit_native::lifecycle::reconcile_record_with_expiry_bound;
+    // A host bound does not release the proof before that bound passes.
+    let observed =
+        reconcile_record_with_expiry_bound(&f, record.clone(), &f.policy, owner, 300).unwrap();
+    assert_eq!(observed.status, "uncertain");
+    // Once passed, a still-valid processed blockhash prevents absence inference.
+    f.rpc.data.lock().unwrap().processed_blockhash_valid = Some(true);
+    let observed =
+        reconcile_record_with_expiry_bound(&f, record.clone(), &f.policy, owner, 1).unwrap();
+    assert_eq!(observed.status, "uncertain");
+    f.rpc.data.lock().unwrap().processed_blockhash_valid = Some(false);
+    let observed =
+        reconcile_record_with_expiry_bound(&f, record.clone(), &f.policy, owner, 1).unwrap();
+    assert_eq!(observed.status, "failed");
+    assert_eq!(
+        observed.last_valid_block_height,
+        record.last_valid_block_height
+    );
+    assert_eq!(observed.extra["decisionCode"], "EXPIRED_UNEXECUTED");
+    assert_eq!(observed.signed_bytes, record.signed_bytes);
+    assert!(f.rpc.data.lock().unwrap().sends.is_empty());
     let mut substituted = record;
     substituted.intent = substituted.intent.replace("\"1\"", "\"2\"");
     assert!(reconcile_record(&f, substituted, &f.policy, owner).is_err());
