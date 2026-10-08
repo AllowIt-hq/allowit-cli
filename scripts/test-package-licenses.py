@@ -99,6 +99,13 @@ class LicenseMaterial(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'SDK license notice'):
             MODULE.package(self.root, pathlib.Path(self.temp.name) / 'dist')
 
+    def test_hidden_sdk_license_change_is_not_packaged(self):
+        FIXTURE.hide(self.root, 'LICENSE', b'changed attribution\n', '--assume-unchanged')
+        dist = pathlib.Path(self.temp.name) / 'dist'
+        with self.assertRaisesRegex(ValueError, 'checkout differs from its pinned commit: LICENSE'):
+            MODULE.package(self.root, dist)
+        self.assertFalse(dist.exists())
+
     def test_sdk_notice_path_cannot_escape(self):
         path = self.root / 'vendor/native-sdk.json'
         value = json.loads(path.read_text())

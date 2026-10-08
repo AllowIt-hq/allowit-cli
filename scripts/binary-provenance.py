@@ -24,7 +24,7 @@ TARGETS = {
 
 
 def git(repo, *args):
-    return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+    return subprocess.check_output(["git", "-C", str(repo), *args], text=True, env=native_sdk.environment()).strip()
 
 
 def manifest(repo, binary, target):

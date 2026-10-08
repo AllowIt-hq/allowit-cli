@@ -24,6 +24,7 @@ test:
 # Original harness state/security/recovery cases, with only the process entry
 # changed to the Rust binary. The Go reference remains a test oracle.
 parity:
+	python3 scripts/sync-native-sdk.py verify
 	$(CARGO) build --locked
 	cd reference/go && ALLOWIT_PARITY_BINARY="$(CURDIR)/target/debug/allowit" $(GO) test -race -count=1 -timeout 10m ./internal/cli
 
@@ -31,9 +32,11 @@ integration:
 	$(GO) run ./integration --app-repo "$(APP_REPO)"
 
 build:
+	python3 scripts/sync-native-sdk.py verify
 	$(CARGO) build --locked --release
 
 dist:
+	python3 scripts/sync-native-sdk.py verify
 	$(CARGO) build --locked --release --target $(RUST_TARGET)
 	mkdir -p dist
 	python3 scripts/package-licenses.py --dist dist

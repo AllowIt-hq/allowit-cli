@@ -4,6 +4,7 @@ The submodule is cloned from this checkout's initialized SDK submodule, so tests
 use the real pinned commit, metadata and source bytes without network access.
 """
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,7 +15,9 @@ IDENTITY = ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid
 
 
 def git(repo, *args):
-    return subprocess.check_output(['git', '-C', str(repo), *IDENTITY, *args], text=True).strip()
+    # Inherited GIT_* (e.g. from a hook) would point fixture commits at the real checkout.
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    return subprocess.check_output(['git', '-C', str(repo), *IDENTITY, *args], text=True, env=env).strip()
 
 
 def commit(repo, message):
@@ -57,6 +60,14 @@ def autocrlf(repo):
         (sdk / name).unlink()
     git(sdk, 'checkout', '-q', '--', '.')
     return sdk
+
+
+def hide(repo, name, data, flag='--skip-worktree'):
+    """Change SDK file NAME and hide it from git status with an index flag."""
+    sdk = repo / SDK
+    (sdk / name).write_bytes(data)
+    git(sdk, 'update-index', flag, '--', name)
+    assert git(sdk, 'status', '--porcelain', '--untracked-files=all') == ''
 
 
 def exclude(repo, pattern):

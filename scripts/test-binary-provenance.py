@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 import tempfile
@@ -181,6 +182,81 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(fixture.git(self.sdk, "status", "--porcelain", "--untracked-files=all"), "")
         with self.assertRaisesRegex(ValueError, "file set"):
             self.manifest()
+
+    def test_refuses_hidden_sdk_source_change(self):
+        lib = "native-rust/src/lib.rs"
+        original = (self.sdk / lib).read_bytes()
+        for flag in ["--skip-worktree", "--assume-unchanged"]:
+            with self.subTest(flag=flag):
+                fixture.hide(self.repo, lib, original + b"// hidden\n", flag)
+                with self.assertRaisesRegex(ValueError, "checkout differs from its pinned commit: src/lib.rs"):
+                    self.manifest()
+                fixture.git(self.sdk, "update-index", flag.replace("--", "--no-", 1), "--", lib)
+                (self.sdk / lib).write_bytes(original)
+        self.manifest()
+
+    def test_refuses_metadata_rehashed_to_hidden_sdk_source(self):
+        lib = "native-rust/src/lib.rs"
+        hidden = (self.sdk / lib).read_bytes() + b"// hidden\n"
+        fixture.hide(self.repo, lib, hidden)
+        self.metadata(lambda value: value["files"].update({"src/lib.rs": provenance.native_sdk.digest(hidden)}))
+        self.assertEqual(fixture.git(self.sdk, "rev-parse", "HEAD"), json.loads((self.repo / "vendor/native-sdk.json").read_text())["commit"])
+        with self.assertRaisesRegex(ValueError, "source differs from its pin: src/lib.rs"):
+            self.manifest()
+
+    def test_pin_and_describe_refuse_hidden_sdk_source(self):
+        metadata = (self.repo / "vendor/native-sdk.json").read_bytes()
+        gitlink = self.git("ls-files", "--stage", "--", fixture.SDK)
+        fixture.hide(self.repo, "native-rust/src/lib.rs", b"pub fn hidden() {}\n")
+        for action in [provenance.native_sdk.describe, provenance.native_sdk.pin]:
+            with self.subTest(action=action.__name__):
+                with self.assertRaisesRegex(ValueError, "checkout differs from its pinned commit: src/lib.rs"):
+                    action(self.repo)
+        self.assertEqual((self.repo / "vendor/native-sdk.json").read_bytes(), metadata)
+        self.assertEqual(self.git("ls-files", "--stage", "--", fixture.SDK), gitlink)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+
+    def test_pin_ignores_replace_objects_for_hidden_sdk_source(self):
+        lib = "native-rust/src/lib.rs"
+        original = fixture.git(self.sdk, "rev-parse", f"HEAD:{lib}")
+        fixture.hide(self.repo, lib, b"pub fn hidden() {}\n")
+        fixture.git(self.sdk, "replace", original, fixture.git(self.sdk, "hash-object", "-w", lib))
+        with self.assertRaisesRegex(ValueError, "checkout differs from its pinned commit: src/lib.rs"):
+            provenance.native_sdk.pin(self.repo)
+
+    def test_refuses_hidden_sdk_license_change(self):
+        fixture.hide(self.repo, "LICENSE", b"changed attribution\n", "--assume-unchanged")
+        with self.assertRaisesRegex(ValueError, "checkout differs from its pinned commit: LICENSE"):
+            self.manifest()
+        with self.assertRaisesRegex(ValueError, "checkout differs from its pinned commit: LICENSE"):
+            provenance.native_sdk.describe(self.repo)
+
+    def test_pin_rerecords_unchanged_sdk_bytes(self):
+        path = self.repo / "vendor/native-sdk.json"
+        recorded = json.loads(path.read_text())
+        self.assertEqual(provenance.native_sdk.describe(self.repo), recorded)
+        fixture.autocrlf(self.repo)
+        self.assertEqual(provenance.native_sdk.pin(self.repo), recorded)
+        self.assertEqual(json.loads(path.read_text()), recorded)
+
+    def test_ignores_inherited_git_environment(self):
+        commit = fixture.git(self.sdk, "rev-parse", "HEAD")
+        missing = str(Path(self.tmp.name) / "missing")
+        redirect = {"GIT_DIR": missing, "GIT_WORK_TREE": missing, "GIT_INDEX_FILE": missing, "GIT_OBJECT_DIRECTORY": missing}
+        with patch.dict(os.environ, redirect):
+            self.assertEqual(provenance.native_sdk.verify(self.repo)["commit"], commit)
+            self.assertEqual(self.manifest()["sdk"]["commit"], commit)
+
+    def test_native_builds_verify_sdk_first(self):
+        verify = "python3 scripts/sync-native-sdk.py verify"
+        workflow = (fixture.ROOT / ".github/workflows/binaries.yml").read_text()
+        self.assertLess(workflow.index(verify), workflow.index("cargo build"))
+        recipes = [recipe for recipe in re.split(r"(?m)^(?=[\w.-]+:)", (fixture.ROOT / "Makefile").read_text()) if "$(CARGO) build" in recipe]
+        self.assertEqual(sorted(recipe.split(":", 1)[0] for recipe in recipes), ["build", "dist", "parity"])
+        for recipe in recipes:
+            with self.subTest(target=recipe.split(":", 1)[0]):
+                self.assertIn(verify, recipe)
+                self.assertLess(recipe.index(verify), recipe.index("$(CARGO) build"))
 
     def test_refuses_empty_sdk_source_set(self):
         self.metadata(lambda value: value.update(files={}))

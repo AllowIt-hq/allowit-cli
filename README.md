@@ -13,6 +13,7 @@ Use Rust 1.85 or later; CI pins Rust 1.98.0. Go is needed only for reference and
 ```sh
 git clone --recurse-submodules https://github.com/AllowIt-hq/allowit-cli.git
 cd allowit-cli
+python3 scripts/sync-native-sdk.py verify
 cargo build --locked --release
 ./target/release/allowit version
 ```
@@ -165,7 +166,7 @@ Decimals are plain digits with an optional fraction: no sign, exponent, separato
 **SDK source pin.** Cargo builds `allowit-native` from `repos/AllowIt-hq--allowit-sdk/native-rust`, a Git submodule of `https://github.com/AllowIt-hq/allowit-sdk.git`. The parent repository's gitlink pins the exact SDK commit. `vendor/native-sdk.json` records that commit, the submodule path and URL, SHA-256 hashes of the crate files Cargo consumes, the crate's unconsumed SDK tooling, and the SDK's upstream license files. The repository keeps no copies of SDK source or license text.
 
 ```sh
-python3 scripts/sync-native-sdk.py verify              # make test, provenance and license packaging run this
+python3 scripts/sync-native-sdk.py verify              # every make build target, CI, provenance and license packaging run this
 python3 scripts/sync-native-sdk.py update FULL_COMMIT  # check out an exact SDK commit, record and stage it
 python3 scripts/sync-native-sdk.py pin                 # record and stage the checked-out submodule commit
 ```
@@ -175,12 +176,12 @@ python3 scripts/sync-native-sdk.py pin                 # record and stage the ch
 - `.gitmodules` names only the canonical URL.
 - The index holds a mode `160000` gitlink at the recorded commit.
 - The submodule is initialized and clean, with its `HEAD` at that commit.
-- `native-rust/` contains exactly the recorded files, including untracked or ignored files such as an injected `build.rs`, and their bytes match the recorded hashes.
-- The SDK root's license files match their recorded bytes.
+- `native-rust/` contains exactly the recorded files, including untracked or ignored files such as an injected `build.rs`. That file set must also match the pinned commit's Git tree.
+- The recorded hashes of the crate files and the SDK root's license files match the blobs at the pinned commit, read from Git's object store. The checked-out bytes must match those same blobs.
 
-Hashes cover the checked-out bytes with CRLF read as LF in files Git treats as text (no NUL in the first 8000 bytes), so a clean Windows `core.autocrlf` checkout verifies against the same metadata. Any other byte change, including one hidden by a local Git filter, fails. License packaging copies the checkout's notice files unchanged.
+Hashes cover the bytes with CRLF read as LF in files Git treats as text (no NUL in the first 8000 bytes), so a clean Windows `core.autocrlf` checkout verifies against the same metadata. Any other byte change fails, including one hidden by a local Git filter, `assume-unchanged`/`skip-worktree` or a replace ref. Inherited `GIT_*` variables are ignored. License packaging copies the checkout's notice files unchanged.
 
-`update` and `pin` stage the gitlink and metadata for review and never commit. Updating the SDK revision is a separate reviewed change.
+`update` and `pin` hash the commit's blobs and refuse a checkout that differs from them. They stage the gitlink and metadata for review and never commit. Updating the SDK revision is a separate reviewed change.
 
 **Hosted execution authorization.** A backend-exported executor bundle contains `audit: {origin, token}`. Import saves this policy-scoped capability in the private local journal. The CLI sends only the high-level action, merchant, context, recipient and amount to `POST /api/native/execute`; the backend evaluates the owner-bound policy and returns an authority-only signature over its exact prepared transaction. The CLI reconstructs and checks the approval commitment, signer set, instructions and message, adds only the executor signature, persists the complete proof, then requires a durable `POST /api/native/report` acknowledgment before chain broadcast. Identical retries reconcile the saved proof without obtaining another approval or allocating another payment. Missing, redirected or inconsistent responses block broadcast or produce exit 5. `policy status` retries reporting without signing or broadcasting. The token is never printed; the executor bundle and journal contain this private capability and must not be shared publicly. Denial, unresolved owner input, or a required provider failure produces no execution signature. Owner operations remain independent of the provider and authority.
 
