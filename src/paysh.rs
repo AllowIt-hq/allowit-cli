@@ -290,13 +290,6 @@ fn call(pos: &[String], json: bool, stdout: &mut String, stderr: &mut String) ->
                 op,
             ));
         }
-        // A definitive policy refusal: nothing was paid for this request.
-        Reply::Status(s @ (400 | 403), m) => {
-            *stdout += &format!(
-                "operation: {op}\nstate: failed\nThe policy did not permit this call (HTTP {s}): {m}\nNothing was paid. Use a new OPERATION_ID only for a different intended call.\n"
-            );
-            return Ok(20);
-        }
         Reply::Status(409, m) => {
             return Err(unknown(
                 format!("AllowIt returned HTTP 409: {m}"),
@@ -359,7 +352,7 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
         ));
     }
     let phase = v["status"].as_str().unwrap_or_default().to_string();
-    let (state, exit) = if phase == "delivered" {
+    let (mut state, mut exit) = if phase == "delivered" {
         ("delivered", 0)
     } else if PENDING.contains(&phase.as_str()) {
         ("pending", 12)
@@ -390,6 +383,10 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
                 .or_else(|| r["finalizedSlot"].as_str()?.parse().ok())
                 .is_some_and(|slot| slot > 0)
     });
+    if phase == "failed" && paid {
+        state = "unknown";
+        exit = 5;
+    }
     let payment = if paid {
         "finalized"
     } else {
@@ -426,6 +423,9 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
         UNKNOWN => {
             "unknown; the owner marked the operation unresolved. Payment may have been sent. It is neither failed nor delivered. Never retry or create a replacement payment; no refund is reported"
         }
+        "failed" if paid => {
+            "unresolved after finalized payment. Never retry or create a replacement payment"
+        }
         "denied" | "failed" => "not delivered",
         _ => "waiting for payment",
     };
@@ -443,6 +443,7 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
     if json {
         v["state"] = json!(state);
         v["exitCode"] = json!(exit);
+        v["paymentFinalized"] = json!(paid);
         *stdout += &output::json(&v);
         return Ok(exit);
     }

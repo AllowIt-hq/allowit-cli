@@ -261,6 +261,8 @@ fn an_owner_resolved_unknown_delivery_is_neither_failed_nor_delivered() {
 fn unknown_results_are_never_retried_and_keep_the_operation_id() {
     for reply in [
         http(502, r#"{"error":"Backend reply unavailable."}"#),
+        http(400, r#"{"error":"Unverified refusal."}"#),
+        http(403, r#"{"error":"Capability rejected after a previous timeout."}"#),
         "HTTP/1.1 307 X\r\nLocation: https://elsewhere.example/api/paysh/call\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string(),
         http(200, "not json"),
         http(200, &json!({"operationId":"op-2","status":"delivered"}).to_string()),
@@ -277,7 +279,7 @@ fn unknown_results_are_never_retried_and_keep_the_operation_id() {
 }
 
 #[test]
-fn a_policy_refusal_fails_without_payment() {
+fn an_untyped_http_refusal_cannot_prove_no_payment() {
     let (url, _) = serve(vec![http(
         403,
         r#"{"error":"Swap quote exceeds the policy."}"#,
@@ -287,10 +289,11 @@ fn a_policy_refusal_fails_without_payment() {
         &["paysh", "call", POLICY, "op-1", SERVICE, INPUT],
         Some(TOKEN),
     );
-    let (stdout, _) = text(&out);
-    assert_eq!(out.status.code(), Some(20));
-    assert!(stdout.contains("Swap quote exceeds the policy."));
-    assert!(stdout.contains("Nothing was paid"));
+    let (stdout, stderr) = text(&out);
+    assert_eq!(out.status.code(), Some(5));
+    assert!(stderr.contains("Swap quote exceeds the policy."));
+    assert!(!stdout.contains("Nothing was paid"));
+    assert!(stderr.contains("Do not retry with a new OPERATION_ID"));
 }
 
 #[test]
@@ -431,6 +434,40 @@ fn settlement_and_owner_unknown_do_not_claim_payment_finality_from_a_nonce_or_sw
             assert!(!stdout.contains("payment is finalized"));
             assert!(stdout.contains("Never retry or create a replacement payment"));
             assert!(stdout.contains("unverified signature unlocated"));
+        }
+    }
+}
+
+#[test]
+fn json_payment_finality_is_derived_from_receipts_and_failed_payments_remain_unknown() {
+    for (phase, receipts, paid, exit) in [
+        ("delivered", json!([]), false, 0),
+        (
+            "failed",
+            json!([{"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}]),
+            true,
+            5,
+        ),
+        (
+            "delivered",
+            json!([{"signature":"swapSig","finalizedSlot":9,"action":{"type":"swap"}}]),
+            false,
+            0,
+        ),
+    ] {
+        let reply =
+            json!({"operationId":"op-1","status":phase,"receipts":receipts,"response":null});
+        let (url, _) = serve(vec![http(200, &reply.to_string())]);
+        let out = run(
+            &url,
+            &["paysh", "status", POLICY, "op-1", "--json"],
+            Some(TOKEN),
+        );
+        assert_eq!(out.status.code(), Some(exit));
+        let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(value["paymentFinalized"], json!(paid));
+        if phase == "failed" {
+            assert_eq!(value["state"], "unknown");
         }
     }
 }

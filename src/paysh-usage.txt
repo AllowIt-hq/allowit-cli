@@ -28,4 +28,7 @@ Exit codes: 0 delivered (the API response received), 2 usage,
 3 config or auth, 4 rejected request, 5 unknown result (keep the OPERATION_ID
 and check status) or status unknown/settlement_unknown (operation unresolved;
 payment may have been sent, never pay again for it), 12 pending (payment or delivery not complete; check
-status), 20 failed or denied (no delivery).
+status), 20 failed or denied (no delivery). An untyped HTTP 400 or 403 does
+not prove that nothing was paid; it exits 5 with the original OPERATION_ID.
+JSON output includes paymentFinalized, derived from a finalized pay receipt.
+A failed operation with such a receipt stays unknown (exit 5).
