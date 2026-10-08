@@ -3,7 +3,7 @@
 use crate::{
     crypto::{Key, LocalSigner, verify},
     error::{Error, Result},
-    rpc::{Rpc, account},
+    rpc::{Account, Rpc, account},
     transaction::{Instruction, Meta, Transaction},
 };
 pub use allowit_paysh_interface as interface;
@@ -486,8 +486,11 @@ impl PayShClient {
 
     pub fn broadcast_setup(&self, prepared: &PreparedSetup, signed_bytes: &str) -> Result<String> {
         let signature = Self::verify_setup_signature(prepared, signed_bytes)?;
-        self.check_setup_packet(prepared, signed_bytes, None)?;
-        let result=self.rpc.call("sendTransaction",json!([signed_bytes,{"encoding":"base64","skipPreflight":false,"preflightCommitment":"finalized","maxRetries":0}]))?;
+        self.check_setup_packet(prepared, signed_bytes, None)
+            .map_err(|_| {
+                Error::uncertain("Cannot revalidate saved installation; retain its signed proof")
+            })?;
+        let result=self.rpc.call("sendTransaction",json!([signed_bytes,{"encoding":"base64","skipPreflight":false,"preflightCommitment":"finalized","maxRetries":0}])).map_err(|_| Error::uncertain("Setup broadcast RPC failed after receiving signed bytes; retain its proof"))?;
         if result.as_str() != Some(&signature) {
             return Err(Error::uncertain(
                 "Setup submission is unresolved; preserve its original signed bytes",
@@ -502,13 +505,16 @@ impl PayShClient {
         if tx.is_null() {
             return Ok(false);
         }
-        if !tx["meta"]["err"].is_null() {
-            return Err(Error::denied("Policy installation finalized with an error"));
-        }
         if tx["transaction"][1] != "base64" || tx["transaction"][0] != signed_bytes {
             return Err(Error::config(
                 "Finalized setup differs from its saved signed bytes",
             ));
+        }
+        if tx["meta"].get("err").is_none() {
+            return Err(Error::config("Missing finalized setup outcome"));
+        }
+        if !tx["meta"]["err"].is_null() {
+            return Ok(false);
         }
         self.check_setup_packet(prepared, signed_bytes, Some(&tx["meta"]))?;
         let policy = self.policy(prepared.policy)?;
@@ -622,7 +628,7 @@ impl PayShClient {
             self.deployment.program,
         )?
         .0;
-        if account(&*self.rpc, receipt, None)?.is_some() {
+        if account(&*self.rpc, receipt, None)?.is_some_and(|a| !unallocated(&a)) {
             return Err(Error::denied("Request nonce was already consumed"));
         }
         let spent = if let Some(a) = account(&*self.rpc, budget, None)? {
@@ -992,7 +998,11 @@ impl PayShClient {
     /// Call only after the caller durably saved this exact signed packet.
     pub fn broadcast(&self, prepared: &PreparedExecution) -> Result<()> {
         verify_packet(prepared)?;
-        self.check_execution_packet(prepared, None)?;
+        self.check_execution_packet(prepared, None).map_err(|_| {
+            Error::uncertain(
+                "Cannot revalidate saved execution; retain its proof and reconcile its nonce",
+            )
+        })?;
         let simulation = self.rpc.call("simulateTransaction", json!([prepared.signed_bytes,{"encoding":"base64","sigVerify":true,"commitment":"finalized"}])).map_err(|_| Error::uncertain("Simulation RPC failed after receiving the saved approval; reconcile its nonce"))?;
         if simulation.get("value").is_none() || !simulation["value"]["err"].is_null() {
             return Err(Error::uncertain(
@@ -1038,7 +1048,9 @@ impl PayShClient {
             return Err(Error::config("Recovery RPC network differs"));
         }
         let (slot, timestamp) = self.clock()?;
-        let Some(a) = account(&*self.rpc, prepared.receipt, Some(slot))? else {
+        let Some(a) =
+            account(&*self.rpc, prepared.receipt, Some(slot))?.filter(|a| !unallocated(a))
+        else {
             return Ok(
                 if slot > request.expires_slot && timestamp > request.expires_timestamp {
                     ExecutionStatus::ProvenAbsent
@@ -1146,11 +1158,19 @@ impl PayShClient {
     }
 
     fn setup_blockhash_expired(&self, prepared: &PreparedSetup, blockhash: Key) -> Result<bool> {
+        Ok(self.setup_expiry_context(prepared, blockhash)?.is_some())
+    }
+
+    fn setup_expiry_context(
+        &self,
+        prepared: &PreparedSetup,
+        blockhash: Key,
+    ) -> Result<Option<u64>> {
         let (Some(context_slot), Some(last_valid_height)) = (
             prepared.blockhash_context_slot,
             prepared.last_valid_block_height,
         ) else {
-            return Ok(false); // Legacy journals cannot prove coherent expiry.
+            return Ok(None); // Legacy journals cannot prove coherent expiry.
         };
         let options = json!({"commitment":"finalized", "minContextSlot":context_slot});
         let height = self
@@ -1159,7 +1179,7 @@ impl PayShClient {
             .as_u64()
             .ok_or_else(|| Error::config("Invalid finalized block height"))?;
         if height <= last_valid_height {
-            return Ok(false);
+            return Ok(None);
         }
         let valid = self
             .rpc
@@ -1170,10 +1190,10 @@ impl PayShClient {
         {
             return Err(Error::config("Lagging finalized blockhash context"));
         }
-        valid["value"]
+        let active = valid["value"]
             .as_bool()
-            .map(|valid| !valid)
-            .ok_or_else(|| Error::config("Invalid finalized blockhash status"))
+            .ok_or_else(|| Error::config("Invalid finalized blockhash status"))?;
+        Ok((!active).then(|| valid["context"]["slot"].as_u64().unwrap()))
     }
 
     /// A signed owner installation can be abandoned only after finalized
@@ -1185,11 +1205,23 @@ impl PayShClient {
             .decode(signed)
             .map_err(|_| Error::config("Invalid setup packet"))?;
         let decoded = packet_message(&raw[65..])?;
-        if !self.setup_blockhash_expired(prepared, decoded.blockhash)? {
+        let Some(expiry_slot) = self.setup_expiry_context(prepared, decoded.blockhash)? else {
             return Ok(false);
-        }
-        Ok(account(&*self.rpc, prepared.policy, prepared.blockhash_context_slot)?.is_none())
+        };
+        self.setup_account_absent(prepared, expiry_slot)
     }
+
+    fn setup_account_absent(&self, prepared: &PreparedSetup, expiry_slot: u64) -> Result<bool> {
+        Ok(
+            account(&*self.rpc, prepared.policy, Some(expiry_slot))?
+                .is_none_or(|a| unallocated(&a)),
+        )
+    }
+}
+
+/// Native account creation accepts a donated, empty System account as unused.
+fn unallocated(account: &Account) -> bool {
+    !account.executable && account.owner == Key([0; 32]) && account.data.is_empty()
 }
 
 fn settlement_transaction(
@@ -2077,6 +2109,10 @@ mod tests {
                         assert_eq!(params[1]["minContextSlot"], 100);
                         Ok(json!({"context":{"slot":self.slot},"value":self.valid}))
                     }
+                    "getAccountInfo" => {
+                        assert_eq!(params[1]["minContextSlot"], self.slot);
+                        Ok(json!({"context":{"slot":self.slot-1},"value":null}))
+                    }
                     _ => panic!("unexpected RPC {method}"),
                 }
             }
@@ -2135,6 +2171,10 @@ mod tests {
                 .setup_blockhash_expired(&proof, hash)
                 .unwrap()
         );
+        let expired = client(201, 101, false);
+        let expiry_slot = expired.setup_expiry_context(&proof, hash).unwrap().unwrap();
+        assert_eq!(expiry_slot, 101);
+        assert!(expired.setup_account_absent(&proof, expiry_slot).is_err());
         let mut legacy = proof;
         legacy.blockhash_context_slot = None;
         assert!(
@@ -2207,6 +2247,7 @@ mod tests {
                 policy_key: self.original.policy,
                 policy_bytes,
                 receipt_key: self.original.receipt,
+                receipt_owner: self.deployment.program,
                 receipt_bytes: receipt_present.then(|| borsh::to_vec(&receipt).unwrap()),
                 slot,
                 timestamp,
@@ -2238,6 +2279,7 @@ mod tests {
         policy_key: Key,
         policy_bytes: Vec<u8>,
         receipt_key: Key,
+        receipt_owner: Key,
         receipt_bytes: Option<Vec<u8>>,
         slot: u64,
         timestamp: i64,
@@ -2281,7 +2323,7 @@ mod tests {
                         assert_eq!(key, self.receipt_key);
                         assert_eq!(params[1]["minContextSlot"], self.slot);
                         Ok(json!({"context":{"slot":self.receipt_context_slot},
-                            "value":self.receipt_bytes.as_ref().map(|bytes|value(self.deployment.program,bytes))}))
+                            "value":self.receipt_bytes.as_ref().map(|bytes|value(self.receipt_owner,bytes))}))
                     }
                 }
                 "getTransaction" => {
@@ -2308,6 +2350,83 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn failed_exact_owner_packet_is_unfinalized_not_positive_absence() {
+        let fixture = RecoveryFixture::new();
+        let raw = STANDARD.decode(&fixture.original.signed_bytes).unwrap();
+        let mut unsigned = raw.clone();
+        unsigned[1..65].fill(0);
+        // Any exact failed owner packet is false, never an installation or absence proof.
+        let proof = PreparedSetup {
+            owner: fixture.original.payer,
+            policy: fixture.original.policy,
+            sol_vault: Key([1; 32]),
+            config_bytes: String::new(),
+            allocation_lamports: 1,
+            message: STANDARD.encode(&raw[65..]),
+            unsigned_transaction: STANDARD.encode(unsigned),
+            blockhash_context_slot: Some(100),
+            last_valid_block_height: Some(200),
+        };
+        let mut rpc = fixture.rpc(
+            false,
+            fixture.request.expires_slot,
+            fixture.request.expires_timestamp,
+        );
+        rpc.original_transaction = json!({"meta":{"err":{"InstructionError":[2,"Custom"]}},
+            "transaction":[fixture.original.signed_bytes,"base64"]});
+        let client = PayShClient::new(fixture.deployment.clone(), Arc::new(rpc)).unwrap();
+        assert!(
+            !client
+                .finalized_setup(&proof, &fixture.original.signed_bytes)
+                .unwrap()
+        );
+        let mut rpc = fixture.rpc(
+            false,
+            fixture.request.expires_slot,
+            fixture.request.expires_timestamp,
+        );
+        rpc.original_transaction = json!({"meta":{"err":{"InstructionError":[2,"Custom"]}},
+            "transaction":["different-packet","base64"]});
+        let client = PayShClient::new(fixture.deployment.clone(), Arc::new(rpc)).unwrap();
+        assert!(
+            client
+                .finalized_setup(&proof, &fixture.original.signed_bytes)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn donated_empty_receipt_is_unused_but_foreign_or_executable_accounts_are_not() {
+        let fixture = RecoveryFixture::new();
+        let mut rpc = fixture.rpc(
+            false,
+            fixture.request.expires_slot + 1,
+            fixture.request.expires_timestamp + 1,
+        );
+        rpc.receipt_bytes = Some(vec![]);
+        rpc.receipt_owner = Key([0; 32]);
+        let client = PayShClient::new(fixture.deployment.clone(), Arc::new(rpc)).unwrap();
+        assert_eq!(
+            client.settlement(&fixture.original).unwrap(),
+            ExecutionStatus::ProvenAbsent
+        );
+        let mut a = Account {
+            owner: Key([0; 32]),
+            executable: false,
+            data: vec![],
+        };
+        assert!(unallocated(&a));
+        a.executable = true;
+        assert!(!unallocated(&a));
+        a.executable = false;
+        a.owner = Key([9; 32]);
+        assert!(!unallocated(&a));
+        a.owner = Key([0; 32]);
+        a.data.push(1);
+        assert!(!unallocated(&a));
+    }
+
     #[test]
     fn settlement_retains_consumed_nonce_when_transaction_is_unlocated() {
         let fixture = RecoveryFixture::new();
