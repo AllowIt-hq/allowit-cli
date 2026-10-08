@@ -16,15 +16,24 @@ args = parser.parse_args()
 revision = subprocess.check_output(['git', '-C', str(args.sdk_repo), 'rev-parse', args.revision + '^{commit}'], text=True).strip()
 if args.revision != revision:
     parser.error('revision must be a full exact commit SHA')
-archive = subprocess.check_output(['git', '-C', str(args.sdk_repo), 'archive', revision, 'native-rust'])
+archive = subprocess.check_output(['git', '-C', str(args.sdk_repo), 'archive', revision, 'native-rust', 'crates/paysh-interface'])
 files = {}
+interface_files = {}
 with tarfile.open(fileobj=io.BytesIO(archive)) as source:
     for entry in source:
         if entry.isdir() or entry.type == tarfile.XGLTYPE:
             continue
         parts = Path(entry.name).parts
-        if not entry.isfile() or not parts or parts[0] != 'native-rust' or '..' in parts:
+        if not entry.isfile() or not parts or '..' in parts:
             raise SystemExit('unsafe SDK archive entry')
+        if parts[:2] == ('crates', 'paysh-interface'):
+            name = Path(*parts[2:]).as_posix()
+            if name != 'Cargo.toml' and not name.startswith('src/'):
+                raise SystemExit('unexpected PaySH interface file: ' + name)
+            interface_files[name] = source.extractfile(entry).read()
+            continue
+        if parts[0] != 'native-rust':
+            raise SystemExit('unexpected SDK path')
         name = Path(*parts[1:]).as_posix()
         if not (name in {'Cargo.toml', 'Cargo.lock', 'LICENSE', 'LICENSE.md'} or name.startswith(('src/', 'tests/'))):
             raise SystemExit('unexpected SDK crate file: ' + name)
@@ -35,12 +44,15 @@ if 'Cargo.toml' not in files or 'src/lib.rs' not in files:
     raise SystemExit('native Rust SDK source missing')
 root = Path(__file__).resolve().parents[1]
 vendored = root / 'vendor' / 'allowit-native'
+interface_root = root / 'vendor' / 'crates' / 'paysh-interface'
 legal = {}
 for name in ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/Aeneas-Apache-2.0.txt']:
     present = subprocess.run(['git', '-C', str(args.sdk_repo), 'cat-file', '-e', revision + ':' + name], capture_output=True)
     if present.returncode == 0:
         legal[name] = subprocess.check_output(['git', '-C', str(args.sdk_repo), 'show', revision + ':' + name])
 manifest = {'repository': 'https://github.com/AllowIt-hq/allowit-sdk', 'commit': revision, 'crate': 'native-rust', 'files': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(files.items())}}
+if interface_files:
+    manifest['payshInterface'] = {name: hashlib.sha256(data).hexdigest() for name, data in sorted(interface_files.items())}
 if legal:
     manifest['licenses'] = {name: hashlib.sha256(data).hexdigest() for name, data in sorted(legal.items())}
 manifest_text = json.dumps(manifest, indent=2) + '\n'
@@ -53,6 +65,9 @@ if args.check:
     actual = {p.relative_to(vendored).as_posix(): p.read_bytes() for p in vendored.rglob('*') if p.is_file()}
     if actual != files:
         raise SystemExit('vendored SDK source differs from pinned commit')
+    actual_interface = {p.relative_to(interface_root).as_posix(): p.read_bytes() for p in interface_root.rglob('*') if p.is_file()}
+    if actual_interface != interface_files:
+        raise SystemExit('vendored PaySH interface differs from pinned commit')
     actual_legal = {p.relative_to(root / 'vendor/native-sdk-licenses').as_posix(): p.read_bytes() for p in (root / 'vendor/native-sdk-licenses').rglob('*') if p.is_file()}
     if actual_legal != legal:
         raise SystemExit('vendored SDK license material differs from pinned commit')
@@ -61,6 +76,15 @@ else:
     # a working directory, build output or a developer's unrelated files.
     old_manifest = root / 'vendor' / 'native-sdk.json'
     old = json.loads(old_manifest.read_text())['files'] if old_manifest.exists() else {}
+    old_interface = json.loads(old_manifest.read_text()).get('payshInterface', {}) if old_manifest.exists() else {}
+    for name in set(old_interface) - set(interface_files):
+        if '..' in Path(name).parts or Path(name).is_absolute():
+            raise SystemExit('unsafe old PaySH interface manifest')
+        (interface_root / name).unlink(missing_ok=True)
+    for name, data in interface_files.items():
+        path = interface_root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
     old_legal = json.loads(old_manifest.read_text()).get('licenses', {}) if old_manifest.exists() else {}
     for name in set(old_legal) - set(legal):
         if name not in {'LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/Aeneas-Apache-2.0.txt'}:

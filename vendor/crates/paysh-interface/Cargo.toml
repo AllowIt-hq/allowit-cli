@@ -1,0 +1,8 @@
+[package]
+name = "allowit-paysh-interface"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+[dependencies]
+borsh = { version = "=1.6.0", features = ["derive"] }
+sha2 = "=0.10.9"
