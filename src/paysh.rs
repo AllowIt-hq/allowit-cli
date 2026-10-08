@@ -115,7 +115,14 @@ fn token() -> Result<String> {
             "set {TOKEN_ENV} to the policy's PaySH capability from the AllowIt app"
         )));
     }
-    if t.len() < 32 || t.len() > 512 || !t.bytes().all(|b| b.is_ascii_graphic()) {
+    // Issued capabilities are base64url or JWT text. Anything else could survive
+    // redaction once a server echoes it escaped, so it never leaves the process.
+    if t.len() < 32
+        || t.len() > 512
+        || !t
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+    {
         return Err(Error::config(format!(
             "{TOKEN_ENV} must be the capability exactly as issued"
         )));
@@ -290,14 +297,7 @@ fn call(pos: &[String], json: bool, stdout: &mut String, stderr: &mut String) ->
                 op,
             ));
         }
-        Reply::Status(409, m) => {
-            return Err(unknown(
-                format!("AllowIt returned HTTP 409: {m}"),
-                policy,
-                op,
-            ));
-        }
-        Reply::Status(s @ (401 | 404 | 429), m) => return Err(Error::api(s, m)),
+        // No untyped reply, auth and rate-limit refusals included, proves nothing was paid.
         Reply::Status(s, m) => {
             return Err(unknown(
                 format!("AllowIt returned HTTP {s}: {m}"),
@@ -383,7 +383,12 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
                 .or_else(|| r["finalizedSlot"].as_str()?.parse().ok())
                 .is_some_and(|slot| slot > 0)
     });
-    if phase == "failed" && paid {
+    // A pay or unrecognized receipt without a finalized slot may still have paid.
+    let unsettled = !paid
+        && receipts
+            .iter()
+            .any(|r| r["action"]["type"].as_str() != Some("swap"));
+    if FAILED.contains(&phase.as_str()) && (paid || unsettled) {
         state = "unknown";
         exit = 5;
     }
@@ -395,9 +400,11 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
                 "not sent; the policy is still checking this call"
             }
             "signed" | "submitted" => "submitted; waiting for finality",
-            "denied" => "not sent; the policy denied this call",
+            "denied" if !unsettled => "not sent; the policy denied this call",
             "failed" if receipts.is_empty() => "failed; no payment executed",
-            "failed" => "failed after the finalized steps below; the final payment did not execute",
+            "failed" if !unsettled => {
+                "failed after the finalized steps below; the final payment did not execute"
+            }
             _ => {
                 "unresolved; payment may have been sent, but no finalized payment receipt is available"
             }
@@ -423,8 +430,11 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
         UNKNOWN => {
             "unknown; the owner marked the operation unresolved. Payment may have been sent. It is neither failed nor delivered. Never retry or create a replacement payment; no refund is reported"
         }
-        "failed" if paid => {
+        "denied" | "failed" if paid => {
             "unresolved after finalized payment. Never retry or create a replacement payment"
+        }
+        "denied" | "failed" if unsettled => {
+            "unresolved; payment may have been sent. Never retry or create a replacement payment"
         }
         "denied" | "failed" => "not delivered",
         _ => "waiting for payment",

@@ -267,6 +267,9 @@ fn unknown_results_are_never_retried_and_keep_the_operation_id() {
         http(200, "not json"),
         http(200, &json!({"operationId":"op-2","status":"delivered"}).to_string()),
         http(409, r#"{"error":"Operation ID already binds a different request."}"#),
+        http(401, r#"{"error":"Capability revoked mid-call."}"#),
+        http(404, r#"{"error":"Policy not found."}"#),
+        http(429, r#"{"error":"Too many requests."}"#),
     ] {
         let (url, seen) = serve(vec![reply.clone()]);
         let out = run(&url, &["paysh", "call", POLICY, "op-1", SERVICE, INPUT], Some(TOKEN));
@@ -449,10 +452,34 @@ fn json_payment_finality_is_derived_from_receipts_and_failed_payments_remain_unk
             5,
         ),
         (
+            "denied",
+            json!([{"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}]),
+            true,
+            5,
+        ),
+        (
             "delivered",
             json!([{"signature":"swapSig","finalizedSlot":9,"action":{"type":"swap"}}]),
             false,
             0,
+        ),
+        (
+            "failed",
+            json!([{"signature":"swapSig","finalizedSlot":9,"action":{"type":"swap"}}]),
+            false,
+            20,
+        ),
+        (
+            "denied",
+            json!([{"signature":"paySig","action":{"type":"pay","amountUsdc":1000}}]),
+            false,
+            5,
+        ),
+        (
+            "failed",
+            json!([{"signature":"paySig","finalizedSlot":0,"action":{"type":"pay","amountUsdc":1000}}]),
+            false,
+            5,
         ),
     ] {
         let reply =
@@ -463,11 +490,77 @@ fn json_payment_finality_is_derived_from_receipts_and_failed_payments_remain_unk
             &["paysh", "status", POLICY, "op-1", "--json"],
             Some(TOKEN),
         );
-        assert_eq!(out.status.code(), Some(exit));
+        assert_eq!(out.status.code(), Some(exit), "{phase} {receipts}");
         let value: Value = serde_json::from_slice(&out.stdout).unwrap();
-        assert_eq!(value["paymentFinalized"], json!(paid));
-        if phase == "failed" {
+        assert_eq!(value["paymentFinalized"], json!(paid), "{phase} {receipts}");
+        assert_eq!(value["exitCode"], json!(exit));
+        if exit == 5 {
             assert_eq!(value["state"], "unknown");
         }
     }
+}
+
+#[test]
+fn failed_or_denied_with_a_pay_receipt_is_unresolved_in_text() {
+    for (phase, receipt, paid) in [
+        (
+            "denied",
+            json!({"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}),
+            true,
+        ),
+        (
+            "denied",
+            json!({"signature":"paySig","action":{"type":"pay","amountUsdc":1000}}),
+            false,
+        ),
+        (
+            "failed",
+            json!({"signature":"paySig","finalizedSlot":"x","action":{"type":"pay","amountUsdc":1000}}),
+            false,
+        ),
+    ] {
+        let reply = json!({"operationId":"op-1","status":phase,"signatures":["paySig"],"receipts":[receipt],"response":null});
+        let (url, seen) = serve(vec![http(200, &reply.to_string())]);
+        let out = run(&url, &["paysh", "status", POLICY, "op-1"], Some(TOKEN));
+        let (stdout, stderr) = text(&out);
+        assert_eq!(out.status.code(), Some(5), "{phase}: {stdout}{stderr}");
+        assert_eq!(seen.recv().unwrap().len(), 1);
+        assert!(stdout.contains("state: unknown"), "{stdout}");
+        assert_eq!(stdout.contains("payment: finalized"), paid, "{stdout}");
+        if !paid {
+            assert!(stdout.contains("payment: unresolved"), "{stdout}");
+        }
+        assert!(!stdout.contains("did not execute") && !stdout.contains("no payment executed"));
+        assert!(!stdout.contains("not sent") && !stdout.contains("delivery: not delivered"));
+        assert!(stdout.contains("Never retry or create a replacement payment"));
+        assert!(stdout.contains("Never create a replacement payment"));
+    }
+}
+
+#[test]
+fn an_unsafe_capability_is_rejected_before_any_request() {
+    let (url, seen) = serve(vec![]);
+    for bad in ["\"", "\\", "<", ">", "&", "=", "+"] {
+        let token = format!("capability-0123456789abcdefghij{bad}klmnopqrstuvwxyz");
+        for args in [
+            vec!["paysh", "call", POLICY, "op-1", SERVICE, INPUT],
+            vec!["paysh", "status", POLICY, "op-1"],
+        ] {
+            let out = run(&url, &args, Some(token.as_str()));
+            let (stdout, stderr) = text(&out);
+            assert_eq!(out.status.code(), Some(3), "{token}: {stderr}");
+            assert!(!stdout.contains(&token) && !stderr.contains(&token));
+            assert!(!stderr.contains("klmnopqrstuvwxyz"), "{stderr}");
+        }
+    }
+    assert!(seen.recv().unwrap().is_empty());
+    let jwt = "eyJhbGciOiJFZERTQSJ9.eyJwb2xpY3kiOiJhYiJ9.c2lnbmF0dXJlLXZhbHVlLXNhZmU";
+    let (url, seen) = serve(vec![http(200, &op("submitted").to_string())]);
+    let out = run(&url, &["paysh", "status", POLICY, "op-1"], Some(jwt));
+    assert_eq!(out.status.code(), Some(12), "{:?}", text(&out));
+    let seen = seen.recv().unwrap();
+    assert_eq!(
+        seen[0].header("authorization"),
+        Some(format!("Bearer {jwt}").as_str())
+    );
 }
