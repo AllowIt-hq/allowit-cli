@@ -11,10 +11,16 @@ Main contains the untagged `0.3.0-dev` implementation. No native Rust GitHub Rel
 Use Rust 1.85 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
 
 ```sh
-git clone https://github.com/AllowIt-hq/allowit-cli.git
+git clone --recurse-submodules https://github.com/AllowIt-hq/allowit-cli.git
 cd allowit-cli
 cargo build --locked --release
 ./target/release/allowit version
+```
+
+The native SDK is the `repos/AllowIt-hq--allowit-sdk` Git submodule. In an existing clone, or after switching to a revision with another SDK pin, run:
+
+```sh
+git submodule update --init --recursive
 ```
 
 Validation and distribution builds:
@@ -32,7 +38,7 @@ The **Native binaries** workflow validates PRs and supports manual builds of Lin
 
 The CLI is independent of the optional hosted-agent runtime. A host can install the same binary used by an external agent; this repository contains no sandbox launcher, supervisor or model proxy.
 
-Each **Native binaries** artifact also includes `allowit-PLATFORM.provenance.json` (schema version 1, kind `rust-native`). It records the binary target and SHA-256, exact CLI commit and source tree, pinned SDK commit and file hashes, and native contract release identity. Staging consumers should select a trusted workflow run, verify the binary checksum against this manifest, and compare the release identity with their backend before executing a downloaded skill. The manifest describes the workflow build; it is not a signature or a standalone attestation from an arbitrary download.
+Each **Native binaries** artifact also includes `allowit-PLATFORM.provenance.json` (schema version 1, kind `rust-native`). It records the binary target and SHA-256, exact CLI commit and source tree, the SDK submodule path, canonical URL, pinned commit and consumed file hashes, and native contract release identity. It is written only after the shared SDK verifier passes. Staging consumers should select a trusted workflow run, verify the binary checksum against this manifest, and compare the release identity with their backend before executing a downloaded skill. The manifest describes the workflow build; it is not a signature or a standalone attestation from an arbitrary download.
 
 ## Configure
 
@@ -156,7 +162,25 @@ Decimals are plain digits with an optional fraction: no sign, exponent, separato
 
 **Local configuration.** `ALLOWIT_POLICY_DIR` defaults to `.allowit`; `ALLOWIT_POLICY_FILE` may select another policy file. `ALLOWIT_NETWORK`, `ALLOWIT_RPC_URL`, `ALLOWIT_MINT`, `ALLOWIT_EXECUTOR`, `ALLOWIT_AUTHORITY`, and `ALLOWIT_DEPLOYMENT_FILE` configure the native profile. Import persists a public context and refuses conflicting configuration. `ALLOWIT_OWNER_KEYPAIR` is used for owner operations, `ALLOWIT_EXECUTOR_KEYPAIR` for execution, and `ALLOWIT_OWNER` supplies the public owner for execution/status. Keys are private local files. `ALLOWIT_REQUEST_ID` is required for execution and is the durable operation ID. `ALLOWIT_EXECUTION_ACTION` defaults to `transfer`; `ALLOWIT_EXECUTION_MERCHANT` and one of `ALLOWIT_EXECUTION_CONTEXT_JSON` or `ALLOWIT_EXECUTION_CONTEXT_FILE` supply the exact policy input. Context is sent to the trusted backend, so do not put credentials in it. Only an explicitly additional fund/withdraw uses both a fresh ID and `ALLOWIT_ADDITIONAL_OWNER_OPERATION=1` after an expired uncertain operation.
 
-**SDK source pin.** `vendor/allowit-native/` contains the canonical SDK crate and its required build and test inputs. `vendor/native-sdk.json` records the exact SDK commit and file hashes. `scripts/sync-native-sdk.py SDK_REPO FULL_COMMIT --check` verifies the snapshot against canonical source; ordinary builds and CI require no private SDK checkout or cross-repository token.
+**SDK source pin.** Cargo builds `allowit-native` from `repos/AllowIt-hq--allowit-sdk/native-rust`, a Git submodule of `https://github.com/AllowIt-hq/allowit-sdk.git`. The parent repository's gitlink pins the exact SDK commit. `vendor/native-sdk.json` records that commit, the submodule path and URL, SHA-256 hashes of the crate files Cargo consumes, the crate's unconsumed SDK tooling, and the SDK's upstream license files. The repository keeps no copies of SDK source or license text.
+
+```sh
+python3 scripts/sync-native-sdk.py verify              # make test, provenance and license packaging run this
+python3 scripts/sync-native-sdk.py update FULL_COMMIT  # check out an exact SDK commit, record and stage it
+python3 scripts/sync-native-sdk.py pin                 # record and stage the checked-out submodule commit
+```
+
+`verify` requires the following:
+
+- `.gitmodules` names only the canonical URL.
+- The index holds a mode `160000` gitlink at the recorded commit.
+- The submodule is initialized and clean, with its `HEAD` at that commit.
+- `native-rust/` contains exactly the recorded files, including untracked or ignored files such as an injected `build.rs`, and their bytes match the recorded hashes.
+- The SDK root's license files match their recorded bytes.
+
+Hashes cover the checked-out bytes with CRLF read as LF in files Git treats as text (no NUL in the first 8000 bytes), so a clean Windows `core.autocrlf` checkout verifies against the same metadata. Any other byte change, including one hidden by a local Git filter, fails. License packaging copies the checkout's notice files unchanged.
+
+`update` and `pin` stage the gitlink and metadata for review and never commit. Updating the SDK revision is a separate reviewed change.
 
 **Hosted execution authorization.** A backend-exported executor bundle contains `audit: {origin, token}`. Import saves this policy-scoped capability in the private local journal. The CLI sends only the high-level action, merchant, context, recipient and amount to `POST /api/native/execute`; the backend evaluates the owner-bound policy and returns an authority-only signature over its exact prepared transaction. The CLI reconstructs and checks the approval commitment, signer set, instructions and message, adds only the executor signature, persists the complete proof, then requires a durable `POST /api/native/report` acknowledgment before chain broadcast. Identical retries reconcile the saved proof without obtaining another approval or allocating another payment. Missing, redirected or inconsistent responses block broadcast or produce exit 5. `policy status` retries reporting without signing or broadcasting. The token is never printed; the executor bundle and journal contain this private capability and must not be shared publicly. Denial, unresolved owner input, or a required provider failure produces no execution signature. Owner operations remain independent of the provider and authority.
 
@@ -192,6 +216,6 @@ The [integration checks](integration/README.md) retain pinned Go gateways and th
 
 ## License and binary notices
 
-First-party code is licensed under [MIT](LICENSE). Dependency licenses remain their own; [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES/README.md) contains the exact dependency notices and runtime attribution for current and historical workflow binaries. Keep this companion directory with downloaded binaries. New workflow artifacts include it with `LICENSE`, the checksum and provenance manifest.
+First-party code is licensed under [MIT](LICENSE). Dependency licenses remain their own; [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES/README.md) contains the exact dependency notices and runtime attribution for current and historical workflow binaries. Keep this companion directory with downloaded binaries. New workflow artifacts include it with `LICENSE`, the checksum and provenance manifest. The SDK's own notices are copied unchanged from the verified submodule into `THIRD_PARTY_LICENSES/AllowIt-sdk/` at packaging time.
 
 Skill format: [Agent Skills specification](https://agentskills.io/specification) and [best practices](https://agentskills.io/skill-creation/best-practices).

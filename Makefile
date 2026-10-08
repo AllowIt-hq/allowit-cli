@@ -1,17 +1,23 @@
 GO ?= go
 CARGO ?= cargo
 RUST_TARGET ?= x86_64-unknown-linux-musl
+# Canonical SDK crate from the pinned Git submodule. Its target output stays in
+# this checkout so SDK checks never leave files inside the submodule.
+SDK_CRATE := repos/AllowIt-hq--allowit-sdk/native-rust
 
 .PHONY: test parity integration build dist clean
 
 test:
+	python3 scripts/sync-native-sdk.py verify
 	python3 scripts/package-licenses.py
 	python3 scripts/test-package-licenses.py
+	python3 scripts/test-binary-provenance.py
 	$(CARGO) fmt --check
 	$(CARGO) clippy --locked --all-targets -- -D warnings
 	$(CARGO) test --locked
-	CARGO_TARGET_DIR="$(CURDIR)/target" $(CARGO) test --manifest-path vendor/allowit-native/Cargo.toml --locked
-	CARGO_TARGET_DIR="$(CURDIR)/target" $(CARGO) clippy --manifest-path vendor/allowit-native/Cargo.toml --locked --all-targets -- -D warnings
+	CARGO_TARGET_DIR="$(CURDIR)/target" $(CARGO) test --manifest-path $(SDK_CRATE)/Cargo.toml --locked
+	CARGO_TARGET_DIR="$(CURDIR)/target" $(CARGO) clippy --manifest-path $(SDK_CRATE)/Cargo.toml --locked --all-targets -- -D warnings
+	python3 scripts/sync-native-sdk.py verify
 	cd reference/go && $(GO) vet ./... && $(GO) test -race -count=1 ./...
 	$(GO) test -race -count=1 ./integration
 

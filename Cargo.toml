@@ -11,7 +11,7 @@ name = "allowit"
 path = "src/main.rs"
 
 [dependencies]
-allowit-native = { path = "vendor/allowit-native" }
+allowit-native = { path = "repos/AllowIt-hq--allowit-sdk/native-rust" }
 base64 = "0.22.1"
 bs58 = "0.5.1"
 data-encoding = "2.9.0"

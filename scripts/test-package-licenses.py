@@ -4,23 +4,40 @@ import importlib.util
 import json
 import pathlib
 import shutil
+import sys
 import tempfile
 import unittest
 
+sys.dont_write_bytecode = True
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location('package_licenses', ROOT / 'scripts/package-licenses.py')
-MODULE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(MODULE)
+
+
+def load(name, file):
+    spec = importlib.util.spec_from_file_location(name, ROOT / 'scripts' / file)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+MODULE = load('package_licenses', 'package-licenses.py')
+FIXTURE = load('native_sdk_fixture', 'native-sdk-fixture.py')
 
 
 class LicenseMaterial(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.template = tempfile.TemporaryDirectory()
+        FIXTURE.create(pathlib.Path(cls.template.name) / 'repo', ['LICENSE', 'Cargo.lock', 'Cargo.toml', 'THIRD_PARTY_LICENSES', 'vendor/native-sdk.json'])
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.template.cleanup()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = pathlib.Path(self.temp.name)
-        for name in ['LICENSE', 'Cargo.lock']:
-            shutil.copyfile(ROOT / name, self.root / name)
-        shutil.copytree(ROOT / 'THIRD_PARTY_LICENSES', self.root / 'THIRD_PARTY_LICENSES')
-        shutil.copytree(ROOT / 'vendor', self.root / 'vendor')
+        self.root = pathlib.Path(self.temp.name) / 'repo'
+        shutil.copytree(pathlib.Path(self.template.name) / 'repo', self.root, symlinks=True)
+        self.sdk = self.root / FIXTURE.SDK
 
     def tearDown(self):
         self.temp.cleanup()
@@ -55,9 +72,44 @@ class LicenseMaterial(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Toolchain notice'):
             MODULE.validate(self.root)
 
+    def test_sdk_notices_are_packaged_from_the_submodule(self):
+        dist = pathlib.Path(self.temp.name) / 'dist'
+        MODULE.package(self.root, dist)
+        licenses = json.loads((self.root / 'vendor/native-sdk.json').read_text())['licenses']
+        packaged = dist / 'THIRD_PARTY_LICENSES/AllowIt-sdk'
+        self.assertEqual(sorted(p.relative_to(packaged).as_posix() for p in packaged.rglob('*') if p.is_file()), sorted(licenses))
+        for name in licenses:
+            self.assertEqual((packaged / name).read_bytes(), (self.sdk / name).read_bytes())
+        self.assertFalse((self.root / 'vendor/native-sdk-licenses').exists())
+
+    def test_autocrlf_sdk_notices_are_packaged_as_checked_out(self):
+        FIXTURE.autocrlf(self.root)
+        self.assertIn(b'\r\n', (self.sdk / 'LICENSE').read_bytes())
+        dist = pathlib.Path(self.temp.name) / 'dist'
+        MODULE.package(self.root, dist)
+        for name in json.loads((self.root / 'vendor/native-sdk.json').read_text())['licenses']:
+            self.assertEqual((dist / 'THIRD_PARTY_LICENSES/AllowIt-sdk' / name).read_bytes(), (self.sdk / name).read_bytes())
+
     def test_sdk_license_is_checked(self):
-        (self.root / 'vendor/native-sdk-licenses/LICENSE').write_text('changed attribution')
+        (self.sdk / 'LICENSE').write_text('changed attribution')
+        with self.assertRaisesRegex(ValueError, 'submodule must be clean'):
+            MODULE.validate(self.root)
+        FIXTURE.commit(self.sdk, 'license drift')
+        FIXTURE.repin(self.root)
         with self.assertRaisesRegex(ValueError, 'SDK license notice'):
+            MODULE.package(self.root, pathlib.Path(self.temp.name) / 'dist')
+
+    def test_sdk_notice_path_cannot_escape(self):
+        path = self.root / 'vendor/native-sdk.json'
+        value = json.loads(path.read_text())
+        value['licenses']['../../LICENSE'] = value['licenses']['LICENSE']
+        path.write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError, 'license path is invalid'):
+            MODULE.validate(self.root)
+
+    def test_uninitialized_sdk_submodule_is_rejected(self):
+        FIXTURE.git(self.root, 'submodule', 'deinit', '-q', '-f', FIXTURE.SDK)
+        with self.assertRaisesRegex(ValueError, 'not initialized'):
             MODULE.validate(self.root)
 
 
