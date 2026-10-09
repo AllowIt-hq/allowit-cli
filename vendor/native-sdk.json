@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-  "commit": "9ebda6d8bfb73efb15048af9df8d8e259f38d6f8",
+  "commit": "a18b63232b73edd9cbad2027e1a63baa0a854bf0",
   "crate": "native-rust",
   "submodule": {
     "path": "repos/AllowIt-hq--allowit-sdk",
@@ -46,7 +46,7 @@
       "typed-workflow"
     ],
     "files": {
-      "Cargo.toml": "d327e0518871dfc21b0acacd596206c3cb81dc649a2d6fac6bd9905fa6f889b1",
+      "Cargo.toml": "f00991895d7098876dbbb2fd12e7a41febc34a1394cb7eaaf5a6a6f251abf38e",
       "src/bin/allowit.rs": "56c4a94f3a15ec9d3a74a6bc40ea7276cd0b0f120f32323cf484714fa5a9cd4c",
       "src/compiler.rs": "a9dc56d3646404eba1084cf00402550bfd0b533b3e39b61864be1c73eb7b76c9",
       "src/editing.rs": "e8d921bea99d9d5516843859c6b481a580e1fead9d9034677d66c87beb142cc4",
@@ -59,13 +59,13 @@
       "src/readability.rs": "5432fd2bdb7e27e63f10c49787fa45d0f3d6fdab84990bae0ede363b00d2d983",
       "src/registry.rs": "956584958b0408d0580e1349d8c9eab1d3f0edbd89c7574ba36f47bb3e53d15e",
       "src/requirements.rs": "ee3775b0aae5de261e68eea02597536e5e3274b244fc5b84bae7d37aa1c9dd8f",
-      "src/runtime.rs": "37a12ecc699ad9cf703c01f0bb3fdea49fd6dc35a9aa9131433b11cbb9763f7b",
+      "src/runtime.rs": "0581196e93900b63b4d5cff30659003f4332ffcd19903aa3e7a918840f3595f5",
       "src/spending.rs": "06e6a022df74c7ad33745ea11ec97166cda1f2e059e707aecf82176a5ddac15d",
       "src/trace.rs": "b8d4a89465dfc825f5a1820ddf2203bf7208c6b144e64c708a559af72331a626",
       "src/typed_workflow.rs": "5dfda6b5002c4590c0a0963e8bcda7e8a7dfc27e79b63ee311062f6a539de574",
       "src/types.rs": "0fd14cf43b16ded99d0f7e9aac5cba66a82918c8bd81a21e560412b4f05aaed1",
       "src/v1.rs": "d11bcc2046d28b32f6b65b743941d54176a12940699f9adbf19f5242f41bd66e",
-      "src/validation.rs": "5b218a31a570ee32dca4b5d8077f2179c255effff864e3f29278cf7ae9fe8bf5"
+      "src/validation.rs": "50692a30df78f829db360c745f6bb9ccc8bc237759a5d5e42d8c12893c4a901d"
     }
   },
   "licenses": {
