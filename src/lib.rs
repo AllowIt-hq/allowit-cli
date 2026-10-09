@@ -9,6 +9,8 @@ mod policy;
 mod policy_native;
 mod request;
 mod skill;
+#[cfg(test)]
+mod typed_request;
 use crate::{
     client::Client,
     config::{Config, env_value},
