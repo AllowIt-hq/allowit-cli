@@ -11,10 +11,13 @@ name = "allowit"
 path = "src/main.rs"
 
 [dependencies]
-allowit-native = { path = "vendor/allowit-native" }
+allowit-native = { path = "repos/AllowIt-hq--allowit-sdk/native-rust" }
+# Canonical typed workflow types from the same pinned SDK submodule.
+allowit-policy-sdk = { package = "allowit-sdk", path = "repos/AllowIt-hq--allowit-sdk", default-features = false, features = ["std", "typed-workflow"] }
 base64 = "0.22.1"
 bs58 = "0.5.1"
 data-encoding = "2.9.0"
+libc = "0.2.190"
 num-bigint = "0.4.6"
 num-traits = "0.2.19"
 regex = "1.11.1"

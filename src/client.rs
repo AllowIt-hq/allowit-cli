@@ -146,7 +146,6 @@ impl Client {
     /// Send one POST and never resend it. Only HTTP 200 with a JSON object is a known outcome.
     /// Every other result is uncertain: the caller must recover by status lookup with the same
     /// request ID. Messages never contain the token, the route or request/response bodies.
-    #[cfg_attr(not(test), allow(dead_code))] // The typed run command is not active yet.
     pub fn post_once(&mut self, action: &str, body: &[u8]) -> Result<Value> {
         if body.len() > MAX_REQUEST {
             return Err(Error::unsupported("request is larger than the 64 KB limit"));
@@ -193,7 +192,7 @@ fn error_message(data: &[u8]) -> String {
         .unwrap_or_else(|| "no error message".into())
 }
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::{
         io::{ErrorKind, Write},
@@ -207,15 +206,15 @@ mod tests {
     };
     const TOKEN: &str = "owner-1.policy-1.secret-token-0123456789";
     const BODY: &[u8] = br#"{"requestId":"req-private-0001","amount":"private-amount-77"}"#;
-    enum Reply {
+    pub(crate) enum Reply {
         Close,
         Status(u16, &'static str),
     }
-    struct Seen {
-        head: String,
-        body: Vec<u8>,
+    pub(crate) struct Seen {
+        pub head: String,
+        pub body: Vec<u8>,
     }
-    struct Server {
+    pub(crate) struct Server {
         listener: Arc<TcpListener>,
         done: Arc<AtomicBool>,
         handle: JoinHandle<Vec<Seen>>,
@@ -241,7 +240,7 @@ mod tests {
         Seen { head, body }
     }
     /// Serve one scripted reply per connection until the script ends or the client returns.
-    fn serve(replies: Vec<Reply>) -> (Client, Server) {
+    pub(crate) fn serve(replies: Vec<Reply>) -> (Client, Server) {
         let listener = Arc::new(TcpListener::bind("127.0.0.1:0").unwrap());
         listener.set_nonblocking(true).unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -295,7 +294,7 @@ mod tests {
     }
     impl Server {
         /// Join the script and prove the client opened no further connection before returning.
-        fn finish(self) -> Vec<Seen> {
+        pub(crate) fn finish(self) -> Vec<Seen> {
             self.done.store(true, Ordering::SeqCst);
             let seen = self.handle.join().unwrap();
             match self.listener.accept() {

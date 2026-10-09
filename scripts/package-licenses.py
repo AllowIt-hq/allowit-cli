@@ -2,10 +2,18 @@
 """Validate original dependency notices and package them beside native binaries."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import pathlib
 import re
 import shutil
+import sys
+
+# Loading the shared verifier must not leave bytecode in the checkout.
+sys.dont_write_bytecode = True
+_spec = importlib.util.spec_from_file_location('native_sdk', pathlib.Path(__file__).with_name('sync-native-sdk.py'))
+native_sdk = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(native_sdk)
 
 
 def lock_packages(text):
@@ -65,15 +73,19 @@ def validate(root):
         file = directory / relative
         if file.is_symlink() or hashlib.sha256(file.read_bytes()).hexdigest() != item['sha256']:
             raise ValueError('Toolchain notice is missing or changed')
-    sdk = json.loads((root / 'vendor/native-sdk.json').read_text())
-    if 'LICENSE' not in sdk.get('licenses', {}):
-        raise ValueError('Pinned SDK license snapshot is missing')
-    for name, digest in sdk['licenses'].items():
-        if name not in {'LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/Aeneas-Apache-2.0.txt'}:
-            raise ValueError('SDK license path is invalid')
-        file = root / 'vendor/native-sdk-licenses' / name
-        if file.is_symlink() or hashlib.sha256(file.read_bytes()).hexdigest() != digest:
-            raise ValueError('Pinned SDK license notice is missing or changed')
+    return native_sdk.verify(root)
+
+
+def package(root, dist):
+    sdk = validate(root)
+    dist.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(root / 'LICENSE', dist / 'LICENSE')
+    shutil.copytree(root / 'THIRD_PARTY_LICENSES', dist / 'THIRD_PARTY_LICENSES', dirs_exist_ok=True)
+    # SDK notices come from the verified submodule's upstream root, byte for byte.
+    for name in sdk['licenses']:
+        target = dist / 'THIRD_PARTY_LICENSES/AllowIt-sdk' / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(root / native_sdk.SUBMODULE / name, target)
 
 
 def main():
@@ -81,12 +93,10 @@ def main():
     parser.add_argument('--dist', type=pathlib.Path)
     args = parser.parse_args()
     root = pathlib.Path(__file__).resolve().parents[1]
-    validate(root)
     if args.dist:
-        args.dist.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(root / 'LICENSE', args.dist / 'LICENSE')
-        shutil.copytree(root / 'THIRD_PARTY_LICENSES', args.dist / 'THIRD_PARTY_LICENSES', dirs_exist_ok=True)
-        shutil.copytree(root / 'vendor/native-sdk-licenses', args.dist / 'THIRD_PARTY_LICENSES/AllowIt-sdk', dirs_exist_ok=True)
+        package(root, args.dist)
+    else:
+        validate(root)
     print('Binary license notices verified')
 
 

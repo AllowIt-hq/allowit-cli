@@ -4,5 +4,6 @@
 *.test
 *.out
 .env*
+__pycache__/
 
 /target/

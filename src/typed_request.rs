@@ -1,8 +1,8 @@
-//! Bounded file ingress. The eventual command decodes directly into canonical SDK DTOs.
+//! Bounded file ingress. Callers decode directly into canonical SDK DTOs.
 use crate::error::{Error, Result};
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
-use std::{fs::File, io::Read, path::Path};
+use std::{io::Read, path::Path};
 
 pub(crate) const MAX_REQUEST_BYTES: usize = 65_536;
 pub(crate) const MAX_JSON_DEPTH: usize = 48;
@@ -17,7 +17,14 @@ pub(crate) fn read_request_file<T: DeserializeOwned>(path: &Path) -> Result<T> {
             "The request path must name a local regular file.",
         ));
     }
-    let file = File::open(path).map_err(|_| Error::usage("Cannot open the request file."))?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    // A FIFO swapped in after the metadata check must not block the open.
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NONBLOCK);
+    let file = options
+        .open(path)
+        .map_err(|_| Error::usage("Cannot open the request file."))?;
     let metadata = file
         .metadata()
         .map_err(|_| Error::usage("Cannot read request file metadata."))?;
@@ -30,6 +37,11 @@ pub(crate) fn read_request_file<T: DeserializeOwned>(path: &Path) -> Result<T> {
         return Err(Error::usage("The request file exceeds 65536 bytes."));
     }
     decode_reader(file)
+}
+
+/// Decode an in-memory document with the same bounds as a request file.
+pub(crate) fn decode_bytes<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    decode_reader(bytes)
 }
 
 /// Exact version-1 operation nonce. Preserve the caller's policy and request ID bytes.
@@ -205,5 +217,21 @@ mod tests {
         );
         std::fs::remove_file(path).unwrap();
         assert!(read_request_file::<Request>(&std::env::temp_dir()).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn fifo_open_does_not_block() {
+        let path =
+            std::env::temp_dir().join(format!("allowit-request-fifo-{}", std::process::id()));
+        let c = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        // The metadata check rejects it; a swap after that check reaches the nonblocking open.
+        assert!(read_request_file::<Request>(&path).is_err());
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NONBLOCK);
+        let file = options.open(&path).unwrap();
+        assert!(!file.metadata().unwrap().is_file());
+        std::fs::remove_file(path).unwrap();
     }
 }

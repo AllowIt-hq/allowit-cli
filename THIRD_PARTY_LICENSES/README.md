@@ -9,3 +9,5 @@ This directory is companion documentation for all `allowit` binaries built by th
 Future artifact builds validate every current registry dependency against this collection and bundle this directory with the binary. If a lockfile introduces a new version, refresh its notices before publishing the artifact.
 
 The current PaySH quote path pins `orca_whirlpools_core` and `orca_whirlpools_macros` 1.0.4. Their checksum-verified published manifests declare Apache-2.0 and omit license files, so their companion directories retain the complete authoritative Apache-2.0 text with provenance in the index. Historical 2.1.1/1.0.5 Orca License texts remain preserved for earlier binaries.
+
+Some published crates (`five8`, `five8_core` and the `solana-*` hasher chain of the SDK policy crate) declare a license but ship no license file. Their companion directories retain the `LICENSE` from the upstream repository at the exact VCS commit recorded in the checksum-verified crate archive; `noticeBasis` and `licenseSource` in the index record this.

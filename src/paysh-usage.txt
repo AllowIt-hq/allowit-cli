@@ -1,8 +1,8 @@
-allowit paysh calls one PaySH API through an owner-deployed AllowIt policy.
+allowit paysh reconciles retained operations from a legacy AllowIt policy.
 
-The owner deploys and funds the policy in the AllowIt app and issues a scoped
-capability. The capability can only call the policy's API and read its
-operations. This command holds no signing key and never reads one.
+Use the original retained scoped capability and backend for that policy.
+These commands do not create a policy, issue authority or start a new operation.
+This command holds no signing key and never reads one.
 
 Configuration (environment only):
   ALLOWIT_URL          service origin, e.g. https://allowit.example
@@ -15,13 +15,13 @@ Commands:
                  list the PaySH catalog, or this server's cooperating-v1
                  services in test-token units; no token needed
   allowit paysh call POLICY OPERATION_ID SERVICE_ID INPUT_JSON [--json]
-                 pay for and call SERVICE_ID once with INPUT_JSON
+                 reconcile an existing OPERATION_ID with its original input
   allowit paysh status POLICY OPERATION_ID [--json]
                  read, and advance, an earlier call
 
 OPERATION_ID is chosen by the agent: 1 to 128 characters from A-Z a-z 0-9 _ -.
-Use a new OPERATION_ID for each intended call. Never retry a call with a new
-OPERATION_ID: an unknown result may still have paid. Check it with status, or
+Use the original OPERATION_ID. Never retry a call with a new OPERATION_ID:
+an unknown result may still have paid. Check it with status, or
 rerun the identical call with the same OPERATION_ID. INPUT_JSON is limited to
 4096 bytes. Each request is sent once; nothing is retried automatically.
 

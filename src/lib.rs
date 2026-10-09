@@ -9,8 +9,8 @@ mod policy;
 mod policy_native;
 mod request;
 mod skill;
-#[cfg(test)]
 mod typed_request;
+mod typed_run;
 use crate::{
     client::Client,
     config::{Config, env_value},
@@ -114,6 +114,9 @@ fn action(command: &str, argv: &[String], stdout: &mut String, stderr: &mut Stri
         return Err(Error::usage(
             "REQUEST_ID is the requestId printed by eval or exec",
         ));
+    }
+    if parsed.flags.0.contains_key("request-file") {
+        return typed_run::exec(command, &parsed, stderr);
     }
     let id_flag = parsed.flags.get("request-id");
     if !id_flag.is_empty() && !request_id_valid(id_flag) {
