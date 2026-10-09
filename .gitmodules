@@ -1,0 +1,3 @@
+[submodule "repos/AllowIt-hq--allowit-sdk"]
+	path = repos/AllowIt-hq--allowit-sdk
+	url = https://github.com/AllowIt-hq/allowit-sdk.git

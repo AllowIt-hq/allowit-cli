@@ -2,11 +2,19 @@
 """Describe a CI-built native binary and its clean, pinned source checkout."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
+import sys
+
+# Loading the shared verifier must not leave bytecode in the recorded checkout.
+sys.dont_write_bytecode = True
+_spec = importlib.util.spec_from_file_location("native_sdk", Path(__file__).with_name("sync-native-sdk.py"))
+native_sdk = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(native_sdk)
 
 TARGETS = {
     "x86_64-unknown-linux-musl": ("allowit-linux-amd64", b"\x7fELF", 62),
@@ -16,13 +24,17 @@ TARGETS = {
 
 
 def git(repo, *args):
-    return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+    return subprocess.check_output(["git", "-C", str(repo), *args], text=True, env=native_sdk.environment()).strip()
 
 
 def manifest(repo, binary, target):
     repo, binary = Path(repo).resolve(), Path(binary).resolve()
-    if git(repo, "status", "--porcelain"):
+    sdk = native_sdk.verify(repo)
+    if git(repo, "status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all"):
         raise ValueError("Tracked source must be committed before recording provenance")
+    # verify leaves the CLI root's Cargo inputs to development; a recorded build
+    # must use the committed ones, including ignored or index-hidden changes.
+    native_sdk.parent(repo, "")
     asset, magic, cpu = TARGETS[target]
     raw = binary.read_bytes()
     if raw[:4] != magic:
@@ -32,29 +44,7 @@ def manifest(repo, binary, target):
             raise ValueError("Binary architecture does not match target")
     elif len(raw) < 8 or int.from_bytes(raw[4:8], "little") != cpu:
         raise ValueError("Binary architecture does not match target")
-    sdk = json.loads((repo / "vendor/native-sdk.json").read_text())
-    if not re.fullmatch(r"[0-9a-f]{40}", sdk["commit"]):
-        raise ValueError("SDK pin must be a full commit")
-    tracked = {name.removeprefix("vendor/allowit-native/") for name in
-               git(repo, "ls-files", "vendor/allowit-native").splitlines()}
-    if set(sdk["files"]) != tracked or not {"Cargo.toml", "Cargo.lock", "src/lib.rs", "src/release.json"}.issubset(tracked):
-        raise ValueError("SDK snapshot file set differs from its pin")
-    for name, expected in sdk["files"].items():
-        relative = Path(name)
-        if relative.is_absolute() or ".." in relative.parts:
-            raise ValueError("Invalid SDK snapshot path")
-        source = repo / "vendor/allowit-native" / relative
-        if source.is_symlink():
-            raise ValueError("SDK source must be a regular snapshot file")
-        if hashlib.sha256(source.read_bytes()).hexdigest() != expected:
-            raise ValueError("SDK snapshot differs from its pin")
-    for name, expected in sdk.get("licenses", {}).items():
-        if name not in {"LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/Aeneas-Apache-2.0.txt"}:
-            raise ValueError("Invalid SDK license snapshot path")
-        source = repo / "vendor/native-sdk-licenses" / name
-        if source.is_symlink() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
-            raise ValueError("SDK license snapshot differs from its pin")
-    release = json.loads((repo / "vendor/allowit-native/src/release.json").read_text())
+    release = json.loads((repo / native_sdk.SUBMODULE / native_sdk.CRATE / "src/release.json").read_text())
     version = re.search(r'^version = "([^"]+)"$', (repo / "Cargo.toml").read_text(), re.M)[1]
     value = {
         "schemaVersion": 1,

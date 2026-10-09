@@ -1,90 +1,299 @@
 #!/usr/bin/env python3
-"""Copy the narrow native Rust crate from an exact SDK commit; no credentials."""
+"""Pin, update and verify the native Rust SDK Git submodule; no credentials.
+
+Builds, provenance and license packaging share `verify`. `update` checks out an
+exact SDK commit; `pin` records the checked-out commit. Both stage the gitlink
+and metadata for review; neither commits.
+"""
 import argparse
 import hashlib
-import io
 import json
-from pathlib import Path
+import os
+from pathlib import Path, PurePosixPath
+import re
 import subprocess
-import tarfile
 
-parser = argparse.ArgumentParser()
-parser.add_argument('sdk_repo', type=Path)
-parser.add_argument('revision')
-parser.add_argument('--check', action='store_true')
-args = parser.parse_args()
+SUBMODULE = 'repos/AllowIt-hq--allowit-sdk'
+CRATE = 'native-rust'
+URL = 'https://github.com/AllowIt-hq/allowit-sdk.git'
+REPOSITORY = URL[:-len('.git')]
+DEPENDENCY = f'allowit-native = {{ path = "{SUBMODULE}/{CRATE}" }}'
+METADATA = 'vendor/native-sdk.json'
+LICENSES = ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/Aeneas-Apache-2.0.txt')
+REQUIRED = {'Cargo.toml', 'Cargo.lock', 'src/lib.rs', 'src/release.json'}
+COPIES = ('vendor/allowit-native', 'vendor/native-sdk-licenses')
+# Inputs Cargo discovers in each directory above a crate: workspace manifest, lockfile, config.
+DISCOVERY = ('Cargo.toml', 'Cargo.lock', '.cargo')
+# CLI-owned directories between the CLI root and the SDK root, e.g. repos.
+INTERMEDIATE = tuple(path.as_posix() for path in reversed(PurePosixPath(SUBMODULE).parents) if path.parts)
 
-def canonical_text(data):
-    # Every accepted snapshot file is text. Git's autocrlf setting must not make
-    # the source manifest or Linux verification depend on the sync host.
-    return data.replace(b'\r\n', b'\n')
 
-revision = subprocess.check_output(['git', '-C', str(args.sdk_repo), 'rev-parse', args.revision + '^{commit}'], text=True).strip()
-if args.revision != revision:
-    parser.error('revision must be a full exact commit SHA')
-archive = subprocess.check_output(['git', '-C', str(args.sdk_repo), 'archive', revision, 'native-rust'])
-files = {}
-with tarfile.open(fileobj=io.BytesIO(archive)) as source:
-    for entry in source:
-        if entry.isdir() or entry.type == tarfile.XGLTYPE:
+def environment():
+    """Inherited GIT_* variables (GIT_DIR, GIT_INDEX_FILE, ...) could redirect Git
+    to another repository, index or object store; replace refs could swap objects."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    env['GIT_NO_REPLACE_OBJECTS'] = '1'
+    return env
+
+
+def command(repo, *args, **options):
+    return subprocess.run(['git', '-C', str(repo), *args], env=environment(), **options)
+
+
+def git(repo, *args):
+    return command(repo, *args, stdout=subprocess.PIPE, check=True, text=True).stdout
+
+
+def listed(repo, *paths):
+    return [name for name in git(repo, 'ls-files', '-z', '--', *paths).split('\0') if name]
+
+
+def pinned(repo, commit, *paths):
+    """Bytes of the regular-file blobs under PATHS in COMMIT's tree.
+
+    Read from Git's object store, not the index or checkout, which
+    assume-unchanged, skip-worktree or filters can make disagree with the commit.
+    """
+    blobs = {}
+    for entry in filter(None, git(repo, 'ls-tree', '-r', '-z', '--full-tree', commit, '--', *paths).split('\0')):
+        info, name = entry.split('\t', 1)
+        mode, kind, obj = info.split()
+        if not any(name == path or name.startswith(path + '/') for path in paths):
             continue
-        parts = Path(entry.name).parts
-        if not entry.isfile() or not parts or parts[0] != 'native-rust' or '..' in parts:
-            raise SystemExit('unsafe SDK archive entry')
-        name = Path(*parts[1:]).as_posix()
-        if not (name in {'Cargo.toml', 'Cargo.lock', 'LICENSE', 'LICENSE.md'} or name.startswith(('src/', 'tests/'))):
-            raise SystemExit('unexpected SDK crate file: ' + name)
-        if name.startswith('tests/') and Path(name).suffix not in {'.rs', '.json'}:
-            continue  # Reference-authoring JS is SDK tooling, not a Rust dependency.
-        files[name] = canonical_text(source.extractfile(entry).read())
-if 'Cargo.toml' not in files or 'src/lib.rs' not in files:
-    raise SystemExit('native Rust SDK source missing')
-root = Path(__file__).resolve().parents[1]
-vendored = root / 'vendor' / 'allowit-native'
-legal = {}
-for name in ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/Aeneas-Apache-2.0.txt']:
-    present = subprocess.run(['git', '-C', str(args.sdk_repo), 'cat-file', '-e', revision + ':' + name], capture_output=True)
-    if present.returncode == 0:
-        legal[name] = canonical_text(subprocess.check_output(['git', '-C', str(args.sdk_repo), 'show', revision + ':' + name]))
-manifest = {'repository': 'https://github.com/AllowIt-hq/allowit-sdk', 'commit': revision, 'crate': 'native-rust', 'files': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(files.items())}}
-if legal:
-    manifest['licenses'] = {name: hashlib.sha256(data).hexdigest() for name, data in sorted(legal.items())}
-manifest_text = json.dumps(manifest, indent=2) + '\n'
-if args.check:
-    # Existing pins retain their original repository identity after a transfer.
-    captured = (root / 'vendor' / 'native-sdk.json').read_text()
-    historical = manifest_text.replace('https://github.com/AllowIt-hq/allowit-sdk', 'https://github.com/ackrate/AllowIt-sdk')
-    if captured not in {manifest_text, historical}:
-        raise SystemExit('SDK source manifest differs')
-    actual = {p.relative_to(vendored).as_posix(): canonical_text(p.read_bytes()) for p in vendored.rglob('*') if p.is_file()}
-    if actual != files:
-        raise SystemExit('vendored SDK source differs from pinned commit')
-    actual_legal = {p.relative_to(root / 'vendor/native-sdk-licenses').as_posix(): canonical_text(p.read_bytes()) for p in (root / 'vendor/native-sdk-licenses').rglob('*') if p.is_file()}
-    if actual_legal != legal:
-        raise SystemExit('vendored SDK license material differs from pinned commit')
-else:
-    # Remove only tracked-snapshot files from the old manifest, never walk-delete
-    # a working directory, build output or a developer's unrelated files.
-    old_manifest = root / 'vendor' / 'native-sdk.json'
-    old = json.loads(old_manifest.read_text())['files'] if old_manifest.exists() else {}
-    old_legal = json.loads(old_manifest.read_text()).get('licenses', {}) if old_manifest.exists() else {}
-    for name in set(old_legal) - set(legal):
-        if name not in {'LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/Aeneas-Apache-2.0.txt'}:
-            raise SystemExit('unsafe old SDK license name')
-        (root / 'vendor/native-sdk-licenses' / name).unlink(missing_ok=True)
-    for name in set(old) - set(files):
-        path = vendored / name
-        if '..' in Path(name).parts or Path(name).is_absolute():
-            raise SystemExit('unsafe old SDK manifest')
-        path.unlink(missing_ok=True)
-    for name, data in files.items():
-        path = vendored / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
-    old_manifest.parent.mkdir(parents=True, exist_ok=True)
-    for name, data in legal.items():
-        path = root / 'vendor/native-sdk-licenses' / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
-    old_manifest.write_text(manifest_text)
-print('Verified native Rust SDK snapshot ' + revision if args.check else 'Pinned native Rust SDK snapshot ' + revision)
+        if kind != 'blob' or mode not in ('100644', '100755'):
+            raise ValueError('SDK source must contain only regular files')
+        blobs[name] = command(repo, 'cat-file', 'blob', obj, stdout=subprocess.PIPE, check=True).stdout
+    return blobs
+
+
+def crate_blobs(sdk, commit):
+    return {name[len(CRATE) + 1:]: data for name, data in pinned(sdk, commit, CRATE).items()}
+
+
+def digest(data):
+    """Hash canonical text: a clean core.autocrlf checkout's CRLF counts as LF.
+
+    Every other byte is hashed, so content changed by an edit or a local Git
+    filter still differs from the pin. Like Git, a NUL in the first 8000 bytes
+    marks a binary file, which is hashed raw.
+    """
+    if b'\0' not in data[:8000]:
+        data = data.replace(b'\r\n', b'\n')
+    return hashlib.sha256(data).hexdigest()
+
+
+def sha256(path):
+    return digest(path.read_bytes())
+
+
+def unchanged(directory, blobs, owner='SDK', against='its pinned commit'):
+    """Refuse checkout bytes that differ from the commit's blobs, even when Git status hides it."""
+    for name, data in blobs.items():
+        path = directory / name
+        if path.is_symlink() or not path.is_file() or sha256(path) != digest(data):
+            raise ValueError(f'{owner} checkout differs from {against}: {name}')
+
+
+def consumed(name):
+    """Whether Cargo builds or tests the CLI dependency from this crate file."""
+    if name in {'Cargo.toml', 'Cargo.lock', 'LICENSE', 'LICENSE.md'} or name.startswith('src/'):
+        return True
+    if name.startswith('tests/'):
+        # Reference-authoring JS is SDK tooling, not a Rust dependency input.
+        return PurePosixPath(name).suffix in {'.rs', '.json'}
+    raise ValueError('Unexpected SDK crate file: ' + name)
+
+
+def inventory(crate):
+    """Every file Cargo could see, including untracked and ignored files."""
+    names = set()
+    for directory, subdirs, files in os.walk(crate):
+        for name in subdirs + files:
+            path = Path(directory, name)
+            if path.is_symlink() or not (path.is_dir() or path.is_file()):
+                raise ValueError('SDK source must contain only regular files')
+        names.update(Path(directory, name).relative_to(crate).as_posix() for name in files)
+    return names
+
+
+def discovery(repo, commit, paths=DISCOVERY, owner='SDK', against='its pinned commit'):
+    """Bind REPO's Cargo discovery inputs at PATHS to COMMIT's tree and blobs.
+
+    Cargo reads them whether they are ignored, untracked or hidden by
+    skip-worktree/assume-unchanged, so the checkout's files and the index's
+    tracked files must both equal the pinned set, byte for byte. A path named
+    `.cargo` is a config directory; the others are files.
+    """
+    blobs = pinned(repo, commit, *paths)
+    present = set()
+    for name in paths:
+        path = repo / name
+        if not os.path.lexists(path):
+            continue
+        config = PurePosixPath(name).name == '.cargo'
+        if path.is_symlink() or not (path.is_dir() if config else path.is_file()):
+            raise ValueError(f'{owner} Cargo discovery input must be a regular file or directory: {name}')
+        if config:
+            present.update(f'{name}/{file}' for file in inventory(path))
+        else:
+            present.add(name)
+    if present != set(blobs) or set(listed(repo, *paths)) != set(blobs):
+        raise ValueError(f'{owner} Cargo discovery file set differs from {against}')
+    unchanged(repo, blobs, owner, against)
+
+
+def parent(root, *directories):
+    """Bind the CLI's Cargo discovery inputs in DIRECTORIES ('' is the root) to its HEAD.
+
+    Each directory must be a real directory under ROOT, so no input resolves
+    outside the CLI checkout.
+    """
+    for directory in filter(None, directories):
+        path = root / directory
+        if path.is_symlink() or not path.is_dir():
+            raise ValueError('CLI Cargo discovery directory must be a real directory: ' + directory)
+    paths = [str(PurePosixPath(directory, name)) for directory in directories for name in DISCOVERY]
+    discovery(root, 'HEAD', paths, 'CLI', 'its committed HEAD')
+
+
+def checkout(root):
+    """Return the initialized submodule worktree, never the parent repository."""
+    sdk = root / SUBMODULE
+    top = command(sdk, 'rev-parse', '--show-toplevel', capture_output=True, text=True) if sdk.is_dir() else None
+    if not top or top.returncode or Path(top.stdout.strip()).resolve() != sdk.resolve():
+        raise ValueError('SDK submodule is not initialized; run git submodule update --init --recursive')
+    if git(sdk, 'status', '--porcelain', '--untracked-files=all', '--ignored'):
+        raise ValueError('SDK submodule must be clean')
+    return sdk
+
+
+def verify(root):
+    """Check the parent pin, clean submodule source, license bytes and the Cargo
+    discovery inputs from the SDK root up to, not including, the CLI root; return the metadata."""
+    root = Path(root).resolve()
+    sdk = json.loads((root / METADATA).read_text())
+    commit = sdk.get('commit')
+    if not isinstance(commit, str) or not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise ValueError('SDK pin must be a full commit')
+    if sdk.get('repository') != REPOSITORY or sdk.get('crate') != CRATE or sdk.get('submodule') != {'path': SUBMODULE, 'url': URL}:
+        raise ValueError('SDK metadata must name the canonical submodule')
+    module = command(root, 'config', '--file', '.gitmodules', '--get-regexp', r'^submodule\.', capture_output=True, text=True).stdout.split('\n')
+    if sorted(filter(None, module)) != [f'submodule.{SUBMODULE}.path {SUBMODULE}', f'submodule.{SUBMODULE}.url {URL}']:
+        raise ValueError('.gitmodules must name only the canonical SDK submodule')
+    if DEPENDENCY not in (root / 'Cargo.toml').read_text().splitlines():
+        raise ValueError('Cargo must build the SDK from its submodule')
+    if listed(root, *COPIES):
+        raise ValueError('Tracked SDK source copies must be removed')
+    if git(root, 'ls-files', '--stage', '-z', '--', SUBMODULE).split('\0') != [f'160000 {commit} 0\t{SUBMODULE}', '']:
+        raise ValueError('Parent Git index must pin the SDK submodule at its recorded commit')
+    sdk_root = checkout(root)
+    if git(sdk_root, 'rev-parse', 'HEAD').strip() != commit:
+        raise ValueError('SDK submodule HEAD differs from its pin')
+
+    files, unconsumed = sdk.get('files'), sdk.get('unconsumed', [])
+    if not isinstance(files, dict) or not isinstance(unconsumed, list) or not REQUIRED.issubset(files):
+        raise ValueError('SDK source file set differs from its pin')
+    for name in [*files, *unconsumed]:
+        relative = PurePosixPath(name) if isinstance(name, str) else None
+        if not relative or relative.is_absolute() or '..' in relative.parts or consumed(name) != (name in files):
+            raise ValueError('Invalid SDK source path')
+    # Metadata and checkout are each bound to the pinned commit's tree and blobs.
+    expected = set(files) | set(unconsumed)
+    crate = sdk_root / CRATE
+    source = crate_blobs(sdk_root, commit)
+    tracked = {name[len(CRATE) + 1:] for name in listed(sdk_root, CRATE)}
+    if len(expected) != len(files) + len(unconsumed) or set(source) != expected or tracked != expected or inventory(crate) != expected:
+        raise ValueError('SDK source file set differs from its pin')
+    for name, value in files.items():
+        if digest(source[name]) != value:
+            raise ValueError('SDK source differs from its pin: ' + name)
+    unchanged(crate, source)
+    discovery(sdk_root, commit)
+    # The CLI root's own Cargo inputs are first-party development files; only
+    # binary provenance binds them. Directories in between are bound here.
+    parent(root, *INTERMEDIATE)
+
+    licenses = sdk.get('licenses')
+    if not isinstance(licenses, dict) or 'LICENSE' not in licenses:
+        raise ValueError('Pinned SDK license is missing')
+    if any(name not in LICENSES for name in licenses):
+        raise ValueError('SDK license path is invalid')
+    legal = pinned(sdk_root, commit, *LICENSES)
+    if set(licenses) != set(legal) or set(licenses) != set(listed(sdk_root, *LICENSES)):
+        raise ValueError('SDK license set differs from its pin')
+    for name, value in licenses.items():
+        if digest(legal[name]) != value:
+            raise ValueError('SDK license notice is missing or changed')
+    unchanged(sdk_root, legal)
+    return sdk
+
+
+def describe(root):
+    """Metadata for the checked-out submodule commit, hashed from its Git blobs.
+
+    The checkout Cargo reads must hold those same bytes, so a change hidden from
+    git status (assume-unchanged, skip-worktree) is never recorded under the
+    commit's clean gitlink.
+    """
+    sdk = checkout(root)
+    commit = git(sdk, 'rev-parse', 'HEAD').strip()
+    crate = sdk / CRATE
+    source = crate_blobs(sdk, commit)
+    tracked = sorted(source)
+    if set(tracked) != inventory(crate) or set(tracked) != {name[len(CRATE) + 1:] for name in listed(sdk, CRATE)}:
+        raise ValueError('SDK source file set differs from its commit')
+    if not REQUIRED.issubset(tracked):
+        raise ValueError('Native Rust SDK source missing')
+    legal = pinned(sdk, commit, *LICENSES)
+    if set(legal) != set(listed(sdk, *LICENSES)):
+        raise ValueError('SDK license set differs from its commit')
+    unchanged(crate, source)
+    unchanged(sdk, legal)
+    discovery(sdk, commit)
+    parent(root, *INTERMEDIATE)
+    return {
+        'repository': REPOSITORY,
+        'commit': commit,
+        'crate': CRATE,
+        'submodule': {'path': SUBMODULE, 'url': URL},
+        'files': {name: digest(source[name]) for name in tracked if consumed(name)},
+        'unconsumed': [name for name in tracked if not consumed(name)],
+        'licenses': {name: digest(legal[name]) for name in LICENSES if name in legal},
+    }
+
+
+def pin(root):
+    (root / METADATA).write_text(json.dumps(describe(root), indent=2) + '\n')
+    git(root, 'add', '--', SUBMODULE, METADATA)
+    return verify(root)
+
+
+def update(root, revision):
+    if not re.fullmatch(r'[0-9a-f]{40}', revision):
+        raise ValueError('Revision must be a full exact commit SHA')
+    sdk = checkout(root)
+    present = command(sdk, 'cat-file', '-e', revision + '^{commit}', capture_output=True)
+    if present.returncode:
+        git(sdk, 'fetch', '--quiet', 'origin', revision)
+    git(sdk, 'checkout', '--quiet', '--detach', revision)
+    return pin(root)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest='command', required=True)
+    commands.add_parser('verify', help='check the pinned, clean SDK submodule (default for builds)')
+    commands.add_parser('pin', help='record and stage the checked-out SDK submodule commit')
+    commands.add_parser('update', help='check out, record and stage an exact SDK commit').add_argument('revision')
+    args = parser.parse_args()
+    root = Path(__file__).resolve().parents[1]
+    try:
+        sdk = update(root, args.revision) if args.command == 'update' else pin(root) if args.command == 'pin' else verify(root)
+    except ValueError as error:
+        parser.exit(1, f'{error}\n')
+    verb = 'Verified' if args.command == 'verify' else 'Staged'
+    print(f'{verb} native Rust SDK submodule {SUBMODULE} at {sdk["commit"]}')
+
+
+if __name__ == '__main__':
+    main()
