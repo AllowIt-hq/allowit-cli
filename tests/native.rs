@@ -5,6 +5,48 @@ use std::{
     path::Path,
     process::{Command, Output},
 };
+#[cfg(not(unix))]
+#[test]
+fn unsupported_platform_refuses_before_creating_policy_state() {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root =
+        std::env::temp_dir().join(format!("allowit-platform-{}-{unique}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let directory = root.join("policy");
+    let key = root.join("invalid-signer.json");
+    std::fs::write(&key, "{\"sentinel\":\"must not be parsed as a signer\"}").unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let rpc = format!("http://{}", listener.local_addr().unwrap());
+    assert!(!directory.exists());
+    for args in [
+        vec!["policy", "generate", "Spend up to 5 test tokens per day"],
+        vec!["policy", "deploy", "1"],
+        vec!["policy", "execute", "11111111111111111111111111111111", "1"],
+    ] {
+        let output = run_with(
+            &directory,
+            &args,
+            &[
+                ("ALLOWIT_OWNER_KEYPAIR", key.to_str().unwrap()),
+                ("ALLOWIT_EXECUTOR_KEYPAIR", key.to_str().unwrap()),
+                ("ALLOWIT_RPC_URL", &rpc),
+            ],
+        );
+        assert_eq!(output.status.code(), Some(3));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("local POSIX filesystem"));
+        assert!(!directory.exists());
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+    std::fs::remove_file(key).unwrap();
+    std::fs::remove_dir(root).unwrap();
+}
 fn run(directory: &Path, args: &[&str]) -> Output {
     run_with(directory, args, &[])
 }

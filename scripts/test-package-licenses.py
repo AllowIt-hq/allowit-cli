@@ -45,6 +45,20 @@ class LicenseMaterial(unittest.TestCase):
     def test_complete_current_and_historical_coverage(self):
         MODULE.validate(self.root)
 
+    def test_policy_sdk_dependencies_have_authentic_notices(self):
+        index = {(r['name'], r['version']): r for r in json.loads((self.root / 'THIRD_PARTY_LICENSES/registry-index.json').read_text())}
+        lock = {(p['name'], p['version']) for p in MODULE.lock_packages((self.root / 'Cargo.lock').read_text()) if p.get('source', '').startswith('registry+')}
+        # Root policy crate dependencies, including its Solana-target-only hasher chain.
+        for identity in [('unicode-normalization', '0.1.25'), ('unicode-script', '0.5.8'), ('solana-sha256-hasher', '2.3.0'), ('five8', '0.2.1')]:
+            self.assertIn(identity, lock)
+            self.assertEqual(index[identity]['status'], 'covered')
+        for record in index.values():
+            if 'licenseSource' in record and 'raw.githubusercontent.com' in record['licenseSource']:
+                # Archives without license files cite upstream LICENSE at the crate's VCS commit.
+                commit = record['licenseSource'].split('/')[-2]
+                self.assertRegex(commit, r'^[0-9a-f]{40}$')
+                self.assertIn(commit, record['noticeBasis'][0])
+
     def test_new_dependency_requires_its_own_notice(self):
         lock = self.root / 'Cargo.lock'
         lock.write_text(lock.read_text() + '\n[[package]]\nname="unknown-example"\nversion="1.0.0"\nsource="registry+https://github.com/rust-lang/crates.io-index"\nchecksum="' + '0' * 64 + '"\n')
