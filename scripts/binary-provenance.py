@@ -35,6 +35,8 @@ def manifest(repo, binary, target):
     # verify leaves the CLI root's Cargo inputs to development; a recorded build
     # must use the committed ones, including ignored or index-hidden changes.
     native_sdk.parent(repo, "")
+    # Cargo configuration outside the bound files could still redirect a path dependency.
+    native_sdk.resolved(repo)
     asset, magic, cpu = TARGETS[target]
     raw = binary.read_bytes()
     if raw[:4] != magic:

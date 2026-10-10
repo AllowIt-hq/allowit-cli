@@ -42,6 +42,9 @@ class ProvenanceTests(unittest.TestCase):
     def setUp(self):
         environment = patch.dict(os.environ, {"GITHUB_RUN_ID": "", "GITHUB_RUN_ATTEMPT": ""})
         environment.start(); self.addCleanup(environment.stop)
+        # Fixtures hold no buildable CLI source; ResolvedTests covers Cargo resolution.
+        resolution = patch.object(provenance.native_sdk, "resolved", lambda root: None)
+        resolution.start(); self.addCleanup(resolution.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name) / "repo"
@@ -172,6 +175,89 @@ class ProvenanceTests(unittest.TestCase):
                 self.metadata(lambda value: value["licenses"].pop(name))
         self.metadata(lambda value: value["licenses"].pop("THIRD_PARTY_NOTICES.md"))
         with self.assertRaisesRegex(ValueError, "license set differs"):
+            self.manifest()
+
+    def test_records_policy_sdk_typed_workflow_and_interface_sources(self):
+        result = self.manifest()["sdk"]
+        commit = fixture.git(self.sdk, "rev-parse", "HEAD")
+        digest = provenance.native_sdk.digest
+        blob = lambda name: digest(provenance.native_sdk.pinned(self.sdk, commit, name)[name])
+        policy = result["policySdk"]
+        self.assertEqual({k: v for k, v in policy.items() if k != "files"}, {"path": ".", "package": "allowit-sdk", "defaultFeatures": False, "features": ["std", "typed-workflow"]})
+        self.assertEqual(policy["files"]["src/typed_workflow.rs"], blob("src/typed_workflow.rs"))
+        self.assertEqual(sorted(policy["files"]), sorted(fixture.git(self.sdk, "ls-files", "--", "Cargo.toml", "src").split("\n")))
+        self.assertEqual(result["payshInterface"]["src/lib.rs"], blob("crates/paysh-interface/src/lib.rs"))
+
+    def test_refuses_policy_sdk_change_committed_and_repinned(self):
+        typed = self.sdk / "src/typed_workflow.rs"
+        typed.write_text(typed.read_text() + "\n// drift\n")
+        fixture.commit(self.sdk, "typed drift")
+        fixture.repin(self.repo)
+        with self.assertRaisesRegex(ValueError, "SDK policy crate differs from its pin: src/typed_workflow.rs"):
+            self.manifest()
+
+    def test_refuses_hidden_policy_sdk_source_change(self):
+        name = "src/typed_workflow.rs"
+        fixture.hide(self.repo, name, (self.sdk / name).read_bytes() + b"// hidden\n")
+        for action in [self.manifest, lambda: provenance.native_sdk.describe(self.repo)]:
+            with self.assertRaisesRegex(ValueError, "checkout differs from its pinned commit: src/typed_workflow.rs"):
+                action()
+
+    def test_refuses_policy_sdk_build_script_and_extra_source(self):
+        for name in ["build.rs", "src/injected.rs"]:
+            with self.subTest(name=name):
+                fixture.exclude(self.repo, "/" + name)
+                (self.sdk / name).write_text("fn main() {}\n")
+                with self.assertRaisesRegex(ValueError, "submodule must be clean"):
+                    self.manifest()
+                with patch.object(provenance.native_sdk, "checkout", lambda root: root / fixture.SDK):
+                    with self.assertRaisesRegex(ValueError, "build script" if name == "build.rs" else "policy crate file set"):
+                        provenance.native_sdk.verify(self.repo)
+                (self.sdk / name).unlink()
+        self.manifest()
+
+    def test_refuses_policy_sdk_identity_or_dependency_drift(self):
+        for change in [lambda v: v["policySdk"].update(features=["std", "typed-workflow", "compiler"]), lambda v: v["policySdk"].update(features=["std"]), lambda v: v["policySdk"].update(defaultFeatures=True), lambda v: v.pop("policySdk")]:
+            with self.subTest():
+                original = (self.repo / "vendor/native-sdk.json").read_text()
+                self.metadata(change)
+                with self.assertRaisesRegex(ValueError, "policy crate identity"):
+                    self.manifest()
+                (self.repo / "vendor/native-sdk.json").write_text(original)
+                fixture.commit(self.repo, "restore")
+        manifest = self.repo / "Cargo.toml"
+        original = manifest.read_text()
+        for old, new in [('default-features = false', 'default-features = true'), ('features = ["std", "typed-workflow"]', 'features = ["std", "typed-workflow", "compiler"]'), ('features = ["std", "typed-workflow"]', 'features = ["std"]'), ('repos/AllowIt-hq--allowit-sdk", default', '../paysh-policy-sdk", default')]:
+            with self.subTest(new=new):
+                self.assertIn(old, original)
+                manifest.write_text(original.replace(old, new, 1))
+                with self.assertRaisesRegex(ValueError, "Cargo must build the SDK from its submodule"):
+                    provenance.native_sdk.verify(self.repo)
+        for extra in ['\n[features]\nfull = ["allowit-policy-sdk/compiler"]\n', '\n[dev-dependencies]\nsdk-compiler = { package = "allowit-sdk", path = "repos/AllowIt-hq--allowit-sdk", features = ["compiler"] }\n']:
+            with self.subTest(extra=extra):
+                manifest.write_text(original + extra)
+                with self.assertRaisesRegex(ValueError, "Cargo must build the SDK from its submodule"):
+                    provenance.native_sdk.verify(self.repo)
+        manifest.write_text(original)
+        provenance.native_sdk.verify(self.repo)
+
+    def test_refuses_paysh_interface_change_or_extra_file(self):
+        lib = self.sdk / "crates/paysh-interface/src/lib.rs"
+        fixture.hide(self.repo, "crates/paysh-interface/src/lib.rs", lib.read_bytes() + b"// hidden\n")
+        with self.assertRaisesRegex(ValueError, "checkout differs from its pinned commit: src/lib.rs"):
+            self.manifest()
+        fixture.git(self.sdk, "update-index", "--no-skip-worktree", "--", "crates/paysh-interface/src/lib.rs")
+        fixture.git(self.sdk, "checkout", "-q", "--", "crates/paysh-interface/src/lib.rs")
+        fixture.exclude(self.repo, "/crates/paysh-interface/build.rs")
+        (self.sdk / "crates/paysh-interface/build.rs").write_text("fn main() {}\n")
+        with patch.object(provenance.native_sdk, "checkout", lambda root: root / fixture.SDK):
+            with self.assertRaisesRegex(ValueError, "PaySH interface file set"):
+                provenance.native_sdk.verify(self.repo)
+        (self.sdk / "crates/paysh-interface/build.rs").unlink()
+        lib.write_text(lib.read_text() + "\n// drift\n")
+        fixture.commit(self.sdk, "interface drift")
+        fixture.repin(self.repo)
+        with self.assertRaisesRegex(ValueError, "SDK PaySH interface differs from its pin: src/lib.rs"):
             self.manifest()
 
     def test_refuses_wrong_binary_architecture(self):
@@ -516,6 +602,56 @@ class ProvenanceTests(unittest.TestCase):
             with patch.dict(os.environ, {"GITHUB_SHA": "0" * 40}):
                 with self.assertRaisesRegex(ValueError, "revision differs"):
                     self.manifest()
+
+
+class ResolvedTests(unittest.TestCase):
+    """Cargo's actual resolution in the real checkout, not only the bound files."""
+
+    def test_real_checkout_resolves_pinned_submodule_crates(self):
+        provenance.native_sdk.resolved(fixture.ROOT)
+
+    def test_refuses_cargo_paths_override_from_config(self):
+        sdk = fixture.ROOT / fixture.SDK
+        with tempfile.TemporaryDirectory() as tmp:
+            # Same names and versions outside the submodule, as an untrusted parent config could name.
+            for name in ["native-rust", "crates/paysh-interface"]:
+                shutil.copytree(sdk / name, Path(tmp) / name, ignore=shutil.ignore_patterns("target"))
+            for crate, package in [("native-rust", "allowit-native"), ("crates/paysh-interface", "allowit-paysh-interface")]:
+                with self.subTest(package=package):
+                    with self.assertRaisesRegex(ValueError, "does not build " + package):
+                        provenance.native_sdk.resolved(fixture.ROOT, f'paths=["{Path(tmp) / crate}"]')
+
+    def mutated(self, change):
+        real = provenance.native_sdk.subprocess.run
+        def run(args, **options):
+            result = real(args, **options)
+            if args[:2] == ["cargo", "metadata"]:
+                value = json.loads(result.stdout); change(value)
+                result.stdout = json.dumps(value).encode()
+            return result
+        return patch.object(provenance.native_sdk.subprocess, "run", run)
+
+    def test_refuses_unpinned_features_build_scripts_and_links(self):
+        def feature(value):
+            for node in value["resolve"]["nodes"]:
+                if "#allowit-sdk@" in node["id"]:
+                    node["features"].append("compiler")
+        def missing(value):
+            for node in value["resolve"]["nodes"]:
+                if "#allowit-sdk@" in node["id"]:
+                    node["features"].remove("typed-workflow")
+        def build(value):
+            package = next(p for p in value["packages"] if p["name"] == "allowit-native")
+            package["targets"].append({"kind": ["custom-build"], "src_path": "/tmp/build.rs"})
+        def links(value):
+            next(p for p in value["packages"] if p["name"] == "allowit-sdk")["links"] = "injected"
+        def library(value):
+            package = next(p for p in value["packages"] if p["name"] == "allowit-sdk")
+            next(t for t in package["targets"] if "rlib" in t["kind"])["src_path"] = "/tmp/lib.rs"
+        for change, message in [(feature, "unpinned features of allowit-sdk"), (missing, "unpinned features of allowit-sdk"), (build, "does not build allowit-native"), (links, "does not build allowit-sdk"), (library, "does not build allowit-sdk")]:
+            with self.subTest(change=change.__name__), self.mutated(change):
+                with self.assertRaisesRegex(ValueError, message):
+                    provenance.native_sdk.resolved(fixture.ROOT)
 
 
 if __name__ == "__main__":

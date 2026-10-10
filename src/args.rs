@@ -62,6 +62,7 @@ pub(crate) fn parse(command: &str, args: &[String]) -> Result<Args> {
                 "after",
                 "request-id",
                 "budget",
+                "request-file",
             ]
             .contains(&name);
         let duration = name == "wait" && command != "show";

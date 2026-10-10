@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Pin, update and verify the native Rust SDK Git submodule; no credentials.
+"""Pin, update and verify the canonical SDK Git submodule; no credentials.
+
+One gitlink supplies three Cargo path dependencies: the native Rust crate, its
+PaySH interface crate and the root policy SDK crate with canonical typed
+workflow types.
 
 Builds, provenance and license packaging share `verify`. `update` checks out an
 exact SDK commit; `pin` records the checked-out commit. Both stage the gitlink
@@ -18,10 +22,17 @@ CRATE = 'native-rust'
 URL = 'https://github.com/AllowIt-hq/allowit-sdk.git'
 REPOSITORY = URL[:-len('.git')]
 DEPENDENCY = f'allowit-native = {{ path = "{SUBMODULE}/{CRATE}" }}'
+# Root policy crate: no compiler, oracle ledger or binary; only `std` and the
+# host `typed-workflow` evaluator (which the compiler would otherwise imply).
+POLICY_PACKAGE = 'allowit-sdk'
+POLICY_FEATURES = ['std', 'typed-workflow']
+POLICY_DEPENDENCY = (f'allowit-policy-sdk = {{ package = "{POLICY_PACKAGE}", path = "{SUBMODULE}", '
+                     f'default-features = false, features = {json.dumps(POLICY_FEATURES)} }}')
+INTERFACE = 'crates/paysh-interface'
 METADATA = 'vendor/native-sdk.json'
 LICENSES = ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/Aeneas-Apache-2.0.txt')
 REQUIRED = {'Cargo.toml', 'Cargo.lock', 'src/lib.rs', 'src/release.json'}
-COPIES = ('vendor/allowit-native', 'vendor/native-sdk-licenses')
+COPIES = ('vendor/allowit-native', 'vendor/crates', 'vendor/native-sdk-licenses')
 # Inputs Cargo discovers in each directory above a crate: workspace manifest, lockfile, config.
 DISCOVERY = ('Cargo.toml', 'Cargo.lock', '.cargo')
 # CLI-owned directories between the CLI root and the SDK root, e.g. repos.
@@ -66,8 +77,8 @@ def pinned(repo, commit, *paths):
     return blobs
 
 
-def crate_blobs(sdk, commit):
-    return {name[len(CRATE) + 1:]: data for name, data in pinned(sdk, commit, CRATE).items()}
+def crate_blobs(sdk, commit, crate=CRATE):
+    return {name[len(crate) + 1:]: data for name, data in pinned(sdk, commit, crate).items()}
 
 
 def digest(data):
@@ -102,6 +113,51 @@ def consumed(name):
         # Reference-authoring JS is SDK tooling, not a Rust dependency input.
         return PurePosixPath(name).suffix in {'.rs', '.json'}
     raise ValueError('Unexpected SDK crate file: ' + name)
+
+
+def interface_consumed(name):
+    """The PaySH interface crate has no tooling; every file is a build or lock input."""
+    if name in {'Cargo.toml', 'Cargo.lock'} or name.startswith('src/'):
+        return True
+    raise ValueError('Unexpected SDK PaySH interface file: ' + name)
+
+
+def policy_sources(sdk, commit):
+    """Root policy crate inputs: its manifest and `src/`, bound to COMMIT's blobs.
+
+    The root also holds other packages and documentation that Cargo does not
+    build for this library. A root build script would run, so none may exist.
+    """
+    if pinned(sdk, commit, 'build.rs') or os.path.lexists(sdk / 'build.rs'):
+        raise ValueError('SDK policy crate must not have a build script')
+    blobs = pinned(sdk, commit, 'Cargo.toml', 'src')
+    present = {'src/' + name for name in inventory(sdk / 'src')} if (sdk / 'src').is_dir() and not (sdk / 'src').is_symlink() else set()
+    if (sdk / 'Cargo.toml').is_file() and not (sdk / 'Cargo.toml').is_symlink():
+        present.add('Cargo.toml')
+    if not {'Cargo.toml', 'src/lib.rs', 'src/typed_workflow.rs'}.issubset(blobs) or present != set(blobs) or set(listed(sdk, 'Cargo.toml', 'src')) != set(blobs):
+        raise ValueError('SDK policy crate file set differs from its pinned commit')
+    unchanged(sdk, blobs)
+    return blobs
+
+
+def interface_sources(sdk, commit):
+    blobs = crate_blobs(sdk, commit, INTERFACE)
+    tracked = {name[len(INTERFACE) + 1:] for name in listed(sdk, INTERFACE)}
+    if not {'Cargo.toml', 'src/lib.rs'}.issubset(blobs) or set(blobs) != tracked or inventory(sdk / INTERFACE) != tracked:
+        raise ValueError('SDK PaySH interface file set differs from its pinned commit')
+    for name in blobs:
+        interface_consumed(name)
+    unchanged(sdk / INTERFACE, blobs)
+    return blobs
+
+
+def recorded(value, sources, label):
+    """Compare a metadata {file: digest} map with the commit's blobs."""
+    if not isinstance(value, dict) or set(value) != set(sources):
+        raise ValueError(f'SDK {label} file set differs from its pin')
+    for name, expected in value.items():
+        if digest(sources[name]) != expected:
+            raise ValueError(f'SDK {label} differs from its pin: {name}')
 
 
 def inventory(crate):
@@ -180,7 +236,11 @@ def verify(root):
     module = command(root, 'config', '--file', '.gitmodules', '--get-regexp', r'^submodule\.', capture_output=True, text=True).stdout.split('\n')
     if sorted(filter(None, module)) != [f'submodule.{SUBMODULE}.path {SUBMODULE}', f'submodule.{SUBMODULE}.url {URL}']:
         raise ValueError('.gitmodules must name only the canonical SDK submodule')
-    if DEPENDENCY not in (root / 'Cargo.toml').read_text().splitlines():
+    # Exactly the two dependency lines may name the SDK, so no other line can add
+    # a feature (for example `allowit-policy-sdk/compiler`) through unification.
+    mentions = [line for line in (root / 'Cargo.toml').read_text().splitlines()
+                if any(name in line for name in (SUBMODULE, 'allowit-native', 'allowit-policy-sdk', POLICY_PACKAGE))]
+    if sorted(mentions) != sorted([DEPENDENCY, POLICY_DEPENDENCY]):
         raise ValueError('Cargo must build the SDK from its submodule')
     if listed(root, *COPIES):
         raise ValueError('Tracked SDK source copies must be removed')
@@ -208,6 +268,14 @@ def verify(root):
         if digest(source[name]) != value:
             raise ValueError('SDK source differs from its pin: ' + name)
     unchanged(crate, source)
+    interface = sdk.get('payshInterface')
+    if not isinstance(interface, dict) or any(not isinstance(name, str) or interface_consumed(name) is not True for name in interface):
+        raise ValueError('SDK PaySH interface file set differs from its pin')
+    recorded(interface, interface_sources(sdk_root, commit), 'PaySH interface')
+    policy = sdk.get('policySdk')
+    if not isinstance(policy, dict) or {key: value for key, value in policy.items() if key != 'files'} != policy_identity():
+        raise ValueError('SDK policy crate identity differs from the Cargo dependency')
+    recorded(policy.get('files'), policy_sources(sdk_root, commit), 'policy crate')
     discovery(sdk_root, commit)
     # The CLI root's own Cargo inputs are first-party development files; only
     # binary provenance binds them. Directories in between are bound here.
@@ -249,6 +317,8 @@ def describe(root):
         raise ValueError('SDK license set differs from its commit')
     unchanged(crate, source)
     unchanged(sdk, legal)
+    interface = interface_sources(sdk, commit)
+    policy = policy_sources(sdk, commit)
     discovery(sdk, commit)
     parent(root, *INTERMEDIATE)
     return {
@@ -258,8 +328,56 @@ def describe(root):
         'submodule': {'path': SUBMODULE, 'url': URL},
         'files': {name: digest(source[name]) for name in tracked if consumed(name)},
         'unconsumed': [name for name in tracked if not consumed(name)],
+        'payshInterface': {name: digest(interface[name]) for name in sorted(interface)},
+        'policySdk': {**policy_identity(), 'files': {name: digest(policy[name]) for name in sorted(policy)}},
         'licenses': {name: digest(legal[name]) for name in LICENSES if name in legal},
     }
+
+
+# Cargo package name -> (crate directory in the SDK, enabled features).
+RESOLVED = {
+    'allowit-native': (CRATE, []),
+    'allowit-paysh-interface': (INTERFACE, []),
+    POLICY_PACKAGE: ('', POLICY_FEATURES),
+}
+
+
+def resolved(root, *config):
+    """Check the dependency graph Cargo actually resolves in this environment.
+
+    Cargo configuration outside the checked files (`paths` overrides in a parent
+    directory's `.cargo/`, `CARGO_HOME`, `--config`) can replace a path
+    dependency without changing any bound byte. Cargo's own resolution must name
+    the submodule's manifests and library roots, no build script or `links`, and
+    exactly the pinned features. CONFIG passes extra `--config` values (tests).
+    """
+    root = Path(root).resolve()
+    args = ['cargo', 'metadata', '--locked', '--format-version', '1']
+    for value in config:
+        args += ['--config', value]
+    result = subprocess.run(args, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if result.returncode:
+        raise ValueError('Cargo could not resolve the locked dependency graph')
+    metadata = json.loads(result.stdout)
+    local = {p['name']: p for p in metadata['packages'] if p.get('source') is None}
+    if set(local) != {'allowit-cli', *RESOLVED}:
+        raise ValueError('Cargo resolves unexpected local packages')
+    features = {node['id']: sorted(node.get('features', [])) for node in metadata['resolve']['nodes']}
+    sdk = root / SUBMODULE
+    for name, (directory, enabled) in RESOLVED.items():
+        package = local[name]
+        crate = (sdk / directory).resolve()
+        libraries = [t for t in package['targets'] if {'lib', 'rlib'} & set(t['kind'])]
+        if (Path(package['manifest_path']).resolve() != crate / 'Cargo.toml'
+                or len(libraries) != 1 or Path(libraries[0]['src_path']).resolve() != crate / 'src/lib.rs'
+                or any('custom-build' in t['kind'] for t in package['targets']) or package.get('links') is not None):
+            raise ValueError(f'Cargo does not build {name} from the pinned SDK submodule')
+        if features.get(package['id']) != sorted(enabled):
+            raise ValueError(f'Cargo enables unpinned features of {name}')
+
+
+def policy_identity():
+    return {'path': '.', 'package': POLICY_PACKAGE, 'defaultFeatures': False, 'features': POLICY_FEATURES}
 
 
 def pin(root):
@@ -282,17 +400,18 @@ def update(root, revision):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest='command', required=True)
-    commands.add_parser('verify', help='check the pinned, clean SDK submodule (default for builds)')
+    commands.add_parser('verify', help="check the pinned, clean SDK submodule and Cargo's resolution of it (default for builds)")
     commands.add_parser('pin', help='record and stage the checked-out SDK submodule commit')
     commands.add_parser('update', help='check out, record and stage an exact SDK commit').add_argument('revision')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     try:
         sdk = update(root, args.revision) if args.command == 'update' else pin(root) if args.command == 'pin' else verify(root)
+        resolved(root)
     except ValueError as error:
         parser.exit(1, f'{error}\n')
     verb = 'Verified' if args.command == 'verify' else 'Staged'
-    print(f'{verb} native Rust SDK submodule {SUBMODULE} at {sdk["commit"]}')
+    print(f'{verb} canonical SDK submodule {SUBMODULE} at {sdk["commit"]}')
 
 
 if __name__ == '__main__':

@@ -1,0 +1,882 @@
+//! Process-level PaySH agent command checks against a loopback server: exact
+//! method, route and body, capability-only auth, single attempt, bounded I/O,
+//! secret redaction and exit codes.
+use serde_json::{Value, json};
+use std::{
+    io::{BufRead, BufReader, Read, Write},
+    net::TcpListener,
+    process::{Command, Output},
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
+
+const POLICY: &str = "abababababababababababababababababababababababababababababababab";
+const TOKEN: &str = "capability-0123456789abcdefghijklmnopqrstuvwxyz";
+const SERVICE: &str = "solana-foundation/google/airquality";
+const INPUT: &str = r#"{"location":{"latitude":43.6532,"longitude":-79.3832},"universalAqi":true}"#;
+
+#[derive(Debug)]
+struct Seen {
+    method: String,
+    path: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+impl Seen {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+    fn json(&self) -> Value {
+        serde_json::from_slice(&self.body).unwrap()
+    }
+}
+
+/// Serves `replies` in order, then keeps listening briefly so a retry would be seen.
+fn serve(replies: Vec<String>) -> (String, mpsc::Receiver<Vec<Seen>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut seen = vec![];
+        let mut idle = Instant::now();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline
+            && (seen.len() < replies.len() || idle.elapsed() < Duration::from_millis(600))
+        {
+            let Ok((conn, _)) = listener.accept() else {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+            conn.set_nonblocking(false).unwrap();
+            let mut reader = BufReader::new(conn.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let mut parts = line.split_whitespace();
+            let (method, path) = (
+                parts.next().unwrap().to_string(),
+                parts.next().unwrap().to_string(),
+            );
+            let mut headers = vec![];
+            loop {
+                let mut h = String::new();
+                reader.read_line(&mut h).unwrap();
+                let h = h.trim_end();
+                if h.is_empty() {
+                    break;
+                }
+                let (k, v) = h.split_once(':').unwrap();
+                headers.push((k.trim().to_string(), v.trim().to_string()));
+            }
+            let size = headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+                .map(|(_, v)| v.parse().unwrap())
+                .unwrap_or(0);
+            let mut body = vec![0; size];
+            reader.read_exact(&mut body).unwrap();
+            let reply = replies.get(seen.len()).cloned().unwrap_or_else(|| {
+                http(
+                    500,
+                    &json!({"error":"unexpected extra request"}).to_string(),
+                )
+            });
+            let mut conn = conn;
+            let _ = conn.write_all(reply.as_bytes());
+            seen.push(Seen {
+                method,
+                path,
+                headers,
+                body,
+            });
+            idle = Instant::now();
+        }
+        tx.send(seen).unwrap();
+    });
+    (url, rx)
+}
+fn http(status: u16, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+fn run(url: &str, args: &[&str], token: Option<&str>) -> Output {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_allowit"));
+    for (name, _) in std::env::vars() {
+        if name.starts_with("ALLOWIT_") {
+            c.env_remove(name);
+        }
+    }
+    c.env("ALLOWIT_URL", url);
+    if let Some(t) = token {
+        c.env("ALLOWIT_PAYSH_TOKEN", t);
+    }
+    c.args(args).output().unwrap()
+}
+fn text(o: &Output) -> (String, String) {
+    (
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+        String::from_utf8_lossy(&o.stderr).into_owned(),
+    )
+}
+fn op(status: &str) -> Value {
+    json!({"operationId":"op-1","status":status,"signatures":["sigA","sigB"],"receipts":[],"response":null})
+}
+
+#[test]
+fn call_posts_the_exact_request_with_only_the_capability() {
+    let delivered = json!({"operationId":"op-1","status":"delivered","signatures":["sigA","sigB"],"receipts":[
+        {"signature":"sigA","requestHash":"h","challengeHash":"c","invocationIndex":2,"finalizedSlot":7,"action":{"type":"swap","amountInLamports":1200,"minOutUsdc":1000}},
+        {"signature":"sigB","requestHash":"h","challengeHash":"c","invocationIndex":2,"finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}],
+        "response":{"indexes":[{"aqi":42}]}});
+    let (url, seen) = serve(vec![http(200, &delivered.to_string())]);
+    let out = run(
+        &url,
+        &["paysh", "call", POLICY, "op-1", SERVICE, INPUT],
+        Some(TOKEN),
+    );
+    let (stdout, stderr) = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{stdout}{stderr}");
+    let seen = seen.recv().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(
+        (seen[0].method.as_str(), seen[0].path.as_str()),
+        ("POST", "/api/paysh/call")
+    );
+    assert_eq!(
+        seen[0].header("authorization"),
+        Some(format!("Bearer {TOKEN}").as_str())
+    );
+    assert_eq!(seen[0].header("cookie"), None);
+    assert_eq!(seen[0].header("content-type"), Some("application/json"));
+    assert_eq!(
+        seen[0].json(),
+        json!({"policyId":POLICY,"operationId":"op-1","serviceId":SERVICE,"input":serde_json::from_str::<Value>(INPUT).unwrap()})
+    );
+    assert!(stdout.contains("state: delivered"));
+    assert!(stdout.contains("payment: finalized"));
+    assert!(stdout.contains(
+        "swap 1200 lamports in, at least 1000 test-token units out; slot 7; signature sigA"
+    ));
+    assert!(stdout.contains("pay 1000 test-token units; slot 9; signature sigB"));
+    assert!(stdout.contains("delivery: delivered"));
+    assert!(stdout.contains("\"aqi\": 42"));
+    assert!(stderr.contains("allowit paysh status"));
+}
+
+#[test]
+fn status_posts_policy_and_operation_and_reports_pending() {
+    let (url, seen) = serve(vec![http(200, &op("submitted").to_string())]);
+    let out = run(
+        &url,
+        &["paysh", "status", POLICY, "op-1", "--json"],
+        Some(TOKEN),
+    );
+    assert_eq!(out.status.code(), Some(12));
+    let seen = seen.recv().unwrap();
+    assert_eq!(
+        (seen[0].method.as_str(), seen[0].path.as_str()),
+        ("POST", "/api/paysh/status")
+    );
+    assert_eq!(
+        seen[0].json(),
+        json!({"policyId":POLICY,"operationId":"op-1"})
+    );
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        (v["state"].as_str(), v["exitCode"].as_i64()),
+        (Some("pending"), Some(12))
+    );
+}
+
+#[test]
+fn awaiting_owner_answer_reports_pending_and_sends_only_the_original_request() {
+    for command in ["call", "status"] {
+        let reply = json!({"operationId":"op-1","status":"awaiting_input","signatures":[],"receipts":[],"response":null});
+        let (url, seen) = serve(vec![http(200, &reply.to_string())]);
+        let args = if command == "call" {
+            vec!["paysh", "call", POLICY, "op-1", SERVICE, INPUT]
+        } else {
+            vec!["paysh", "status", POLICY, "op-1"]
+        };
+        let out = run(&url, &args, Some(TOKEN));
+        assert_eq!(out.status.code(), Some(12));
+        let (stdout, _) = text(&out);
+        assert!(stdout.contains("state: pending"));
+        assert!(stdout.contains("waiting for the owner's answer in AllowIt Requests"));
+        assert!(stdout.contains("never create a replacement operation"));
+        assert!(stdout.contains(&format!("allowit paysh status {POLICY} op-1")));
+        assert!(!stdout.contains("payment: finalized"));
+        let seen = seen.recv().unwrap();
+        assert_eq!(
+            seen.len(),
+            1,
+            "No automatic retry, poll, approval or replacement call"
+        );
+        assert_eq!(seen[0].path, format!("/api/paysh/{command}"));
+        assert_eq!(seen[0].json()["operationId"], "op-1");
+        if command == "call" {
+            assert_eq!(
+                seen[0].json()["input"],
+                serde_json::from_str::<Value>(INPUT).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn signed_yes_is_pending_until_explicit_same_operation_continuation_and_receipt() {
+    let approved = json!({"operationId":"op-1","status":"owner_approved","signatures":[],"receipts":[],"response":null});
+    let delivered = json!({"operationId":"op-1","status":"delivered","signatures":["paySig"],"receipts":[
+        {"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}],"response":{"aqi":42}});
+    let (url, seen) = serve(vec![
+        http(200, &approved.to_string()),
+        http(200, &delivered.to_string()),
+    ]);
+    let out = run(
+        &url,
+        &["paysh", "status", POLICY, "op-1", "--json"],
+        Some(TOKEN),
+    );
+    assert_eq!(out.status.code(), Some(12));
+    let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["state"], "pending");
+    assert_eq!(value["status"], "owner_approved");
+    assert_eq!(value["paymentFinalized"], false);
+    assert!(value["response"].is_null());
+    // A separate user command explicitly continues the original immutable call.
+    // The first CLI invocation must not have consumed the second response itself.
+    let out = run(
+        &url,
+        &["paysh", "call", POLICY, "op-1", SERVICE, INPUT, "--json"],
+        Some(TOKEN),
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["paymentFinalized"], true);
+    assert_eq!(value["operationId"], "op-1");
+    let seen = seen.recv().unwrap();
+    assert_eq!(
+        seen.len(),
+        2,
+        "Exactly the two explicit commands, never an automatic retry"
+    );
+    assert_eq!(seen[0].path, "/api/paysh/status");
+    assert_eq!(
+        seen[0].json(),
+        json!({"policyId":POLICY,"operationId":"op-1"})
+    );
+    assert_eq!(seen[1].path, "/api/paysh/call");
+    assert_eq!(
+        seen[1].json(),
+        json!({"policyId":POLICY,"operationId":"op-1","serviceId":SERVICE,"input":serde_json::from_str::<Value>(INPUT).unwrap()})
+    );
+    let (url, seen) = serve(vec![http(200, &approved.to_string())]);
+    let out = run(&url, &["paysh", "status", POLICY, "op-1"], Some(TOKEN));
+    assert_eq!(out.status.code(), Some(12));
+    let (stdout, _) = text(&out);
+    assert!(stdout.contains("owner approval does not establish payment"));
+    assert!(stdout.contains("signed Yes remains bounded to this original request"));
+    assert!(stdout.contains("identical call with the same OPERATION_ID and original input"));
+    assert_eq!(seen.recv().unwrap().len(), 1);
+}
+
+#[test]
+fn expired_original_request_is_terminal_without_retry_or_owner_denial() {
+    let reply = json!({"operationId":"op-1","status":"expired","signatures":[],"receipts":[],"response":null});
+    for command in ["call", "status"] {
+        let (url, seen) = serve(vec![http(200, &reply.to_string())]);
+        let args = if command == "call" {
+            vec!["paysh", "call", POLICY, "op-1", SERVICE, INPUT]
+        } else {
+            vec!["paysh", "status", POLICY, "op-1"]
+        };
+        let out = run(&url, &args, Some(TOKEN));
+        assert_eq!(out.status.code(), Some(20));
+        let (stdout, _) = text(&out);
+        assert!(stdout.contains("status: expired"));
+        assert!(stdout.contains("not delivered; the original request expired"));
+        assert!(stdout.contains("expiry is not an owner denial"));
+        assert!(!stdout.contains("state: pending"));
+        assert!(!stdout.contains("payment: finalized"));
+        let seen = seen.recv().unwrap();
+        assert_eq!(
+            seen.len(),
+            1,
+            "Expiry never retries or creates another operation"
+        );
+        assert_eq!(seen[0].path, format!("/api/paysh/{command}"));
+        assert_eq!(seen[0].json()["operationId"], "op-1");
+    }
+}
+
+#[test]
+fn expired_with_unverified_signatures_or_a_pay_receipt_stays_unresolved() {
+    let swap = json!({"signature":"swapSig","finalizedSlot":9,"action":{"type":"swap","amountInLamports":1000,"minOutUsdc":990}});
+    let pay =
+        json!({"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}});
+    for (signatures, receipts, paid, exit) in [
+        (json!(["sigA"]), json!([]), false, 5),
+        (
+            json!(["swapSig", "paySig"]),
+            json!([swap.clone()]),
+            false,
+            5,
+        ),
+        (json!(["paySig"]), json!([pay]), true, 5),
+        // Every signature has a finalized swap receipt and none could have paid.
+        (json!(["swapSig"]), json!([swap]), false, 20),
+    ] {
+        let reply = json!({"operationId":"op-1","status":"expired","signatures":signatures,"receipts":receipts,"response":null});
+        let (url, seen) = serve(vec![http(200, &reply.to_string())]);
+        let out = run(&url, &["paysh", "status", POLICY, "op-1"], Some(TOKEN));
+        let (stdout, stderr) = text(&out);
+        assert_eq!(
+            out.status.code(),
+            Some(exit),
+            "{signatures}: {stdout}{stderr}"
+        );
+        assert_eq!(seen.recv().unwrap().len(), 1, "never retried");
+        assert!(
+            !stdout.contains("denied") && !stdout.contains("not sent"),
+            "{stdout}"
+        );
+        if exit == 5 {
+            assert!(stdout.contains("state: unknown"), "{stdout}");
+            assert_eq!(stdout.contains("payment: finalized"), paid, "{stdout}");
+            if !paid {
+                assert!(stdout.contains("payment: unresolved"), "{stdout}");
+            }
+            assert!(!stdout.contains("not delivered; the original request expired"));
+            assert!(stdout.contains("Never retry or create a replacement payment"));
+        } else {
+            assert!(stdout.contains("not delivered; the original request expired"));
+        }
+        let (url, _) = serve(vec![http(200, &reply.to_string())]);
+        let out = run(
+            &url,
+            &["paysh", "status", POLICY, "op-1", "--json"],
+            Some(TOKEN),
+        );
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(out.status.code(), Some(exit));
+        assert_eq!(v["exitCode"], json!(exit));
+        assert_eq!(v["paymentFinalized"], json!(paid));
+        assert_eq!(v["state"], if exit == 5 { "unknown" } else { "failed" });
+    }
+}
+
+#[test]
+fn only_delivery_exits_zero() {
+    for (status, code) in [
+        ("evaluating", 12),
+        ("awaiting_input", 12),
+        ("owner_approved", 12),
+        ("signed", 12),
+        ("confirmed", 12),
+        ("delivering", 12),
+        ("delivered", 0),
+        ("denied", 20),
+        ("failed", 20),
+        // Its signatures have no receipts, so expiry does not show they never executed.
+        ("expired", 5),
+        ("unknown", 5),
+        ("settlement_unknown", 5),
+        ("absent", 5),
+        ("settled", 5),
+    ] {
+        let (url, _) = serve(vec![http(200, &op(status).to_string())]);
+        let out = run(&url, &["paysh", "status", POLICY, "op-1"], Some(TOKEN));
+        assert_eq!(out.status.code(), Some(code), "{status}: {:?}", text(&out));
+    }
+    let (url, _) = serve(vec![http(200, &op("delivering").to_string())]);
+    let (stdout, _) = text(&run(
+        &url,
+        &["paysh", "status", POLICY, "op-1"],
+        Some(TOKEN),
+    ));
+    assert!(stdout.contains("no finalized payment receipt is available"));
+    assert!(!stdout.contains("payment: finalized"));
+    assert!(stdout.contains("no refund is reported"));
+}
+
+#[test]
+fn an_owner_resolved_unknown_delivery_is_neither_failed_nor_delivered() {
+    let unknown = json!({"operationId":"op-1","status":"unknown","signatures":["sigB"],"receipts":[
+        {"signature":"sigB","requestHash":"h","challengeHash":"c","invocationIndex":0,"finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}],
+        "response":null});
+    let (url, seen) = serve(vec![http(200, &unknown.to_string())]);
+    let out = run(&url, &["paysh", "status", POLICY, "op-1"], Some(TOKEN));
+    let (stdout, stderr) = text(&out);
+    assert_eq!(out.status.code(), Some(5), "{stdout}{stderr}");
+    assert_eq!(seen.recv().unwrap().len(), 1);
+    assert!(stdout.contains("state: unknown"));
+    assert!(stdout.contains("payment: finalized"));
+    assert!(stdout.contains("pay 1000 test-token units; slot 9; signature sigB"));
+    assert!(stdout.contains("neither failed nor delivered"));
+    assert!(!stdout.contains("delivery: delivered") && !stdout.contains("response:"));
+    assert!(stdout.contains("Never create a replacement payment"));
+    let (url, _) = serve(vec![http(200, &unknown.to_string())]);
+    let out = run(
+        &url,
+        &["paysh", "status", POLICY, "op-1", "--json"],
+        Some(TOKEN),
+    );
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        (
+            v["state"].as_str(),
+            v["exitCode"].as_i64(),
+            out.status.code()
+        ),
+        (Some("unknown"), Some(5), Some(5))
+    );
+}
+
+#[test]
+fn unknown_results_are_never_retried_and_keep_the_operation_id() {
+    for reply in [
+        http(502, r#"{"error":"Backend reply unavailable."}"#),
+        http(400, r#"{"error":"Unverified refusal."}"#),
+        http(403, r#"{"error":"Capability rejected after a previous timeout."}"#),
+        "HTTP/1.1 307 X\r\nLocation: https://elsewhere.example/api/paysh/call\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string(),
+        http(200, "not json"),
+        http(200, &json!({"operationId":"op-2","status":"delivered"}).to_string()),
+        http(409, r#"{"error":"Operation ID already binds a different request."}"#),
+        http(401, r#"{"error":"Capability revoked mid-call."}"#),
+        http(404, r#"{"error":"Policy not found."}"#),
+        http(429, r#"{"error":"Too many requests."}"#),
+    ] {
+        let (url, seen) = serve(vec![reply.clone()]);
+        let out = run(&url, &["paysh", "call", POLICY, "op-1", SERVICE, INPUT], Some(TOKEN));
+        let (_, stderr) = text(&out);
+        assert_eq!(out.status.code(), Some(5), "{reply}: {stderr}");
+        assert_eq!(seen.recv().unwrap().len(), 1, "retried after {reply}");
+        assert!(stderr.contains(&format!("allowit paysh status {POLICY} op-1")), "{stderr}");
+        assert!(stderr.contains("Do not retry with a new OPERATION_ID"), "{stderr}");
+    }
+}
+
+#[test]
+fn an_untyped_http_refusal_cannot_prove_no_payment() {
+    let (url, _) = serve(vec![http(
+        403,
+        r#"{"error":"Swap quote exceeds the policy."}"#,
+    )]);
+    let out = run(
+        &url,
+        &["paysh", "call", POLICY, "op-1", SERVICE, INPUT],
+        Some(TOKEN),
+    );
+    let (stdout, stderr) = text(&out);
+    assert_eq!(out.status.code(), Some(5));
+    assert!(stderr.contains("Swap quote exceeds the policy."));
+    assert!(!stdout.contains("Nothing was paid"));
+    assert!(stderr.contains("Do not retry with a new OPERATION_ID"));
+}
+
+#[test]
+fn the_capability_is_redacted_even_when_echoed() {
+    let echoed =
+        json!({"operationId":"op-1","status":"delivered","receipts":[],"response":{"echo":TOKEN}});
+    let (url, _) = serve(vec![http(200, &echoed.to_string())]);
+    let out = run(
+        &url,
+        &["paysh", "call", POLICY, "op-1", SERVICE, INPUT],
+        Some(TOKEN),
+    );
+    let (stdout, stderr) = text(&out);
+    assert!(!stdout.contains(TOKEN) && !stderr.contains(TOKEN));
+    assert!(stdout.contains("[redacted]"));
+    let (url, _) = serve(vec![http(
+        401,
+        &json!({"error":format!("bad token {TOKEN}")}).to_string(),
+    )]);
+    let out = run(&url, &["paysh", "status", POLICY, "op-1"], Some(TOKEN));
+    let (stdout, stderr) = text(&out);
+    assert_eq!(out.status.code(), Some(3));
+    assert!(!stdout.contains(TOKEN) && !stderr.contains(TOKEN));
+}
+
+#[test]
+fn services_reads_the_catalog_without_credentials() {
+    let catalog = json!({"providers":[{"fqn":SERVICE,"title":"Air Quality API","min_price_usd":0.001,"max_price_usd":0.001}]});
+    let (url, seen) = serve(vec![http(200, &catalog.to_string())]);
+    let out = run(&url, &["paysh", "services"], Some(TOKEN));
+    let (stdout, _) = text(&out);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(stdout, format!("{SERVICE}\tAir Quality API\t0.001 USD\n"));
+    let seen = seen.recv().unwrap();
+    assert_eq!(
+        (seen[0].method.as_str(), seen[0].path.as_str()),
+        ("GET", "/api/paysh/catalog")
+    );
+    assert_eq!(seen[0].header("authorization"), None);
+}
+
+/// The isolated cooperating backend's `GET /api/paysh/catalog` reply.
+fn cooperating() -> Value {
+    json!({"profile":"cooperating-v1","services":[{"id":"native-paysh-testnet-compatibility","name":"PaySH native Testnet compatibility","description":"Native payment fixture only. Google Air Quality is Mainnet-only and unavailable on Testnet.","network":"solana:testnet","priceUsdcUnits":1000,"mint":"Mint111","recipient":"Recipient111"}],"reputation":null})
+}
+
+#[test]
+fn services_lists_the_cooperating_catalog_in_test_token_units() {
+    let mut string_price = cooperating();
+    string_price["services"][0]["priceUsdcUnits"] = json!("1000");
+    let mut mainnet = cooperating();
+    mainnet["services"][0]["network"] = json!("solana:mainnet");
+    mainnet["services"][0]["name"] = json!("Air\tQuality\u{1b}[2J\nAPI");
+    mainnet["services"][0]["id"] = json!(SERVICE);
+    for (catalog, expected) in [
+        (
+            cooperating(),
+            "native-paysh-testnet-compatibility\tPaySH native Testnet compatibility\t1000 test-token units per call on Solana Testnet, not USD or USDC\n".to_string(),
+        ),
+        (
+            string_price,
+            "native-paysh-testnet-compatibility\tPaySH native Testnet compatibility\t1000 test-token units per call on Solana Testnet, not USD or USDC\n".to_string(),
+        ),
+        (
+            mainnet,
+            format!("{SERVICE}\t\"Air\\tQuality\\u001b[2J\\nAPI\"\tlisted for solana:mainnet, not Solana Testnet; no price shown\n"),
+        ),
+    ] {
+        let (url, seen) = serve(vec![http(200, &catalog.to_string())]);
+        let out = run(&url, &["paysh", "services"], Some(TOKEN));
+        let (stdout, stderr) = text(&out);
+        assert_eq!(out.status.code(), Some(0), "{stderr}");
+        assert_eq!(stdout, expected);
+        assert!(!stdout.contains("USD per") && !stdout.contains('\u{1b}'));
+        let seen = seen.recv().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].path, "/api/paysh/catalog");
+        assert_eq!(seen[0].header("authorization"), None);
+    }
+    let (url, _) = serve(vec![http(200, &cooperating().to_string())]);
+    let out = run(&url, &["paysh", "services", "--json"], None);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&out.stdout).unwrap(),
+        cooperating()
+    );
+}
+
+#[test]
+fn services_refuses_a_malformed_cooperating_catalog() {
+    let edit = |f: &dyn Fn(&mut Value)| {
+        let mut c = cooperating();
+        f(&mut c);
+        c
+    };
+    for (catalog, field) in [
+        (edit(&|c| c["profile"] = json!("cooperating-v2")), "profile"),
+        (
+            edit(&|c| {
+                c.as_object_mut().unwrap().remove("profile");
+            }),
+            "profile",
+        ),
+        (
+            edit(&|c| c["reputation"] = json!({"score":99})),
+            "reputation",
+        ),
+        (
+            edit(&|c| c["providers"] = json!([])),
+            "both services and providers",
+        ),
+        (edit(&|c| c["services"] = json!("x")), "services"),
+        (
+            edit(&|c| c["services"][0]["priceUsdcUnits"] = json!(0.001)),
+            "services[0].priceUsdcUnits",
+        ),
+        (
+            edit(&|c| c["services"][0]["priceUsdcUnits"] = json!("1e3")),
+            "services[0].priceUsdcUnits",
+        ),
+        (
+            edit(&|c| c["services"][0]["priceUsdcUnits"] = json!("01000")),
+            "services[0].priceUsdcUnits",
+        ),
+        (
+            edit(&|c| c["services"][0]["priceUsdcUnits"] = json!("18446744073709551616")),
+            "services[0].priceUsdcUnits",
+        ),
+        (
+            edit(&|c| c["services"][0]["priceUsdcUnits"] = json!(-1)),
+            "services[0].priceUsdcUnits",
+        ),
+        (
+            edit(&|c| c["services"][0]["id"] = json!("air quality")),
+            "services[0].id",
+        ),
+        (
+            edit(&|c| c["services"][0]["name"] = json!("")),
+            "services[0].name",
+        ),
+        (
+            edit(&|c| c["services"][0]["network"] = Value::Null),
+            "services[0].network",
+        ),
+    ] {
+        let (url, seen) = serve(vec![http(200, &catalog.to_string())]);
+        let out = run(&url, &["paysh", "services"], None);
+        let (stdout, stderr) = text(&out);
+        assert_eq!(out.status.code(), Some(3), "{field}: {stdout}{stderr}");
+        assert!(stdout.is_empty(), "{field}: {stdout}");
+        assert!(stderr.contains(field), "{field}: {stderr}");
+        assert_eq!(seen.recv().unwrap().len(), 1, "never retried");
+    }
+}
+
+#[test]
+fn rejects_unsafe_configuration_and_unbounded_input_before_any_request() {
+    let (url, seen) = serve(vec![]);
+    let big = format!(r#"{{"x":"{}"}}"#, "a".repeat(5000));
+    for (args, token, code) in [
+        (
+            vec!["paysh", "call", POLICY, "op-1", SERVICE, INPUT],
+            None,
+            3,
+        ),
+        (
+            vec!["paysh", "call", POLICY, "op-1", SERVICE, INPUT],
+            Some("short"),
+            3,
+        ),
+        (
+            vec!["paysh", "call", POLICY, "op 1", SERVICE, INPUT],
+            Some(TOKEN),
+            2,
+        ),
+        (
+            vec!["paysh", "call", "ABAB", "op-1", SERVICE, INPUT],
+            Some(TOKEN),
+            2,
+        ),
+        (
+            vec!["paysh", "call", POLICY, "op-1", SERVICE, "{not json"],
+            Some(TOKEN),
+            2,
+        ),
+        (
+            vec!["paysh", "call", POLICY, "op-1", SERVICE, big.as_str()],
+            Some(TOKEN),
+            2,
+        ),
+        (
+            vec!["paysh", "call", POLICY, "op-1", SERVICE],
+            Some(TOKEN),
+            2,
+        ),
+        (
+            vec!["paysh", "status", POLICY, "op-1", "--wait"],
+            Some(TOKEN),
+            2,
+        ),
+    ] {
+        let out = run(&url, &args, token);
+        assert_eq!(out.status.code(), Some(code), "{args:?}: {:?}", text(&out));
+    }
+    assert!(seen.recv().unwrap().is_empty());
+    for origin in [
+        "http://example.com",
+        "https://user@example.com",
+        "https://example.com/api",
+    ] {
+        let out = run(origin, &["paysh", "status", POLICY, "op-1"], Some(TOKEN));
+        assert_eq!(out.status.code(), Some(3), "{origin}");
+    }
+}
+
+#[test]
+fn an_oversized_reply_is_an_unknown_result() {
+    let huge = format!(
+        r#"{{"operationId":"op-1","status":"delivered","response":"{}"}}"#,
+        "a".repeat((1 << 20) + 10)
+    );
+    let (url, _) = serve(vec![http(200, &huge)]);
+    let out = run(&url, &["paysh", "status", POLICY, "op-1"], Some(TOKEN));
+    assert_eq!(out.status.code(), Some(5));
+    assert!(text(&out).1.contains("1 MB"));
+}
+
+#[test]
+fn help_lists_the_paysh_commands() {
+    let out = run("https://example.com", &["paysh", "help"], None);
+    let (stdout, _) = text(&out);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(stdout.contains("allowit paysh call POLICY OPERATION_ID SERVICE_ID INPUT_JSON"));
+    assert!(stdout.contains("ALLOWIT_PAYSH_TOKEN"));
+}
+
+#[test]
+fn settlement_and_owner_unknown_do_not_claim_payment_finality_from_a_nonce_or_swap() {
+    for status in ["settlement_unknown", "unknown"] {
+        for receipts in [
+            json!([]),
+            json!([{"signature":"swapSig","requestHash":"h","challengeHash":"c","invocationIndex":0,"finalizedSlot":9,"action":{"type":"swap","amountInLamports":1000,"minOutUsdc":990}}]),
+        ] {
+            let reply = json!({"operationId":"op-1","status":status,"signatures":["unlocated"],"receipts":receipts,"response":null});
+            let (url, seen) = serve(vec![http(200, &reply.to_string())]);
+            let out = run(&url, &["paysh", "status", POLICY, "op-1"], Some(TOKEN));
+            let (stdout, stderr) = text(&out);
+            assert_eq!(out.status.code(), Some(5), "{stdout}{stderr}");
+            assert_eq!(seen.recv().unwrap().len(), 1);
+            assert!(stdout.contains("payment: unresolved"), "{stdout}");
+            assert!(!stdout.contains("payment: finalized"));
+            assert!(!stdout.contains("payment is finalized"));
+            assert!(stdout.contains("Never retry or create a replacement payment"));
+            assert!(stdout.contains("unverified signature unlocated"));
+        }
+    }
+}
+
+#[test]
+fn json_payment_finality_is_derived_from_receipts_and_failed_payments_remain_unknown() {
+    for (phase, receipts, paid, exit) in [
+        ("delivered", json!([]), false, 0),
+        (
+            "failed",
+            json!([{"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}]),
+            true,
+            5,
+        ),
+        ("expired", json!([]), false, 20),
+        (
+            "expired",
+            json!([{"signature":"swapSig","finalizedSlot":9,"action":{"type":"swap"}}]),
+            false,
+            20,
+        ),
+        (
+            "expired",
+            json!([{"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}]),
+            true,
+            5,
+        ),
+        ("awaiting_input", json!([]), false, 12),
+        ("owner_approved", json!([]), false, 12),
+        (
+            "owner_approved",
+            json!([{"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}]),
+            true,
+            12,
+        ),
+        (
+            "denied",
+            json!([{"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}]),
+            true,
+            5,
+        ),
+        (
+            "delivered",
+            json!([{"signature":"swapSig","finalizedSlot":9,"action":{"type":"swap"}}]),
+            false,
+            0,
+        ),
+        (
+            "failed",
+            json!([{"signature":"swapSig","finalizedSlot":9,"action":{"type":"swap"}}]),
+            false,
+            20,
+        ),
+        (
+            "denied",
+            json!([{"signature":"paySig","action":{"type":"pay","amountUsdc":1000}}]),
+            false,
+            5,
+        ),
+        (
+            "failed",
+            json!([{"signature":"paySig","finalizedSlot":0,"action":{"type":"pay","amountUsdc":1000}}]),
+            false,
+            5,
+        ),
+    ] {
+        let reply =
+            json!({"operationId":"op-1","status":phase,"receipts":receipts,"response":null});
+        let (url, _) = serve(vec![http(200, &reply.to_string())]);
+        let out = run(
+            &url,
+            &["paysh", "status", POLICY, "op-1", "--json"],
+            Some(TOKEN),
+        );
+        assert_eq!(out.status.code(), Some(exit), "{phase} {receipts}");
+        let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(value["paymentFinalized"], json!(paid), "{phase} {receipts}");
+        assert_eq!(value["exitCode"], json!(exit));
+        if exit == 5 {
+            assert_eq!(value["state"], "unknown");
+        }
+    }
+}
+
+#[test]
+fn failed_or_denied_with_a_pay_receipt_is_unresolved_in_text() {
+    for (phase, receipt, paid) in [
+        (
+            "denied",
+            json!({"signature":"paySig","finalizedSlot":9,"action":{"type":"pay","amountUsdc":1000}}),
+            true,
+        ),
+        (
+            "denied",
+            json!({"signature":"paySig","action":{"type":"pay","amountUsdc":1000}}),
+            false,
+        ),
+        (
+            "failed",
+            json!({"signature":"paySig","finalizedSlot":"x","action":{"type":"pay","amountUsdc":1000}}),
+            false,
+        ),
+    ] {
+        let reply = json!({"operationId":"op-1","status":phase,"signatures":["paySig"],"receipts":[receipt],"response":null});
+        let (url, seen) = serve(vec![http(200, &reply.to_string())]);
+        let out = run(&url, &["paysh", "status", POLICY, "op-1"], Some(TOKEN));
+        let (stdout, stderr) = text(&out);
+        assert_eq!(out.status.code(), Some(5), "{phase}: {stdout}{stderr}");
+        assert_eq!(seen.recv().unwrap().len(), 1);
+        assert!(stdout.contains("state: unknown"), "{stdout}");
+        assert_eq!(stdout.contains("payment: finalized"), paid, "{stdout}");
+        if !paid {
+            assert!(stdout.contains("payment: unresolved"), "{stdout}");
+        }
+        assert!(!stdout.contains("did not execute") && !stdout.contains("no payment executed"));
+        assert!(!stdout.contains("not sent") && !stdout.contains("delivery: not delivered"));
+        assert!(stdout.contains("Never retry or create a replacement payment"));
+        assert!(stdout.contains("Never create a replacement payment"));
+    }
+}
+
+#[test]
+fn an_unsafe_capability_is_rejected_before_any_request() {
+    let (url, seen) = serve(vec![]);
+    for bad in ["\"", "\\", "<", ">", "&", "=", "+"] {
+        let token = format!("capability-0123456789abcdefghij{bad}klmnopqrstuvwxyz");
+        for args in [
+            vec!["paysh", "call", POLICY, "op-1", SERVICE, INPUT],
+            vec!["paysh", "status", POLICY, "op-1"],
+        ] {
+            let out = run(&url, &args, Some(token.as_str()));
+            let (stdout, stderr) = text(&out);
+            assert_eq!(out.status.code(), Some(3), "{token}: {stderr}");
+            assert!(!stdout.contains(&token) && !stderr.contains(&token));
+            assert!(!stderr.contains("klmnopqrstuvwxyz"), "{stderr}");
+        }
+    }
+    assert!(seen.recv().unwrap().is_empty());
+    let jwt = "eyJhbGciOiJFZERTQSJ9.eyJwb2xpY3kiOiJhYiJ9.c2lnbmF0dXJlLXZhbHVlLXNhZmU";
+    let (url, seen) = serve(vec![http(200, &op("submitted").to_string())]);
+    let out = run(&url, &["paysh", "status", POLICY, "op-1"], Some(jwt));
+    assert_eq!(out.status.code(), Some(12), "{:?}", text(&out));
+    let seen = seen.recv().unwrap();
+    assert_eq!(
+        seen[0].header("authorization"),
+        Some(format!("Bearer {jwt}").as_str())
+    );
+}

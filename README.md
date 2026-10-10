@@ -10,6 +10,11 @@ Main contains the untagged `0.3.0-dev` implementation. No native Rust GitHub Rel
 
 Use Rust 1.85 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
 
+Native `policy` commands require a local POSIX filesystem for private, durable journals.
+On Windows, use Linux/WSL and keep state in the Linux filesystem, not `/mnt/c` or `/mnt/d`.
+The CLI refuses unsupported platforms before loading keys or creating policy state.
+Keep existing journals for recovery. Do not regenerate or resubmit an uncertain operation.
+
 ```sh
 git clone --recurse-submodules https://github.com/AllowIt-hq/allowit-cli.git
 cd allowit-cli
@@ -18,7 +23,7 @@ cargo build --locked --release
 ./target/release/allowit version
 ```
 
-The native SDK is the `repos/AllowIt-hq--allowit-sdk` Git submodule. In an existing clone, or after switching to a revision with another SDK pin, run:
+The SDK is the `repos/AllowIt-hq--allowit-sdk` Git submodule. In an existing clone, or after switching to a revision with another SDK pin, run:
 
 ```sh
 git submodule update --init --recursive
@@ -163,7 +168,7 @@ Decimals are plain digits with an optional fraction: no sign, exponent, separato
 
 **Local configuration.** `ALLOWIT_POLICY_DIR` defaults to `.allowit`; `ALLOWIT_POLICY_FILE` may select another policy file. `ALLOWIT_NETWORK`, `ALLOWIT_RPC_URL`, `ALLOWIT_MINT`, `ALLOWIT_EXECUTOR`, `ALLOWIT_AUTHORITY`, and `ALLOWIT_DEPLOYMENT_FILE` configure the native profile. Import persists a public context and refuses conflicting configuration. `ALLOWIT_OWNER_KEYPAIR` is used for owner operations, `ALLOWIT_EXECUTOR_KEYPAIR` for execution, and `ALLOWIT_OWNER` supplies the public owner for execution/status. Keys are private local files. `ALLOWIT_REQUEST_ID` is required for execution and is the durable operation ID. `ALLOWIT_EXECUTION_ACTION` defaults to `transfer`; `ALLOWIT_EXECUTION_MERCHANT` and one of `ALLOWIT_EXECUTION_CONTEXT_JSON` or `ALLOWIT_EXECUTION_CONTEXT_FILE` supply the exact policy input. Context is sent to the trusted backend, so do not put credentials in it. Only an explicitly additional fund/withdraw uses both a fresh ID and `ALLOWIT_ADDITIONAL_OWNER_OPERATION=1` after an expired uncertain operation.
 
-**SDK source pin.** Cargo builds `allowit-native` from `repos/AllowIt-hq--allowit-sdk/native-rust`, a Git submodule of `https://github.com/AllowIt-hq/allowit-sdk.git`. The parent repository's gitlink pins the exact SDK commit. `vendor/native-sdk.json` records that commit, the submodule path and URL, SHA-256 hashes of the crate files Cargo consumes, the crate's unconsumed SDK tooling, and the SDK's upstream license files. The repository keeps no copies of SDK source or license text.
+**SDK source pin.** One Git submodule, `repos/AllowIt-hq--allowit-sdk` from `https://github.com/AllowIt-hq/allowit-sdk.git`, supplies three Cargo path dependencies: `allowit-native` (`native-rust/`), its `allowit-paysh-interface` (`crates/paysh-interface/`), and the root `allowit-sdk` policy crate as `allowit-policy-sdk` with `default-features = false, features = ["std", "typed-workflow"]` for the canonical typed workflow types and host evaluator, without the compiler. The parent gitlink pins the exact SDK commit. `vendor/native-sdk.json` records that commit, the submodule path and URL, SHA-256 hashes of the consumed files of each crate (the policy crate's `Cargo.toml` and `src/`), the native crate's unconsumed tooling, and the SDK root license files. The repository keeps no copies of SDK source or license text.
 
 ```sh
 python3 scripts/sync-native-sdk.py verify              # run by make test/parity/build/dist, CI, provenance and license packaging
@@ -173,21 +178,32 @@ python3 scripts/sync-native-sdk.py pin                 # record and stage the ch
 
 `verify` requires the following:
 
-- `.gitmodules` names only the canonical URL.
-- The index holds a mode `160000` gitlink at the recorded commit.
-- The submodule is initialized and clean, including untracked and ignored files, with its `HEAD` at that commit.
-- `native-rust/` contains exactly the recorded files, including untracked or ignored files such as an injected `build.rs`. That file set must also match the pinned commit's Git tree.
-- The SDK root's Cargo discovery inputs (`Cargo.toml`, `Cargo.lock` and everything under `.cargo/`) are regular files, not symlinks, and their checked-out and tracked file sets and bytes match the pinned commit's tree and blobs. They are checked but not recorded in the metadata.
-- The CLI-owned directories between the CLI root and the SDK (currently `repos/`) are real directories, and their Cargo discovery inputs (`Cargo.toml`, `Cargo.lock`, `.cargo/`) match the CLI's committed `HEAD` the same way; today `HEAD` has none, so none may exist, even ignored. `verify` does not check the CLI root's own `Cargo.toml`, `Cargo.lock` or `.cargo/`: editing them is ordinary development.
-- The recorded hashes of the crate files and the SDK root's license files match the blobs at the pinned commit, read from Git's object store. The checked-out bytes must match those same blobs.
+- `.gitmodules` names only the canonical URL, the index holds a mode `160000` gitlink at the recorded commit, and the submodule is initialized and clean, including untracked and ignored files, with its `HEAD` at that commit.
+- The two Cargo dependency lines match those above exactly, including the policy SDK's feature selection. Each consumed crate's tracked and checked-out file sets match the pinned Git tree and recorded hashes. The policy crate may not have a build script.
+- The SDK root's Cargo discovery inputs (`Cargo.toml`, `Cargo.lock` and everything under `.cargo/`) are regular files, not symlinks, and their file sets and bytes match the pinned commit's tree and blobs. They are checked but not separately recorded in the metadata.
+- CLI-owned directories between the CLI root and SDK (currently `repos/`) are real directories, and their Cargo discovery inputs match the CLI's committed `HEAD`; today `HEAD` has none, so none may exist, even ignored. `verify` leaves the CLI root's own Cargo inputs available for ordinary development.
+- Recorded crate and SDK license hashes match immutable Git blobs, and checked-out bytes match those same blobs. Files reached by `#[path]` or `include_str!` outside the hashed sets are bound by the clean submodule at the pinned commit.
+- `cargo metadata --locked` resolves the three crates to the submodule's manifests and `src/lib.rs`, with no build script or `links`, and enables exactly the pinned features. A `paths` override in any Cargo configuration fails. Binary provenance repeats this check.
 
-Hashes cover the bytes with CRLF read as LF in files Git treats as text (no NUL in the first 8000 bytes), so a clean Windows `core.autocrlf` checkout verifies against the same metadata. Any other byte change fails, including one hidden by a local Git filter, `assume-unchanged`/`skip-worktree` or a replace ref. Inherited `GIT_*` variables are ignored. License packaging copies the checkout's notice files unchanged.
+Hashes read CRLF as LF in text files, so a clean Windows `core.autocrlf` checkout verifies. Any other change fails, including one hidden by a local Git filter, `assume-unchanged`/`skip-worktree` or a replace ref. Inherited `GIT_*` variables are ignored. License packaging copies checked-out notices unchanged. `update` and `pin` hash commit blobs, refuse checkout drift, and stage the gitlink and metadata for review without committing.
 
-`update` and `pin` hash the commit's blobs and refuse a checkout that differs from them. They stage the gitlink and metadata for review and never commit. Updating the SDK revision is a separate reviewed change.
-
-Binary provenance additionally requires a clean parent status and binds the CLI root's `Cargo.toml`, `Cargo.lock` and `.cargo/` file sets and bytes to the committed `HEAD`, including ignored files and changes hidden by `assume-unchanged`/`skip-worktree`. Generated `target/` and `dist/` stay ignored. These checks cover Cargo's discovery inputs from the SDK crate up to the CLI root only. Directories above the CLI checkout, `CARGO_HOME`, environment variables and the Rust toolchain are trusted build context; they are neither checked nor recorded.
+Binary provenance additionally requires a clean parent status and binds the CLI root's Cargo inputs to committed `HEAD`, including ignored files and changes hidden by index flags. Generated `target/` and `dist/` stay ignored. These checks cover Cargo discovery from the SDK crate through the CLI root. Directories above the CLI checkout, `CARGO_HOME`, environment variables and the Rust toolchain are trusted build context; they are neither checked nor recorded.
 
 **Hosted execution authorization.** A backend-exported executor bundle contains `audit: {origin, token}`. Import saves this policy-scoped capability in the private local journal. The CLI sends only the high-level action, merchant, context, recipient and amount to `POST /api/native/execute`; the backend evaluates the owner-bound policy and returns an authority-only signature over its exact prepared transaction. The CLI reconstructs and checks the approval commitment, signer set, instructions and message, adds only the executor signature, persists the complete proof, then requires a durable `POST /api/native/report` acknowledgment before chain broadcast. Identical retries reconcile the saved proof without obtaining another approval or allocating another payment. Missing, redirected or inconsistent responses block broadcast or produce exit 5. `policy status` retries reporting without signing or broadcasting. The token is never printed; the executor bundle and journal contain this private capability and must not be shared publicly. Denial, unresolved owner input, or a required provider failure produces no execution signature. Owner operations remain independent of the provider and authority.
+
+## PaySH agent calls
+
+`allowit paysh` serves operations recorded under an existing PaySH policy and its scoped capability. Do not deploy a separate PaySH policy or export a new capability for it. The backend journal keeps each original operation; recovery uses the same `POLICY`, `OPERATION_ID` and, for `call`, the identical `SERVICE_ID` and input. The agent sets `ALLOWIT_URL` and `ALLOWIT_PAYSH_TOKEN`; no signing key is read.
+
+```sh
+allowit paysh services
+allowit paysh call POLICY OPERATION_ID SERVICE_ID '{"location":{"latitude":43.6532,"longitude":-79.3832},"universalAqi":true}'
+allowit paysh status POLICY OPERATION_ID
+```
+
+`call` sends `POST /api/paysh/call` with `{policyId, operationId, serviceId, input}` and the capability as bearer; `status` sends `POST /api/paysh/status` with `{policyId, operationId}`; `services` sends `GET /api/paysh/catalog` without credentials and lists either the public catalog's `providers` or a cooperating backend's `{profile: "cooperating-v1", services}`; a cooperating price is shown as test-token units only on `solana:testnet`, never as USD or USDC, and a malformed list exits 3. Each request is sent once with no redirect. `ALLOWIT_URL` must be an HTTPS origin, or HTTP on loopback. `INPUT_JSON` is limited to 4096 bytes and replies to 1 MiB. Payment and delivery are printed separately; `--json` adds `state` and `exitCode` to the server reply.
+
+Exits: 0 only when the API response was delivered; 12 pending (payment or delivery not complete, including `awaiting_input`, where the owner must answer in AllowIt Requests, and `owner_approved`, a signed Yes for this original request only that establishes no payment; keep the same `OPERATION_ID`); 20 failed, denied or expired, with no delivery (`expired` means the answer-and-start deadline passed; it is not an owner denial); 5 unknown (network or server failure, redirect, unreadable or mismatched reply, HTTP 409, a `status` that finds no operation, operation status `unknown`/`settlement_unknown`, a failed, denied or expired operation with any receipt other than a swap, or an expired operation with a signature that has no receipt: the operation remains unresolved and payment may have been sent, neither failed nor delivered); 2 usage; 3 configuration or auth. After exit 5, never use a new `OPERATION_ID` for the same call: run the printed `allowit paysh status` command or rerun the identical call. The capability is redacted from all output.
 
 ## States and exit codes
 

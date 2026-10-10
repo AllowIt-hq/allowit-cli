@@ -189,6 +189,52 @@
     "cargoChecksum": "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
   },
   {
+    "name": "borsh",
+    "version": "1.6.0",
+    "url": "https://static.crates.io/crates/borsh/borsh-1.6.0.crate",
+    "files": [
+      {
+        "path": "borsh/1.6.0/LICENSE-APACHE",
+        "sha256": "7b724c8fa4a82af733caccabdaa21e2bf8bcb0822fe62d5cf03f99d458438705",
+        "bytes": 11334
+      },
+      {
+        "path": "borsh/1.6.0/LICENSE-MIT",
+        "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+        "bytes": 1023
+      }
+    ],
+    "crateSha256": "d1da5ab77c1437701eeff7c88d968729e7766172279eab0676857b3d63af7a6f",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/near/borsh-rs",
+    "status": "covered",
+    "cargoChecksum": "d1da5ab77c1437701eeff7c88d968729e7766172279eab0676857b3d63af7a6f"
+  },
+  {
+    "name": "borsh-derive",
+    "version": "1.6.1",
+    "url": "https://static.crates.io/crates/borsh-derive/borsh-derive-1.6.1.crate",
+    "files": [
+      {
+        "path": "borsh-derive/1.6.1/LICENSE-APACHE",
+        "sha256": "7b724c8fa4a82af733caccabdaa21e2bf8bcb0822fe62d5cf03f99d458438705",
+        "bytes": 11334
+      },
+      {
+        "path": "borsh-derive/1.6.1/LICENSE-MIT",
+        "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+        "bytes": 1023
+      }
+    ],
+    "crateSha256": "bfcfdc083699101d5a7965e49925975f2f55060f94f9a05e7187be95d530ca59",
+    "licenseExpression": "Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/near/borsh-rs",
+    "status": "covered",
+    "cargoChecksum": "bfcfdc083699101d5a7965e49925975f2f55060f94f9a05e7187be95d530ca59"
+  },
+  {
     "name": "bs58",
     "version": "0.5.1",
     "url": "https://static.crates.io/crates/bs58/bs58-0.5.1.crate",
@@ -297,6 +343,29 @@
     "repository": "https://github.com/rust-lang/cfg-if",
     "status": "covered",
     "cargoChecksum": "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
+  },
+  {
+    "name": "cfg_aliases",
+    "version": "0.2.2",
+    "url": "https://static.crates.io/crates/cfg_aliases/cfg_aliases-0.2.2.crate",
+    "files": [
+      {
+        "path": "cfg_aliases/0.2.2/LICENSE",
+        "sha256": "31b94860253d8ec7b4529f51901044d3b459d6292d996504a36b1bae3a36a812",
+        "bytes": 1076
+      },
+      {
+        "path": "cfg_aliases/0.2.2/NOTICES.md",
+        "sha256": "1e2b7ade3fb228130408b9990cae6a7618eb314c75aa0b164bfe485d9d9756ee",
+        "bytes": 1472
+      }
+    ],
+    "crateSha256": "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527",
+    "licenseExpression": "MIT",
+    "licenseFile": null,
+    "repository": "https://github.com/katharostech/cfg_aliases",
+    "status": "covered",
+    "cargoChecksum": "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
   },
   {
     "name": "const-oid",
@@ -583,6 +652,29 @@
     "cargoChecksum": "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
   },
   {
+    "name": "equivalent",
+    "version": "1.0.2",
+    "url": "https://static.crates.io/crates/equivalent/equivalent-1.0.2.crate",
+    "files": [
+      {
+        "path": "equivalent/1.0.2/LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+        "bytes": 10847
+      },
+      {
+        "path": "equivalent/1.0.2/LICENSE-MIT",
+        "sha256": "7365cc8878a1d7ce155a58c4ca09c3d7a6be413efa5334a80ea842912b669349",
+        "bytes": 1049
+      }
+    ],
+    "crateSha256": "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f",
+    "licenseExpression": "Apache-2.0 OR MIT",
+    "licenseFile": null,
+    "repository": "https://github.com/indexmap-rs/equivalent",
+    "status": "covered",
+    "cargoChecksum": "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+  },
+  {
     "name": "errno",
     "version": "0.3.14",
     "url": "https://static.crates.io/crates/errno/errno-0.3.14.crate",
@@ -604,6 +696,29 @@
     "repository": "https://github.com/lambda-fairy/rust-errno",
     "status": "covered",
     "cargoChecksum": "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+  },
+  {
+    "name": "ethnum",
+    "version": "1.5.3",
+    "url": "https://static.crates.io/crates/ethnum/ethnum-1.5.3.crate",
+    "files": [
+      {
+        "path": "ethnum/1.5.3/LICENSE-APACHE",
+        "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+        "bytes": 10174
+      },
+      {
+        "path": "ethnum/1.5.3/LICENSE-MIT",
+        "sha256": "6b2702e491e967c99d7e0191bb0ec6b3b91db5c703a71c3b952c9e271ba46ac2",
+        "bytes": 1076
+      }
+    ],
+    "crateSha256": "40404c3f5f511ec4da6fe866ddf6a717c309fdbb69fbbad7b0f3edab8f2e835f",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/nlordell/ethnum-rs",
+    "status": "covered",
+    "cargoChecksum": "40404c3f5f511ec4da6fe866ddf6a717c309fdbb69fbbad7b0f3edab8f2e835f"
   },
   {
     "name": "fastrand",
@@ -956,6 +1071,29 @@
     "cargoChecksum": "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
   },
   {
+    "name": "hashbrown",
+    "version": "0.17.1",
+    "url": "https://static.crates.io/crates/hashbrown/hashbrown-0.17.1.crate",
+    "files": [
+      {
+        "path": "hashbrown/0.17.1/LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+        "bytes": 10847
+      },
+      {
+        "path": "hashbrown/0.17.1/LICENSE-MIT",
+        "sha256": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2",
+        "bytes": 1060
+      }
+    ],
+    "crateSha256": "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/rust-lang/hashbrown",
+    "status": "covered",
+    "cargoChecksum": "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+  },
+  {
     "name": "http",
     "version": "1.5.0",
     "url": "https://static.crates.io/crates/http/http-1.5.0.crate",
@@ -1267,6 +1405,29 @@
     "repository": "https://github.com/hsivonen/idna_adapter",
     "status": "covered",
     "cargoChecksum": "3acae9609540aa318d1bc588455225fb2085b9ed0c4f6bd0d9d5bcd86f1a0344"
+  },
+  {
+    "name": "indexmap",
+    "version": "2.14.2",
+    "url": "https://static.crates.io/crates/indexmap/indexmap-2.14.2.crate",
+    "files": [
+      {
+        "path": "indexmap/2.14.2/LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+        "bytes": 10847
+      },
+      {
+        "path": "indexmap/2.14.2/LICENSE-MIT",
+        "sha256": "ecc269ef87fd38a1d98e30bfac9ba964a9dbd9315c3770fed98d4d7cb5882055",
+        "bytes": 1049
+      }
+    ],
+    "crateSha256": "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855",
+    "licenseExpression": "Apache-2.0 OR MIT",
+    "licenseFile": null,
+    "repository": "https://github.com/indexmap-rs/indexmap",
+    "status": "covered",
+    "cargoChecksum": "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
   },
   {
     "name": "ipnet",
@@ -1716,6 +1877,42 @@
     "cargoChecksum": "b47e7e6bb2c38cd930d25a23b40fa52e068c10e85f3e03a7f5ba5aaca5713695"
   },
   {
+    "name": "orca_whirlpools_core",
+    "version": "2.1.1",
+    "url": "https://static.crates.io/crates/orca_whirlpools_core/orca_whirlpools_core-2.1.1.crate",
+    "files": [
+      {
+        "path": "orca_whirlpools_core/2.1.1/LICENSE",
+        "sha256": "8f54a2e7a06244dfb6a780885ef12ab6c96bb66c3482b35137143c4f0eadc489",
+        "bytes": 8306
+      }
+    ],
+    "crateSha256": "7fa5a2318d63ef4c7241234b3aa53690bf76b7bd797c90b90ec38f494d847cc6",
+    "licenseExpression": null,
+    "licenseFile": "LICENSE",
+    "repository": "https://github.com/orca-so/whirlpools",
+    "status": "covered",
+    "cargoChecksum": "7fa5a2318d63ef4c7241234b3aa53690bf76b7bd797c90b90ec38f494d847cc6"
+  },
+  {
+    "name": "orca_whirlpools_macros",
+    "version": "1.0.5",
+    "url": "https://static.crates.io/crates/orca_whirlpools_macros/orca_whirlpools_macros-1.0.5.crate",
+    "files": [
+      {
+        "path": "orca_whirlpools_macros/1.0.5/LICENSE",
+        "sha256": "ab5facc90fe4f35f0dd07e2ed2ccce9c84b0d5019b782f74c6ce6356624fcffc",
+        "bytes": 8315
+      }
+    ],
+    "crateSha256": "b093a9e60ca608c1dff40fcd841a2d5680b96f877080b6279044c159ebd50b78",
+    "licenseExpression": null,
+    "licenseFile": "LICENSE",
+    "repository": "https://github.com/orca-so/whirlpools",
+    "status": "covered",
+    "cargoChecksum": "b093a9e60ca608c1dff40fcd841a2d5680b96f877080b6279044c159ebd50b78"
+  },
+  {
     "name": "percent-encoding",
     "version": "2.3.2",
     "url": "https://static.crates.io/crates/percent-encoding/percent-encoding-2.3.2.crate",
@@ -1824,6 +2021,29 @@
     "repository": "https://github.com/unicode-org/icu4x",
     "status": "covered",
     "cargoChecksum": "d83eb9bc6d8e5cf568e7a1101d60ee05e81ed50ea106026f3d18deeb046d7661"
+  },
+  {
+    "name": "proc-macro-crate",
+    "version": "3.5.0",
+    "url": "https://static.crates.io/crates/proc-macro-crate/proc-macro-crate-3.5.0.crate",
+    "files": [
+      {
+        "path": "proc-macro-crate/3.5.0/LICENSE-APACHE",
+        "sha256": "8ada45cd9f843acf64e4722ae262c622a2b3b3007c7310ef36ac1061a30f6adb",
+        "bytes": 10860
+      },
+      {
+        "path": "proc-macro-crate/3.5.0/LICENSE-MIT",
+        "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+        "bytes": 1023
+      }
+    ],
+    "crateSha256": "e67ba7e9b2b56446f1d419b1d807906278ffa1a658a8a5d8a39dcb1f5a78614f",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/bkchr/proc-macro-crate",
+    "status": "covered",
+    "cargoChecksum": "e67ba7e9b2b56446f1d419b1d807906278ffa1a658a8a5d8a39dcb1f5a78614f"
   },
   {
     "name": "proc-macro2",
@@ -2773,6 +2993,75 @@
     "cargoChecksum": "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
   },
   {
+    "name": "toml_datetime",
+    "version": "1.1.1+spec-1.1.0",
+    "url": "https://static.crates.io/crates/toml_datetime/toml_datetime-1.1.1+spec-1.1.0.crate",
+    "files": [
+      {
+        "path": "toml_datetime/1.1.1+spec-1.1.0/LICENSE-APACHE",
+        "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+        "bytes": 11358
+      },
+      {
+        "path": "toml_datetime/1.1.1+spec-1.1.0/LICENSE-MIT",
+        "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6",
+        "bytes": 1062
+      }
+    ],
+    "crateSha256": "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/toml-rs/toml",
+    "status": "covered",
+    "cargoChecksum": "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
+  },
+  {
+    "name": "toml_edit",
+    "version": "0.25.15+spec-1.1.0",
+    "url": "https://static.crates.io/crates/toml_edit/toml_edit-0.25.15+spec-1.1.0.crate",
+    "files": [
+      {
+        "path": "toml_edit/0.25.15+spec-1.1.0/LICENSE-APACHE",
+        "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+        "bytes": 11358
+      },
+      {
+        "path": "toml_edit/0.25.15+spec-1.1.0/LICENSE-MIT",
+        "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6",
+        "bytes": 1062
+      }
+    ],
+    "crateSha256": "1340ea94a5856333492c9064b02c778b191dd2c853778d9609debdcdfea3a614",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/toml-rs/toml",
+    "status": "covered",
+    "cargoChecksum": "1340ea94a5856333492c9064b02c778b191dd2c853778d9609debdcdfea3a614"
+  },
+  {
+    "name": "toml_parser",
+    "version": "1.1.3+spec-1.1.0",
+    "url": "https://static.crates.io/crates/toml_parser/toml_parser-1.1.3+spec-1.1.0.crate",
+    "files": [
+      {
+        "path": "toml_parser/1.1.3+spec-1.1.0/LICENSE-APACHE",
+        "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+        "bytes": 11358
+      },
+      {
+        "path": "toml_parser/1.1.3+spec-1.1.0/LICENSE-MIT",
+        "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6",
+        "bytes": 1062
+      }
+    ],
+    "crateSha256": "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/toml-rs/toml",
+    "status": "covered",
+    "cargoChecksum": "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
+  },
+  {
     "name": "tower",
     "version": "0.5.3",
     "url": "https://static.crates.io/crates/tower/tower-0.5.3.crate",
@@ -3540,6 +3829,24 @@
     "cargoChecksum": "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
   },
   {
+    "name": "winnow",
+    "version": "1.0.4",
+    "url": "https://static.crates.io/crates/winnow/winnow-1.0.4.crate",
+    "files": [
+      {
+        "path": "winnow/1.0.4/LICENSE-MIT",
+        "sha256": "cb5aedb296c5246d1f22e9099f925a65146f9f0d6b4eebba97fd27a6cdbbab2d",
+        "bytes": 1023
+      }
+    ],
+    "crateSha256": "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81",
+    "licenseExpression": "MIT",
+    "licenseFile": null,
+    "repository": "https://github.com/winnow-rs/winnow",
+    "status": "covered",
+    "cargoChecksum": "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
+  },
+  {
     "name": "writeable",
     "version": "0.6.4",
     "url": "https://static.crates.io/crates/writeable/writeable-0.6.4.crate",
@@ -3723,5 +4030,364 @@
     "repository": "https://github.com/dtolnay/zmij",
     "status": "covered",
     "cargoChecksum": "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+  },
+  {
+    "name": "orca_whirlpools_core",
+    "version": "1.0.4",
+    "url": "https://static.crates.io/crates/orca_whirlpools_core/orca_whirlpools_core-1.0.4.crate",
+    "files": [
+      {
+        "path": "orca_whirlpools_core/1.0.4/LICENSE-2.0.txt",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "bytes": 11358
+      }
+    ],
+    "crateSha256": "b884e3d6f39337baeb00c096b9d2d30682aeff8ead301303d039f84dcac24bec",
+    "licenseExpression": "Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/orca-so/whirlpools",
+    "status": "covered",
+    "cargoChecksum": "b884e3d6f39337baeb00c096b9d2d30682aeff8ead301303d039f84dcac24bec",
+    "noticeBasis": [
+      "checksum-verified published crate declares Apache-2.0; standard authoritative license text; published archive omits LICENSE"
+    ],
+    "licenseSource": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+  },
+  {
+    "name": "orca_whirlpools_macros",
+    "version": "1.0.4",
+    "url": "https://static.crates.io/crates/orca_whirlpools_macros/orca_whirlpools_macros-1.0.4.crate",
+    "files": [
+      {
+        "path": "orca_whirlpools_macros/1.0.4/LICENSE-2.0.txt",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "bytes": 11358
+      }
+    ],
+    "crateSha256": "3db647505a145cbb680f08725e0112b1691d984334cd1abe0d9f5c5a6e2ec91e",
+    "licenseExpression": "Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/orca-so/whirlpools",
+    "status": "covered",
+    "cargoChecksum": "3db647505a145cbb680f08725e0112b1691d984334cd1abe0d9f5c5a6e2ec91e",
+    "noticeBasis": [
+      "checksum-verified published crate declares Apache-2.0; standard authoritative license text; published archive omits LICENSE"
+    ],
+    "licenseSource": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+  },
+  {
+    "name": "five8",
+    "version": "0.2.1",
+    "url": "https://static.crates.io/crates/five8/five8-0.2.1.crate",
+    "files": [
+      {
+        "path": "five8/0.2.1/LICENSE",
+        "sha256": "51848502689f5c8354358b1277cb3ad48a88701c011092aea903856798cd7bd9",
+        "bytes": 1069
+      }
+    ],
+    "crateSha256": "a75b8549488b4715defcb0d8a8a1c1c76a80661b5fa106b4ca0e7fce59d7d875",
+    "licenseExpression": "MIT",
+    "licenseFile": null,
+    "repository": "https://github.com/kevinheavey/five8",
+    "status": "covered",
+    "cargoChecksum": "a75b8549488b4715defcb0d8a8a1c1c76a80661b5fa106b4ca0e7fce59d7d875",
+    "noticeBasis": [
+      "checksum-verified published crate declares MIT; published archive omits license files; LICENSE from the upstream repository at the crate's recorded VCS commit ced29f570f8de0f3cf618e04cbd63bc6b0f5ebc0"
+    ],
+    "licenseSource": "https://raw.githubusercontent.com/kevinheavey/five8/ced29f570f8de0f3cf618e04cbd63bc6b0f5ebc0/LICENSE"
+  },
+  {
+    "name": "five8_core",
+    "version": "0.1.2",
+    "url": "https://static.crates.io/crates/five8_core/five8_core-0.1.2.crate",
+    "files": [
+      {
+        "path": "five8_core/0.1.2/LICENSE",
+        "sha256": "51848502689f5c8354358b1277cb3ad48a88701c011092aea903856798cd7bd9",
+        "bytes": 1069
+      }
+    ],
+    "crateSha256": "2551bf44bc5f776c15044b9b94153a00198be06743e262afaaa61f11ac7523a5",
+    "licenseExpression": "MIT",
+    "licenseFile": null,
+    "repository": "https://github.com/kevinheavey/five8",
+    "status": "covered",
+    "cargoChecksum": "2551bf44bc5f776c15044b9b94153a00198be06743e262afaaa61f11ac7523a5",
+    "noticeBasis": [
+      "checksum-verified published crate declares MIT; published archive omits license files; LICENSE from the upstream repository at the crate's recorded VCS commit 2fed607efced8c4c14fa43e94a3d1bdff23b4333"
+    ],
+    "licenseSource": "https://raw.githubusercontent.com/kevinheavey/five8/2fed607efced8c4c14fa43e94a3d1bdff23b4333/LICENSE"
+  },
+  {
+    "name": "lock_api",
+    "version": "0.4.14",
+    "url": "https://static.crates.io/crates/lock_api/lock_api-0.4.14.crate",
+    "files": [
+      {
+        "path": "lock_api/0.4.14/LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+        "bytes": 10847
+      },
+      {
+        "path": "lock_api/0.4.14/LICENSE-MIT",
+        "sha256": "c9a75f18b9ab2927829a208fc6aa2cf4e63b8420887ba29cdb265d6619ae82d5",
+        "bytes": 1071
+      }
+    ],
+    "crateSha256": "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/Amanieu/parking_lot",
+    "status": "covered",
+    "cargoChecksum": "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
+  },
+  {
+    "name": "parking_lot",
+    "version": "0.12.5",
+    "url": "https://static.crates.io/crates/parking_lot/parking_lot-0.12.5.crate",
+    "files": [
+      {
+        "path": "parking_lot/0.12.5/LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+        "bytes": 10847
+      },
+      {
+        "path": "parking_lot/0.12.5/LICENSE-MIT",
+        "sha256": "c9a75f18b9ab2927829a208fc6aa2cf4e63b8420887ba29cdb265d6619ae82d5",
+        "bytes": 1071
+      }
+    ],
+    "crateSha256": "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/Amanieu/parking_lot",
+    "status": "covered",
+    "cargoChecksum": "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
+  },
+  {
+    "name": "parking_lot_core",
+    "version": "0.9.12",
+    "url": "https://static.crates.io/crates/parking_lot_core/parking_lot_core-0.9.12.crate",
+    "files": [
+      {
+        "path": "parking_lot_core/0.9.12/LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+        "bytes": 10847
+      },
+      {
+        "path": "parking_lot_core/0.9.12/LICENSE-MIT",
+        "sha256": "c9a75f18b9ab2927829a208fc6aa2cf4e63b8420887ba29cdb265d6619ae82d5",
+        "bytes": 1071
+      }
+    ],
+    "crateSha256": "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/Amanieu/parking_lot",
+    "status": "covered",
+    "cargoChecksum": "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
+  },
+  {
+    "name": "redox_syscall",
+    "version": "0.5.18",
+    "url": "https://static.crates.io/crates/redox_syscall/redox_syscall-0.5.18.crate",
+    "files": [
+      {
+        "path": "redox_syscall/0.5.18/LICENSE",
+        "sha256": "efcfee7981ff72431fffb06925cad00a23dce079ed4354f61030ad5abdb78829",
+        "bytes": 1076
+      }
+    ],
+    "crateSha256": "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d",
+    "licenseExpression": "MIT",
+    "licenseFile": null,
+    "repository": "https://gitlab.redox-os.org/redox-os/syscall",
+    "status": "covered",
+    "cargoChecksum": "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
+  },
+  {
+    "name": "scopeguard",
+    "version": "1.2.0",
+    "url": "https://static.crates.io/crates/scopeguard/scopeguard-1.2.0.crate",
+    "files": [
+      {
+        "path": "scopeguard/1.2.0/LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+        "bytes": 10847
+      },
+      {
+        "path": "scopeguard/1.2.0/LICENSE-MIT",
+        "sha256": "fb77f0a9c53e473abe5103c8632ef9f0f2874d4fb3f17cb2d8c661aab9cee9d7",
+        "bytes": 1097
+      }
+    ],
+    "crateSha256": "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/bluss/scopeguard",
+    "status": "covered",
+    "cargoChecksum": "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+  },
+  {
+    "name": "solana-atomic-u64",
+    "version": "2.2.1",
+    "url": "https://static.crates.io/crates/solana-atomic-u64/solana-atomic-u64-2.2.1.crate",
+    "files": [
+      {
+        "path": "solana-atomic-u64/2.2.1/LICENSE",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "bytes": 11357
+      }
+    ],
+    "crateSha256": "d52e52720efe60465b052b9e7445a01c17550666beec855cce66f44766697bc2",
+    "licenseExpression": "Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/anza-xyz/agave",
+    "status": "covered",
+    "cargoChecksum": "d52e52720efe60465b052b9e7445a01c17550666beec855cce66f44766697bc2",
+    "noticeBasis": [
+      "checksum-verified published crate declares Apache-2.0; published archive omits license files; LICENSE from the upstream repository at the crate's recorded VCS commit 1c1d667f161666f12f5a43ebef8eda9470a8c6ee"
+    ],
+    "licenseSource": "https://raw.githubusercontent.com/anza-xyz/solana-sdk/1c1d667f161666f12f5a43ebef8eda9470a8c6ee/LICENSE"
+  },
+  {
+    "name": "solana-define-syscall",
+    "version": "2.3.0",
+    "url": "https://static.crates.io/crates/solana-define-syscall/solana-define-syscall-2.3.0.crate",
+    "files": [
+      {
+        "path": "solana-define-syscall/2.3.0/LICENSE",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "bytes": 11357
+      }
+    ],
+    "crateSha256": "2ae3e2abcf541c8122eafe9a625d4d194b4023c20adde1e251f94e056bb1aee2",
+    "licenseExpression": "Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/anza-xyz/solana-sdk",
+    "status": "covered",
+    "cargoChecksum": "2ae3e2abcf541c8122eafe9a625d4d194b4023c20adde1e251f94e056bb1aee2",
+    "noticeBasis": [
+      "checksum-verified published crate declares Apache-2.0; published archive omits license files; LICENSE from the upstream repository at the crate's recorded VCS commit 8e5e0b87c5c07b5087e8560bdedb0ee6f6a9ce4a"
+    ],
+    "licenseSource": "https://raw.githubusercontent.com/anza-xyz/solana-sdk/8e5e0b87c5c07b5087e8560bdedb0ee6f6a9ce4a/LICENSE"
+  },
+  {
+    "name": "solana-hash",
+    "version": "2.3.0",
+    "url": "https://static.crates.io/crates/solana-hash/solana-hash-2.3.0.crate",
+    "files": [
+      {
+        "path": "solana-hash/2.3.0/LICENSE",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "bytes": 11357
+      }
+    ],
+    "crateSha256": "b5b96e9f0300fa287b545613f007dfe20043d7812bee255f418c1eb649c93b63",
+    "licenseExpression": "Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/anza-xyz/solana-sdk",
+    "status": "covered",
+    "cargoChecksum": "b5b96e9f0300fa287b545613f007dfe20043d7812bee255f418c1eb649c93b63",
+    "noticeBasis": [
+      "checksum-verified published crate declares Apache-2.0; published archive omits license files; LICENSE from the upstream repository at the crate's recorded VCS commit 8723226ec4f07385258a3801d3ebf2769f265a4f"
+    ],
+    "licenseSource": "https://raw.githubusercontent.com/anza-xyz/solana-sdk/8723226ec4f07385258a3801d3ebf2769f265a4f/LICENSE"
+  },
+  {
+    "name": "solana-sanitize",
+    "version": "2.2.1",
+    "url": "https://static.crates.io/crates/solana-sanitize/solana-sanitize-2.2.1.crate",
+    "files": [
+      {
+        "path": "solana-sanitize/2.2.1/LICENSE",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "bytes": 11357
+      }
+    ],
+    "crateSha256": "61f1bc1357b8188d9c4a3af3fc55276e56987265eb7ad073ae6f8180ee54cecf",
+    "licenseExpression": "Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/anza-xyz/agave",
+    "status": "covered",
+    "cargoChecksum": "61f1bc1357b8188d9c4a3af3fc55276e56987265eb7ad073ae6f8180ee54cecf",
+    "noticeBasis": [
+      "checksum-verified published crate declares Apache-2.0; published archive omits license files; LICENSE from the upstream repository at the crate's recorded VCS commit 1c1d667f161666f12f5a43ebef8eda9470a8c6ee"
+    ],
+    "licenseSource": "https://raw.githubusercontent.com/anza-xyz/solana-sdk/1c1d667f161666f12f5a43ebef8eda9470a8c6ee/LICENSE"
+  },
+  {
+    "name": "solana-sha256-hasher",
+    "version": "2.3.0",
+    "url": "https://static.crates.io/crates/solana-sha256-hasher/solana-sha256-hasher-2.3.0.crate",
+    "files": [
+      {
+        "path": "solana-sha256-hasher/2.3.0/LICENSE",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "bytes": 11357
+      }
+    ],
+    "crateSha256": "5aa3feb32c28765f6aa1ce8f3feac30936f16c5c3f7eb73d63a5b8f6f8ecdc44",
+    "licenseExpression": "Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/anza-xyz/solana-sdk",
+    "status": "covered",
+    "cargoChecksum": "5aa3feb32c28765f6aa1ce8f3feac30936f16c5c3f7eb73d63a5b8f6f8ecdc44",
+    "noticeBasis": [
+      "checksum-verified published crate declares Apache-2.0; published archive omits license files; LICENSE from the upstream repository at the crate's recorded VCS commit b59af0713262418f88f9112e13457cfcc8741dc5"
+    ],
+    "licenseSource": "https://raw.githubusercontent.com/anza-xyz/solana-sdk/b59af0713262418f88f9112e13457cfcc8741dc5/LICENSE"
+  },
+  {
+    "name": "unicode-normalization",
+    "version": "0.1.25",
+    "url": "https://static.crates.io/crates/unicode-normalization/unicode-normalization-0.1.25.crate",
+    "files": [
+      {
+        "path": "unicode-normalization/0.1.25/COPYRIGHT",
+        "sha256": "23860c2a7b5d96b21569afedf033469bab9fe14a1b24a35068b8641c578ce24d",
+        "bytes": 321
+      },
+      {
+        "path": "unicode-normalization/0.1.25/LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+        "bytes": 10847
+      },
+      {
+        "path": "unicode-normalization/0.1.25/LICENSE-MIT",
+        "sha256": "7b63ecd5f1902af1b63729947373683c32745c16a10e8e6292e2e2dcd7e90ae0",
+        "bytes": 1071
+      }
+    ],
+    "crateSha256": "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/unicode-rs/unicode-normalization",
+    "status": "covered",
+    "cargoChecksum": "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+  },
+  {
+    "name": "unicode-script",
+    "version": "0.5.8",
+    "url": "https://static.crates.io/crates/unicode-script/unicode-script-0.5.8.crate",
+    "files": [
+      {
+        "path": "unicode-script/0.5.8/LICENSE-APACHE",
+        "sha256": "7cbb56d1b5d83d735056b363ab20958524120afafc4ad8206e6be98cdec5d737",
+        "bytes": 11049
+      },
+      {
+        "path": "unicode-script/0.5.8/LICENSE-MIT",
+        "sha256": "7ad3ea8ca3caf894db98c3f31d5d4949173ffa93c883ef19a9e529ad48960f8c",
+        "bytes": 1101
+      }
+    ],
+    "crateSha256": "383ad40bb927465ec0ce7720e033cb4ca06912855fc35db31b5755d0de75b1ee",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/unicode-rs/unicode-script",
+    "status": "covered",
+    "cargoChecksum": "383ad40bb927465ec0ce7720e033cb4ca06912855fc35db31b5755d0de75b1ee"
   }
 ]
