@@ -1,5 +1,5 @@
-//! Tempo capability transport. Execution returns a verified wallet plan; this
-//! command never reads an owner/authority key or broadcasts a chain transaction.
+//! Tempo capability transport and exact authority-plan verification.
+//! `execute` remains prepare-only; `pay` adds the executor's native signature.
 use crate::{
     VERSION,
     config::{env_value, parse_origin},
@@ -7,6 +7,7 @@ use crate::{
     output,
 };
 use reqwest::{blocking::Client, redirect::Policy as Redirect, tls::Version};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     fs::{self, OpenOptions},
@@ -23,7 +24,7 @@ fn uncertain() -> Error {
         "Tempo request outcome is unknown. Preserve the same request ID and check its status; do not authorize another transaction.",
     )
 }
-fn address(value: &str) -> bool {
+pub(crate) fn address(value: &str) -> bool {
     value.len() == 42
         && value.starts_with("0x")
         && value[2..].bytes().all(|b| b.is_ascii_hexdigit())
@@ -38,7 +39,7 @@ fn same_address(a: &Value, b: &Value) -> bool {
         .zip(b.as_str())
         .is_some_and(|(a, b)| address(a) && a.eq_ignore_ascii_case(b))
 }
-fn request_id(value: &str) -> Result<()> {
+pub(crate) fn request_id(value: &str) -> Result<()> {
     if (8..=100).contains(&value.len())
         && value
             .bytes()
@@ -83,12 +84,22 @@ fn bundle_path() -> PathBuf {
         PathBuf::from(explicit)
     }
 }
-struct Bundle {
-    value: Value,
-    origin: String,
+pub(crate) struct Bundle {
+    pub value: Value,
+    pub origin: String,
     capability: String,
 }
 impl Bundle {
+    pub fn verification_context(config: Value, policy: Value, origin: &str) -> Self {
+        Self {
+            value: json!({"config":config,"policy":policy}),
+            origin: origin.into(),
+            capability: String::new(),
+        }
+    }
+    pub fn clean(&self, text: String) -> String {
+        output::clean(text, &self.capability)
+    }
     fn read(path: &std::path::Path) -> Result<Self> {
         let mut file = std::fs::File::open(path)
             .map_err(|_| Error::config("Cannot read the Tempo executor bundle"))?;
@@ -162,7 +173,7 @@ impl Bundle {
             capability,
         })
     }
-    fn call(&self, route: &str, body: Value) -> Result<Value> {
+    pub fn call(&self, route: &str, body: Value) -> Result<Value> {
         if !["execute", "report"].contains(&route) {
             return Err(Error::config("Invalid Tempo capability route"));
         }
@@ -216,6 +227,130 @@ impl Bundle {
         Ok(value)
     }
 }
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Intent {
+    pub id: String,
+    pub recipient: String,
+    pub amount: String,
+    pub action: String,
+    pub merchant: String,
+    pub context: Value,
+}
+impl Intent {
+    pub fn read(recipient: &str, quantity: &str) -> Result<Self> {
+        if !address(recipient) {
+            return Err(Error::usage("RECIPIENT must be a 0x EVM address"));
+        }
+        amount(quantity)?;
+        let id = env_value("ALLOWIT_REQUEST_ID");
+        request_id(&id)?;
+        let action = env_value("ALLOWIT_EXECUTION_ACTION");
+        let context = env_value("ALLOWIT_EXECUTION_CONTEXT_JSON");
+        if context.len() > 16_384 {
+            return Err(Error::config("Execution context exceeds 16 KB"));
+        }
+        let context: Value = if context.is_empty() {
+            json!({})
+        } else {
+            serde_json::from_str(&context).map_err(|_| {
+                Error::config("ALLOWIT_EXECUTION_CONTEXT_JSON must be a JSON object")
+            })?
+        };
+        if !context.is_object() {
+            return Err(Error::config(
+                "ALLOWIT_EXECUTION_CONTEXT_JSON must be a JSON object",
+            ));
+        }
+        Ok(Self {
+            id,
+            recipient: recipient.to_ascii_lowercase(),
+            amount: quantity.into(),
+            action: if action.is_empty() {
+                "transfer".into()
+            } else {
+                action
+            },
+            merchant: env_value("ALLOWIT_EXECUTION_MERCHANT"),
+            context,
+        })
+    }
+}
+pub(crate) fn checked_plan(
+    bundle: &Bundle,
+    intent: &Intent,
+    result: &Value,
+) -> Result<allowit_tempo::Transaction> {
+    let prepared = result.get("prepared").unwrap_or(result);
+    let config: allowit_tempo::Config = serde_json::from_value(bundle.value["config"].clone())
+        .map_err(|_| Error::config("Invalid Tempo SDK configuration"))?;
+    let policy: allowit_tempo::Policy = serde_json::from_value(bundle.value["policy"].clone())
+        .map_err(|_| Error::config("Invalid Tempo SDK policy"))?;
+    let transaction: allowit_tempo::Transaction =
+        serde_json::from_value(prepared["transaction"].clone()).map_err(|_| uncertain())?;
+    let context = serde_json::to_string(&intent.context)
+        .map_err(|_| Error::config("Invalid execution context"))?;
+    allowit_tempo::validate_execution_request(
+        &config,
+        &policy,
+        &transaction,
+        &intent.id,
+        &intent.recipient,
+        &intent.amount,
+        &intent.action,
+        &intent.merchant,
+        Some(&context),
+    )
+    .map_err(|_| {
+        Error::config(
+            "Tempo wallet plan failed exact request, policy and authority-signature validation",
+        )
+    })?;
+    if prepared["operation"]["id"] != intent.id
+        || prepared["operation"]["policyId"] != policy.id
+        || prepared["operation"]["method"] != "execute"
+    {
+        return Err(uncertain());
+    }
+    Ok(transaction)
+}
+pub(crate) fn prepare(bundle: &Bundle, intent: &Intent) -> Result<(Value, i32)> {
+    let policy = bundle.value["policy"]["id"].as_str().unwrap_or_default();
+    let result = bundle.call(
+        "execute",
+        json!({"policyId":policy,"requestId":intent.id,
+        "recipient":intent.recipient,"amount":intent.amount,"action":intent.action,
+        "merchant":intent.merchant,"context":intent.context}),
+    )?;
+    if result["requestId"]
+        .as_str()
+        .is_some_and(|id| id != intent.id)
+        || result["policyId"].as_str().is_some_and(|id| id != policy)
+    {
+        return Err(uncertain());
+    }
+    let code = match result["decision"].as_str() {
+        Some("deny") => 20,
+        Some("awaiting_input")
+            if result["requestId"] == intent.id && result["policyId"] == policy =>
+        {
+            11
+        }
+        Some("settled") => {
+            checked_receipt(&result, policy, &intent.id, None)?;
+            if result["operation"]["status"] != "settled" {
+                return Err(uncertain());
+            }
+            6
+        }
+        Some("allow") => {
+            checked_plan(bundle, intent, &result)?;
+            10
+        }
+        _ => return Err(uncertain()),
+    };
+    Ok((result, code))
+}
 pub(crate) fn run(args: &[String], stdout: &mut String, stderr: &mut String) -> Result<i32> {
     let Some(command) = args.first() else {
         stderr.push_str(USAGE);
@@ -237,11 +372,11 @@ pub(crate) fn run(args: &[String], stdout: &mut String, stderr: &mut String) -> 
         }
     }
     let expected = match command.as_str() {
-        "import" | "status" => 1,
-        "execute" | "submit" => 2,
+        "import" | "status" | "resume" => 1,
+        "execute" | "submit" | "pay" => 2,
         _ => {
             return Err(Error::usage(
-                "Unknown Tempo command (import, execute, submit, status)",
+                "Unknown Tempo command (import, execute, pay, resume, submit, status)",
             ));
         }
     };
@@ -301,88 +436,16 @@ pub(crate) fn run(args: &[String], stdout: &mut String, stderr: &mut String) -> 
         return Ok(0);
     }
     let bundle = Bundle::read(&bundle_path())?;
+    if matches!(command.as_str(), "pay" | "resume") {
+        return crate::tempo_pay::run(&bundle, command, &pos, json_output, stdout, stderr);
+    }
     let policy_id = bundle.value["policy"]["id"].as_str().unwrap();
     let (result, code) = match command.as_str() {
         "execute" => {
-            if !address(pos[0]) {
-                return Err(Error::usage("RECIPIENT must be a 0x EVM address"));
-            }
-            amount(pos[1])?;
-            let id = env_value("ALLOWIT_REQUEST_ID");
-            request_id(&id)?;
-            let action = env_value("ALLOWIT_EXECUTION_ACTION");
-            let action = if action.is_empty() {
-                "transfer"
-            } else {
-                &action
-            };
-            let merchant = env_value("ALLOWIT_EXECUTION_MERCHANT");
-            let context = env_value("ALLOWIT_EXECUTION_CONTEXT_JSON");
-            let context: Value = if context.is_empty() {
-                json!({})
-            } else {
-                serde_json::from_str(&context).map_err(|_| {
-                    Error::config("ALLOWIT_EXECUTION_CONTEXT_JSON must be a JSON object")
-                })?
-            };
-            if !context.is_object() {
-                return Err(Error::config(
-                    "ALLOWIT_EXECUTION_CONTEXT_JSON must be a JSON object",
-                ));
-            }
-            stderr.push_str(&format!("Tempo request {id}: requesting a wallet plan; no chain transaction is broadcast by this command.\n"));
+            let intent = Intent::read(pos[0], pos[1])?;
+            stderr.push_str(&format!("Tempo request {}: requesting a wallet plan; no chain transaction is broadcast by this command.\n", intent.id));
             crate::flush_stderr(stderr);
-            let result=bundle.call("execute",json!({"policyId":policy_id,"requestId":id,"recipient":pos[0],"amount":pos[1],"action":action,"merchant":merchant,"context":context}))?;
-            let decision = result["decision"].as_str().unwrap_or_default();
-            if result["requestId"]
-                .as_str()
-                .is_some_and(|other| other != id)
-                || result["policyId"]
-                    .as_str()
-                    .is_some_and(|other| other != policy_id)
-            {
-                return Err(uncertain());
-            }
-            let code = match decision {
-                "deny" => 20,
-                "awaiting_input" => {
-                    if result["requestId"] != id || result["policyId"] != policy_id {
-                        return Err(uncertain());
-                    }
-                    11
-                }
-                "settled" => {
-                    checked_receipt(&result, policy_id, &id, None)?;
-                    if result["operation"]["status"] != "settled" {
-                        return Err(uncertain());
-                    }
-                    6
-                }
-                "allow" => {
-                    let prepared = result.get("prepared").unwrap_or(&result);
-                    let config: allowit_tempo::Config =
-                        serde_json::from_value(bundle.value["config"].clone())
-                            .map_err(|_| Error::config("Invalid Tempo SDK configuration"))?;
-                    let policy: allowit_tempo::Policy =
-                        serde_json::from_value(bundle.value["policy"].clone())
-                            .map_err(|_| Error::config("Invalid Tempo SDK policy"))?;
-                    let transaction: allowit_tempo::Transaction =
-                        serde_json::from_value(prepared["transaction"].clone())
-                            .map_err(|_| uncertain())?;
-                    let context_json = serde_json::to_string(&context)
-                        .map_err(|_| Error::config("Invalid execution context"))?;
-                    allowit_tempo::validate_execution_request(&config,&policy,&transaction,&id,pos[0],pos[1],action,&merchant,Some(&context_json)).map_err(|_|Error::config("Tempo wallet plan failed exact request, policy and authority-signature validation"))?;
-                    if prepared["operation"]["id"] != id
-                        || prepared["operation"]["policyId"] != policy_id
-                        || prepared["operation"]["method"] != "execute"
-                    {
-                        return Err(uncertain());
-                    }
-                    10 // A prepared plan still needs the executor's own wallet signature and verified receipt.
-                }
-                _ => return Err(uncertain()),
-            };
-            (result, code)
+            prepare(&bundle, &intent)?
         }
         "submit" => {
             request_id(pos[0])?;
@@ -417,7 +480,12 @@ pub(crate) fn run(args: &[String], stdout: &mut String, stderr: &mut String) -> 
     stdout.push_str(&output::clean(rendered, &bundle.capability));
     Ok(code)
 }
-fn checked_receipt(value: &Value, policy: &str, id: &str, hash: Option<&str>) -> Result<()> {
+pub(crate) fn checked_receipt(
+    value: &Value,
+    policy: &str,
+    id: &str,
+    hash: Option<&str>,
+) -> Result<()> {
     let op = &value["operation"];
     if op["id"] != id
         || op["policyId"] != policy

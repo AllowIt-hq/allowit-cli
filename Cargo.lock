@@ -21,6 +21,7 @@ dependencies = [
  "base64 0.22.1",
  "bs58",
  "data-encoding",
+ "k256",
  "libc",
  "num-bigint",
  "num-traits",
@@ -29,7 +30,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sha3",
  "url",
+ "zeroize",
 ]
 
 [[package]]
