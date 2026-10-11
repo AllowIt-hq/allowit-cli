@@ -75,6 +75,15 @@ struct PreparedOperation {
     instance_slot: u64,
     decision_code: String,
     simulation: Simulation,
+    #[serde(default, deserialize_with = "present_bool")]
+    blockhash_expired: Option<bool>,
+    #[serde(default, deserialize_with = "present_bool")]
+    retry_preparation_allowed: Option<bool>,
+}
+fn present_bool<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<bool>, D::Error> {
+    bool::deserialize(deserializer).map(Some)
 }
 fn unavailable() -> allowit_native::error::Error {
     allowit_native::error::Error::uncertain(
@@ -212,9 +221,35 @@ impl Reporter {
             || operation.nonce != response.approval.nonce
             || operation.revision != response.approval.policy_revision
             || operation.decision_code != response.request.decision_code
+            || response.request.operation_id != identity.operation_id
+            || response.request.input_digest != identity.digest()?
+            || response.request.vault_policy_id != self.policy_id
+            || response.request.recipient != identity.recipient
+            || response.request.amount_units != allowit_native::policy::units(&identity.amount)?
+            || response.request.action != identity.action
+            || response.request.merchant != identity.merchant
+            || response.request.context_hash != identity.context_hash
+            || response.approval.operation_id != identity.operation_id
+            || response.approval.policy_id != self.policy_id
+            || response.approval.request_digest != response.request.digest()?
+            || response.approval.recipient != identity.recipient
+            || response.approval.amount_units != response.request.amount_units.to_string()
+            || response.approval.custody_program != response.binding.custody
+            || response.approval.vault != response.binding.vault
+            || response.approval.mint != response.binding.mint
+            || response.approval.executor != response.binding.executor
+            || response.approval.authority != response.binding.authority
         {
             return Err(unavailable());
         }
+        let expired = match (
+            operation.blockhash_expired,
+            operation.retry_preparation_allowed,
+        ) {
+            (None, None) => false,
+            (Some(true), Some(true)) => true,
+            _ => return Err(unavailable()),
+        };
         let message = base64::engine::general_purpose::STANDARD
             .decode(response.message)
             .map_err(|_| unavailable())?;
@@ -227,6 +262,12 @@ impl Reporter {
             || operation.simulation.transaction_bytes != partial_transaction.len()
         {
             return Err(unavailable());
+        }
+        if expired {
+            return Err(allowit_native::error::Error::config(format!(
+                "Unsigned native approval for request {} expired; no executor proof was signed. Retain this request ID and its original approval. The owner must authorize an explicit replacement before using a fresh request ID; retrying this ID returns the same expired approval.",
+                identity.operation_id
+            )));
         }
         Ok(AuthorizedExecution {
             binding: response.binding,
@@ -428,6 +469,27 @@ mod tests {
     }
     #[test]
     fn scoped_execute_request_accepts_only_the_canonical_authority_partial() {
+        check_authorization_response("live");
+    }
+    #[test]
+    fn expired_unsigned_response_is_actionable_but_never_authorizes_signing() {
+        check_authorization_response("expired");
+    }
+    #[test]
+    fn expired_response_rejects_invalid_flags_and_substituted_bindings() {
+        for case in [
+            "missing-retry-flag",
+            "false-flags",
+            "null-flag",
+            "string-flag",
+            "unknown-field",
+            "changed-digest",
+            "changed-binding",
+        ] {
+            check_authorization_response(case);
+        }
+    }
+    fn check_authorization_response(case: &str) {
         let owner = seeded(1, "AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9");
         let executor = seeded(2, "9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu");
         let authority = seeded(3, "GyGKxMyg1p9SsHfm15MkNUu1u9TN2JtTspcdmrtGUdse");
@@ -526,7 +588,7 @@ mod tests {
         let partial = transaction
             .partially_signed(&[(authority.public_key(), authority.sign(&transaction.message))])
             .unwrap();
-        let response = json!({
+        let mut response = json!({
             "binding": &binding,
             "request": &request,
             "approval": &approval,
@@ -556,6 +618,30 @@ mod tests {
                 "simulation": {"contextSlot":99,"unitsConsumed":10000,"transactionBytes":partial.len()},
             },
         });
+        if case != "live" {
+            response["operation"]["blockhashExpired"] = json!(true);
+            response["operation"]["retryPreparationAllowed"] = json!(true);
+        }
+        match case {
+            "missing-retry-flag" => {
+                response["operation"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("retryPreparationAllowed");
+            }
+            "false-flags" => {
+                response["operation"]["blockhashExpired"] = json!(false);
+                response["operation"]["retryPreparationAllowed"] = json!(false);
+            }
+            "null-flag" => response["operation"]["blockhashExpired"] = Value::Null,
+            "string-flag" => response["operation"]["blockhashExpired"] = json!("true"),
+            "unknown-field" => {
+                response["operation"]["additionalOwnerOperationAllowed"] = json!(true)
+            }
+            "changed-digest" => response["request"]["inputDigest"] = json!(digest(b"changed")),
+            "changed-binding" => response["binding"]["executor"] = json!(owner.public_key()),
+            _ => (),
+        }
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {
@@ -605,9 +691,27 @@ mod tests {
             policy.id,
         )
         .unwrap();
-        let authorized = reporter.authorize(&identity, &context).unwrap();
-        assert_eq!(authorized.message, transaction.message);
-        assert_eq!(authorized.partial_transaction, partial);
+        let result = reporter.authorize(&identity, &context);
+        if case == "live" {
+            let authorized = result.unwrap();
+            assert_eq!(authorized.message, transaction.message);
+            assert_eq!(authorized.partial_transaction, partial);
+        } else {
+            let error = result.err().unwrap();
+            if case == "expired" {
+                assert_eq!(error.code, 3);
+                assert!(error.message.contains("server-authorize-001"));
+                assert!(error.message.contains("no executor proof was signed"));
+                assert!(error.message.contains("same expired approval"));
+            } else {
+                assert_eq!(error.code, 5, "{case}");
+                assert!(
+                    error.message.contains("acknowledgment unavailable"),
+                    "{case}"
+                );
+            }
+            assert!(!error.message.contains("native-report."));
+        }
         server.join().unwrap();
     }
     #[test]
