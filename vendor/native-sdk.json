@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-  "commit": "7431732a2d3c35eb6b124e761b9cac1e7a4630e9",
+  "commit": "db3693b4b9f977f734deec9f1b439b1053852c0d",
   "crate": "native-rust",
   "submodule": {
     "path": "repos/AllowIt-hq--allowit-sdk",
@@ -52,7 +52,7 @@
       "src/bin/allowit.rs": "56c4a94f3a15ec9d3a74a6bc40ea7276cd0b0f120f32323cf484714fa5a9cd4c",
       "src/compiler.rs": "a9dc56d3646404eba1084cf00402550bfd0b533b3e39b61864be1c73eb7b76c9",
       "src/editing.rs": "e8d921bea99d9d5516843859c6b481a580e1fead9d9034677d66c87beb142cc4",
-      "src/lib.rs": "a2da95f26e37899980de4172be8a14958afc0f53d637028701a0dc6c759835de",
+      "src/lib.rs": "d68327e7b75ce3d3c9afbd026c5e654ab40d06355f3e00a5e0366eb8af1d1f9b",
       "src/lsp.rs": "2ad4b1d81c0ff93b60eba87a922d359f83fe838f76ba3acb41c95c3905b0778d",
       "src/params.rs": "70f061e33b3017c44c0994cdc7660147edced1533ac6388e1db0183348d93acd",
       "src/prelude.rs": "4366205b787568f3fc1966c3f1c30d762a38b3e8aae624a665a436dcfa87d3ad",
@@ -61,13 +61,24 @@
       "src/readability.rs": "5432fd2bdb7e27e63f10c49787fa45d0f3d6fdab84990bae0ede363b00d2d983",
       "src/registry.rs": "956584958b0408d0580e1349d8c9eab1d3f0edbd89c7574ba36f47bb3e53d15e",
       "src/requirements.rs": "ee3775b0aae5de261e68eea02597536e5e3274b244fc5b84bae7d37aa1c9dd8f",
-      "src/runtime.rs": "528cce5cfd0599cb1b1e4dc8ddf980223d99d32fe4c773337cd7a02eeaa6c24a",
+      "src/runtime.rs": "78218ca63d16ce4ee71b407feff5881a97e1f5a18b68e01ef4a28b519678bfae",
       "src/spending.rs": "06e6a022df74c7ad33745ea11ec97166cda1f2e059e707aecf82176a5ddac15d",
       "src/trace.rs": "b8d4a89465dfc825f5a1820ddf2203bf7208c6b144e64c708a559af72331a626",
       "src/typed_workflow.rs": "5dfda6b5002c4590c0a0963e8bcda7e8a7dfc27e79b63ee311062f6a539de574",
       "src/types.rs": "0fd14cf43b16ded99d0f7e9aac5cba66a82918c8bd81a21e560412b4f05aaed1",
       "src/v1.rs": "d11bcc2046d28b32f6b65b743941d54176a12940699f9adbf19f5242f41bd66e",
       "src/validation.rs": "bd3a192dcbdbf5dbabe8a6ec5bcf8c232e0d0bf38c92f57272fa9913b7b58c40"
+    }
+  },
+  "tempoSdk": {
+    "path": "tempo-rust",
+    "package": "allowit-tempo",
+    "defaultFeatures": true,
+    "features": [],
+    "files": {
+      "Cargo.lock": "a6bf75ba8e56af60799795db42a46b737763d81a0937fab54516e5e97ece5718",
+      "Cargo.toml": "5a94499e1c5588b4d12a7158b1375e0250450d0bfdfc70c4dbea8d55fa09affd",
+      "src/lib.rs": "1d7ab822fa43b963cff18d4ef3aba27ecd11a8fae9d18124e697796ff2f595dc"
     }
   },
   "licenses": {

@@ -1,0 +1,28 @@
+Tempo execution uses an owner-exported, policy-scoped capability.
+
+  allowit tempo import EXECUTOR_JSON
+  allowit tempo execute RECIPIENT AMOUNT [--json]
+  allowit tempo submit REQUEST_ID TRANSACTION_HASH [--json]
+  allowit tempo status REQUEST_ID [--json]
+
+Configuration:
+  ALLOWIT_TEMPO_BUNDLE  executor bundle (default .allowit-tempo/executor.json)
+  ALLOWIT_URL           optional origin, must match the exported origin
+  ALLOWIT_REQUEST_ID    explicit request identity; required for execute
+  ALLOWIT_EXECUTION_ACTION        default transfer
+  ALLOWIT_EXECUTION_MERCHANT      optional merchant
+  ALLOWIT_EXECUTION_CONTEXT_JSON  bounded runtime context object
+  ALLOWIT_CA_FILE                 optional extra PEM roots
+
+Execute evaluates the exact policy and validates the authority-signed Tempo
+wallet plan. It prints that plan, spends nothing and exits 10. The designated
+executor signs and sends through its own Tempo wallet. Submit reports only
+that transaction's hash; settled requires a backend-verified receipt.
+
+Never give the agent a server authority key. Owner lifecycle operations stay
+in the browser. No owner or executor private-key file is read by these commands.
+Preserve the same request ID and exact intent after an uncertain outcome.
+
+Exit codes: 0 imported/settled, 2 usage, 3 configuration, 5 uncertain,
+6 already-settled execute replay,
+10 wallet plan prepared, 11 awaiting owner input, 12 submitted, 20 denied/failed.

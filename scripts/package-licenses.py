@@ -41,6 +41,7 @@ def lock_packages(text):
 
 
 def validate(root):
+    sdk = native_sdk.verify(root)
     directory = root / 'THIRD_PARTY_LICENSES'
     records = json.loads((directory / 'registry-index.json').read_text())
     found = {}
@@ -58,11 +59,12 @@ def validate(root):
             if file.is_symlink() or hashlib.sha256(file.read_bytes()).hexdigest() != item['sha256']:
                 raise ValueError('Notice file is missing or changed')
         found[identity] = record
-    for package in lock_packages((root / 'Cargo.lock').read_text()):
-        if package.get('source', '').startswith('registry+'):
-            record = found.get((package['name'], package['version']))
-            if not record or package['checksum'] != record['cargoChecksum']:
-                raise ValueError('Current lockfile dependency has no matching notices')
+    for label, lock in [('Current', root / 'Cargo.lock'), ('SDK Tempo', root / native_sdk.SUBMODULE / native_sdk.TEMPO_CRATE / 'Cargo.lock')]:
+        for package in lock_packages(lock.read_text()):
+            if package.get('source', '').startswith('registry+'):
+                record = found.get((package['name'], package['version']))
+                if not record or package['checksum'] != record['cargoChecksum']:
+                    raise ValueError(label + ' lockfile dependency has no matching notices')
     for file in ['LICENSE', 'THIRD_PARTY_LICENSES/README.md', 'THIRD_PARTY_LICENSES/toolchain-index.json']:
         if not (root / file).is_file() or (root / file).is_symlink():
             raise ValueError('Required binary license material is missing')
@@ -73,7 +75,7 @@ def validate(root):
         file = directory / relative
         if file.is_symlink() or hashlib.sha256(file.read_bytes()).hexdigest() != item['sha256']:
             raise ValueError('Toolchain notice is missing or changed')
-    return native_sdk.verify(root)
+    return sdk
 
 
 def package(root, dist):

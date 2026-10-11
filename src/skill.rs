@@ -242,14 +242,14 @@ impl Skill {
         } else {
             out += &format!("Policy:     {id}\n");
         }
-        if let Some(c) = self.contract() {
-            if !text(&c["binding"]["irHash"]).is_empty() {
-                out += &format!(
-                    "Binding:    IR {}, registry {}\n",
-                    short(text(&c["binding"]["irHash"])),
-                    text(&c["binding"]["registryVersion"])
-                );
-            }
+        if let Some(c) = self.contract()
+            && !text(&c["binding"]["irHash"]).is_empty()
+        {
+            out += &format!(
+                "Binding:    IR {}, registry {}\n",
+                short(text(&c["binding"]["irHash"])),
+                text(&c["binding"]["registryVersion"])
+            );
         }
         out += &format!(
             "Network:    {} ({})\n",

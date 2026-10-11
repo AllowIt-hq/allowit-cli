@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Pin, update and verify the canonical SDK Git submodule; no credentials.
 
-One gitlink supplies three Cargo path dependencies: the native Rust crate, its
-PaySH interface crate and the root policy SDK crate with canonical typed
-workflow types.
+One gitlink supplies four Cargo path dependencies: the native Rust crate, its
+PaySH interface crate, the root policy SDK crate with canonical typed workflow
+types and the Tempo execution verifier.
 
 Builds, provenance and license packaging share `verify`. `update` checks out an
 exact SDK commit; `pin` records the checked-out commit. Both stage the gitlink
@@ -28,6 +28,10 @@ POLICY_PACKAGE = 'allowit-sdk'
 POLICY_FEATURES = ['std', 'typed-workflow']
 POLICY_DEPENDENCY = (f'allowit-policy-sdk = {{ package = "{POLICY_PACKAGE}", path = "{SUBMODULE}", '
                      f'default-features = false, features = {json.dumps(POLICY_FEATURES)} }}')
+TEMPO_CRATE = 'tempo-rust'
+TEMPO_PACKAGE = 'allowit-tempo'
+TEMPO_DEPENDENCY = f'{TEMPO_PACKAGE} = {{ path = "{SUBMODULE}/{TEMPO_CRATE}" }}'
+TEMPO_REVIEW_PIN = '7431732a2d3c35eb6b124e761b9cac1e7a4630e9'
 INTERFACE = 'crates/paysh-interface'
 METADATA = 'vendor/native-sdk.json'
 LICENSES = ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/Aeneas-Apache-2.0.txt')
@@ -151,6 +155,28 @@ def interface_sources(sdk, commit):
     return blobs
 
 
+def tempo_sources(sdk, commit):
+    """The complete published Tempo crate, bound to regular immutable Git blobs.
+
+    Keep Cargo discovery closed inside this independent crate: no build script,
+    nested Cargo config, symlink or unrecorded input can alter a release build.
+    """
+    crate = sdk / TEMPO_CRATE
+    if crate.is_symlink() or not crate.is_dir():
+        raise ValueError('SDK Tempo crate must be a real directory')
+    if pinned(sdk, commit, TEMPO_CRATE + '/build.rs') or os.path.lexists(crate / 'build.rs'):
+        raise ValueError('SDK Tempo crate must not have a build script')
+    blobs = crate_blobs(sdk, commit, TEMPO_CRATE)
+    tracked = {name[len(TEMPO_CRATE) + 1:] for name in listed(sdk, TEMPO_CRATE)}
+    if not {'Cargo.toml', 'Cargo.lock', 'src/lib.rs'}.issubset(blobs) or set(blobs) != tracked or inventory(crate) != tracked:
+        raise ValueError('SDK Tempo crate file set differs from its pinned commit')
+    for name in blobs:
+        if name not in {'Cargo.toml', 'Cargo.lock', 'LICENSE', 'LICENSE.md'} and not re.fullmatch(r'(?:src/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.rs|tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.(?:rs|json))', name):
+            raise ValueError('Unexpected SDK Tempo crate file: ' + name)
+    unchanged(crate, blobs)
+    return blobs
+
+
 def recorded(value, sources, label):
     """Compare a metadata {file: digest} map with the commit's blobs."""
     if not isinstance(value, dict) or set(value) != set(sources):
@@ -170,6 +196,60 @@ def inventory(crate):
                 raise ValueError('SDK source must contain only regular files')
         names.update(Path(directory, name).relative_to(crate).as_posix() for name in files)
     return names
+
+
+def tempo_review(root):
+    """Opt-in local review overlay. Distribution verification stays pinned by default.
+
+    The manifest is supplied outside the repository by the reviewer and binds
+    both first-party Cargo inputs and the complete new crate file set. It never
+    permits modifications to any existing pinned SDK source or discovery input.
+    """
+    selected = os.environ.get('ALLOWIT_TEMPO_REVIEW_MANIFEST')
+    if not selected:
+        return None
+    manifest = Path(selected)
+    if not manifest.is_absolute() or manifest.is_symlink() or not manifest.is_file():
+        raise ValueError('Tempo review requires an explicit regular manifest file')
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('Duplicate Tempo review manifest field')
+            result[key] = value
+        return result
+    try:
+        review = json.loads(manifest.read_text(), object_pairs_hook=unique)
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError('Invalid Tempo review manifest') from error
+    if (not isinstance(review, dict) or set(review) != {'version', 'kind', 'baseCommit', 'crate', 'package', 'files', 'parentFiles'}
+            or review['version'] != 1 or review['kind'] != 'tempo-sdk-worktree-review' or review['baseCommit'] != TEMPO_REVIEW_PIN
+            or review['crate'] != 'tempo-rust' or review['package'] != {'name': 'allowit-tempo', 'features': []}):
+        raise ValueError('Tempo review manifest identity differs from the reviewed overlay')
+    root = Path(root).resolve()
+    for relative in [SUBMODULE, SUBMODULE + '/tempo-rust']:
+        current = root
+        for part in PurePosixPath(relative).parts:
+            current /= part
+            if current.is_symlink() or not current.is_dir():
+                raise ValueError('Tempo review directory must not be a symlink')
+    crate = root / SUBMODULE / 'tempo-rust'
+    files, parents = review['files'], review['parentFiles']
+    if (not isinstance(files, dict) or not {'Cargo.toml', 'Cargo.lock', 'src/lib.rs'}.issubset(files)
+            or not isinstance(parents, dict) or set(parents) != {'Cargo.toml', 'Cargo.lock'}):
+        raise ValueError('Tempo review manifest omits build inputs')
+    for name in files:
+        if name not in {'Cargo.toml', 'Cargo.lock'} and not re.fullmatch(r'src/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.rs', name):
+            raise ValueError('Unreviewed Tempo crate file')
+    if inventory(crate) != set(files):
+        raise ValueError('Tempo review crate file set changed')
+    for directory, expected in [(crate, files), (root, parents)]:
+        for name, fingerprint in expected.items():
+            candidate = directory / name
+            if (not isinstance(fingerprint, str) or not re.fullmatch(r'[0-9a-f]{64}', fingerprint)
+                    or candidate.is_symlink() or not candidate.is_file() or sha256(candidate) != fingerprint):
+                raise ValueError('Tempo review input changed: ' + name)
+    return review
 
 
 def discovery(repo, commit, paths=DISCOVERY, owner='SDK', against='its pinned commit'):
@@ -218,17 +298,29 @@ def checkout(root):
     top = command(sdk, 'rev-parse', '--show-toplevel', capture_output=True, text=True) if sdk.is_dir() else None
     if not top or top.returncode or Path(top.stdout.strip()).resolve() != sdk.resolve():
         raise ValueError('SDK submodule is not initialized; run git submodule update --init --recursive')
-    if git(sdk, 'status', '--porcelain', '--untracked-files=all', '--ignored'):
+    status = git(sdk, 'status', '--porcelain', '--untracked-files=all', '--ignored')
+    review = tempo_review(root)
+    if review:
+        if pinned(sdk, review['baseCommit'], 'tempo-rust') or listed(sdk, 'tempo-rust'):
+            raise ValueError('Tempo review may add only a new untracked crate')
+        if any(line[:2] not in {'??', '!!'} or not line[3:].startswith('tempo-rust/') for line in status.splitlines()):
+            raise ValueError('Tempo review cannot modify pinned SDK files')
+    elif status:
         raise ValueError('SDK submodule must be clean')
     return sdk
 
 
-def verify(root):
+def verify(root, allow_review=False):
     """Check the parent pin, clean submodule source, license bytes and the Cargo
     discovery inputs from the SDK root up to, not including, the CLI root; return the metadata."""
     root = Path(root).resolve()
+    if os.environ.get('ALLOWIT_TEMPO_REVIEW_MANIFEST') and not allow_review:
+        raise ValueError('Tempo worktree review cannot produce release provenance or packaging')
     sdk = json.loads((root / METADATA).read_text())
     commit = sdk.get('commit')
+    review = tempo_review(root)
+    if review and review['baseCommit'] != commit:
+        raise ValueError('Tempo review differs from the pinned SDK commit')
     if not isinstance(commit, str) or not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise ValueError('SDK pin must be a full commit')
     if sdk.get('repository') != REPOSITORY or sdk.get('crate') != CRATE or sdk.get('submodule') != {'path': SUBMODULE, 'url': URL}:
@@ -236,11 +328,12 @@ def verify(root):
     module = command(root, 'config', '--file', '.gitmodules', '--get-regexp', r'^submodule\.', capture_output=True, text=True).stdout.split('\n')
     if sorted(filter(None, module)) != [f'submodule.{SUBMODULE}.path {SUBMODULE}', f'submodule.{SUBMODULE}.url {URL}']:
         raise ValueError('.gitmodules must name only the canonical SDK submodule')
-    # Exactly the two dependency lines may name the SDK, so no other line can add
+    # Exactly the three direct dependency lines may name the SDK, so no other line can add
     # a feature (for example `allowit-policy-sdk/compiler`) through unification.
     mentions = [line for line in (root / 'Cargo.toml').read_text().splitlines()
-                if any(name in line for name in (SUBMODULE, 'allowit-native', 'allowit-policy-sdk', POLICY_PACKAGE))]
-    if sorted(mentions) != sorted([DEPENDENCY, POLICY_DEPENDENCY]):
+                if any(name in line for name in (SUBMODULE, 'allowit-native', 'allowit-policy-sdk', POLICY_PACKAGE, TEMPO_PACKAGE))]
+    expected_dependencies = [DEPENDENCY, POLICY_DEPENDENCY, TEMPO_DEPENDENCY]
+    if sorted(mentions) != sorted(expected_dependencies):
         raise ValueError('Cargo must build the SDK from its submodule')
     if listed(root, *COPIES):
         raise ValueError('Tracked SDK source copies must be removed')
@@ -276,6 +369,14 @@ def verify(root):
     if not isinstance(policy, dict) or {key: value for key, value in policy.items() if key != 'files'} != policy_identity():
         raise ValueError('SDK policy crate identity differs from the Cargo dependency')
     recorded(policy.get('files'), policy_sources(sdk_root, commit), 'policy crate')
+    tempo = sdk.get('tempoSdk')
+    if review:
+        if tempo is not None:
+            raise ValueError('Tempo review cannot replace a published SDK crate')
+    else:
+        if not isinstance(tempo, dict) or tempo.get('defaultFeatures') is not True or {key: value for key, value in tempo.items() if key != 'files'} != tempo_identity():
+            raise ValueError('SDK Tempo crate identity differs from the Cargo dependency')
+        recorded(tempo.get('files'), tempo_sources(sdk_root, commit), 'Tempo crate')
     discovery(sdk_root, commit)
     # The CLI root's own Cargo inputs are first-party development files; only
     # binary provenance binds them. Directories in between are bound here.
@@ -319,6 +420,7 @@ def describe(root):
     unchanged(sdk, legal)
     interface = interface_sources(sdk, commit)
     policy = policy_sources(sdk, commit)
+    tempo = tempo_sources(sdk, commit)
     discovery(sdk, commit)
     parent(root, *INTERMEDIATE)
     return {
@@ -330,6 +432,7 @@ def describe(root):
         'unconsumed': [name for name in tracked if not consumed(name)],
         'payshInterface': {name: digest(interface[name]) for name in sorted(interface)},
         'policySdk': {**policy_identity(), 'files': {name: digest(policy[name]) for name in sorted(policy)}},
+        'tempoSdk': {**tempo_identity(), 'files': {name: digest(tempo[name]) for name in sorted(tempo)}},
         'licenses': {name: digest(legal[name]) for name in LICENSES if name in legal},
     }
 
@@ -339,6 +442,7 @@ RESOLVED = {
     'allowit-native': (CRATE, []),
     'allowit-paysh-interface': (INTERFACE, []),
     POLICY_PACKAGE: ('', POLICY_FEATURES),
+    TEMPO_PACKAGE: (TEMPO_CRATE, []),
 }
 
 
@@ -360,11 +464,12 @@ def resolved(root, *config):
         raise ValueError('Cargo could not resolve the locked dependency graph')
     metadata = json.loads(result.stdout)
     local = {p['name']: p for p in metadata['packages'] if p.get('source') is None}
-    if set(local) != {'allowit-cli', *RESOLVED}:
+    expected = dict(RESOLVED)
+    if set(local) != {'allowit-cli', *expected}:
         raise ValueError('Cargo resolves unexpected local packages')
     features = {node['id']: sorted(node.get('features', [])) for node in metadata['resolve']['nodes']}
     sdk = root / SUBMODULE
-    for name, (directory, enabled) in RESOLVED.items():
+    for name, (directory, enabled) in expected.items():
         package = local[name]
         crate = (sdk / directory).resolve()
         libraries = [t for t in package['targets'] if {'lib', 'rlib'} & set(t['kind'])]
@@ -378,6 +483,10 @@ def resolved(root, *config):
 
 def policy_identity():
     return {'path': '.', 'package': POLICY_PACKAGE, 'defaultFeatures': False, 'features': POLICY_FEATURES}
+
+
+def tempo_identity():
+    return {'path': TEMPO_CRATE, 'package': TEMPO_PACKAGE, 'defaultFeatures': True, 'features': []}
 
 
 def pin(root):
@@ -406,12 +515,16 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     try:
-        sdk = update(root, args.revision) if args.command == 'update' else pin(root) if args.command == 'pin' else verify(root)
+        if os.environ.get('ALLOWIT_TEMPO_REVIEW_MANIFEST') and args.command != 'verify':
+            raise ValueError('Tempo worktree review cannot change SDK pins')
+        sdk = update(root, args.revision) if args.command == 'update' else pin(root) if args.command == 'pin' else verify(root, allow_review=True)
         resolved(root)
     except ValueError as error:
         parser.exit(1, f'{error}\n')
     verb = 'Verified' if args.command == 'verify' else 'Staged'
     print(f'{verb} canonical SDK submodule {SUBMODULE} at {sdk["commit"]}')
+    if os.environ.get('ALLOWIT_TEMPO_REVIEW_MANIFEST'):
+        print('Tempo uses an explicit hash-bound worktree overlay; this is review evidence, not release provenance.')
 
 
 if __name__ == '__main__':

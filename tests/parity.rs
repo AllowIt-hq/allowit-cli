@@ -168,7 +168,7 @@ fn request_bytes_ids_states_and_context_match_reference() {
     server.join().unwrap();
     let calls = calls.lock().unwrap();
     assert_eq!(calls.len(), 8);
-    for pair in calls.chunks_exact(2) {
+    for pair in calls.as_chunks::<2>().0 {
         assert_eq!(pair[0], pair[1], "wire request differs");
     }
 }

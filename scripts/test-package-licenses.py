@@ -2,11 +2,13 @@
 """Catch missing license coverage and corrupted binary companion material."""
 import importlib.util
 import json
+import os
 import pathlib
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -27,7 +29,7 @@ class LicenseMaterial(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.template = tempfile.TemporaryDirectory()
-        FIXTURE.create(pathlib.Path(cls.template.name) / 'repo', ['LICENSE', 'Cargo.lock', 'Cargo.toml', 'THIRD_PARTY_LICENSES', 'vendor/native-sdk.json'])
+        FIXTURE.create(pathlib.Path(cls.template.name) / 'repo', ['.gitattributes', 'LICENSE', 'Cargo.lock', 'Cargo.toml', 'THIRD_PARTY_LICENSES', 'vendor/native-sdk.json'])
 
     @classmethod
     def tearDownClass(cls):
@@ -43,6 +45,17 @@ class LicenseMaterial(unittest.TestCase):
         self.temp.cleanup()
 
     def test_complete_current_and_historical_coverage(self):
+        MODULE.validate(self.root)
+
+    def test_autocrlf_checkout_preserves_original_notice_bytes(self):
+        notices = [file for directory in ['crates', 'toolchains'] for file in (self.root / 'THIRD_PARTY_LICENSES' / directory).rglob('*') if file.is_file()]
+        original = {file: file.read_bytes() for file in notices}
+        FIXTURE.git(self.root, 'config', 'core.autocrlf', 'true')
+        for file in notices:
+            file.unlink()
+        FIXTURE.git(self.root, 'checkout', '-q', '--', 'THIRD_PARTY_LICENSES/crates', 'THIRD_PARTY_LICENSES/toolchains')
+        for file, raw in original.items():
+            self.assertEqual(file.read_bytes(), raw, file.relative_to(self.root))
         MODULE.validate(self.root)
 
     def test_policy_sdk_dependencies_have_authentic_notices(self):
@@ -63,6 +76,35 @@ class LicenseMaterial(unittest.TestCase):
         lock = self.root / 'Cargo.lock'
         lock.write_text(lock.read_text() + '\n[[package]]\nname="unknown-example"\nversion="1.0.0"\nsource="registry+https://github.com/rust-lang/crates.io-index"\nchecksum="' + '0' * 64 + '"\n')
         with self.assertRaisesRegex(ValueError, 'Current lockfile'):
+            MODULE.validate(self.root)
+
+    def test_tempo_crypto_dependencies_have_checksum_bound_notices(self):
+        index = {(r['name'], r['version']): r for r in json.loads((self.root / 'THIRD_PARTY_LICENSES/registry-index.json').read_text())}
+        packages = {p['name']: p for p in MODULE.lock_packages((self.root / 'Cargo.lock').read_text()) if p.get('source', '').startswith('registry+')}
+        for name in ['base16ct', 'crypto-bigint', 'ecdsa', 'elliptic-curve', 'ff', 'group', 'hmac', 'k256', 'keccak', 'rfc6979', 'sec1', 'sha3']:
+            with self.subTest(package=name):
+                package = packages[name]
+                record = index[(name, package['version'])]
+                self.assertEqual(record['status'], 'covered')
+                self.assertEqual(record['cargoChecksum'], package['checksum'])
+                self.assertEqual(record['crateSha256'], package['checksum'])
+                self.assertTrue(record['files'])
+                self.assertEqual(record['url'], f"https://static.crates.io/crates/{name}/{name}-{package['version']}.crate")
+
+    def test_license_packaging_cannot_use_local_tempo_review(self):
+        with patch.dict(os.environ, {'ALLOWIT_TEMPO_REVIEW_MANIFEST': str(pathlib.Path(self.temp.name) / 'review.json')}):
+            with self.assertRaisesRegex(ValueError, 'release provenance'):
+                MODULE.package(self.root, pathlib.Path(self.temp.name) / 'dist')
+
+    def test_tempo_standalone_lock_also_requires_authentic_notices(self):
+        parent = {(p['name'], p['version']) for p in MODULE.lock_packages((self.root / 'Cargo.lock').read_text())}
+        standalone = MODULE.lock_packages((self.sdk / 'tempo-rust/Cargo.lock').read_text())
+        unique = next(p for p in standalone if p.get('source', '').startswith('registry+') and (p['name'], p['version']) not in parent)
+        index_path = self.root / 'THIRD_PARTY_LICENSES/registry-index.json'
+        index = json.loads(index_path.read_text())
+        identity = unique['name'], unique['version']
+        index_path.write_text(json.dumps([record for record in index if (record['name'], record['version']) != identity]))
+        with self.assertRaisesRegex(ValueError, 'SDK Tempo lockfile'):
             MODULE.validate(self.root)
 
     def test_corrupted_copyright_is_rejected(self):

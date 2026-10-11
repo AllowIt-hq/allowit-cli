@@ -2,13 +2,17 @@
 
 `allowit` is a native Rust CLI for AllowIt policies. Its HTTP commands send agent requests through the AllowIt service; its native policy commands use the pinned Rust SDK locally for generation, signing, receipt validation and recovery. The CLI cannot bypass the policy, owner approval or server request schema.
 
+Tempo uses the separately versioned `allowit tempo` command set. Import the owner's exported executor bundle with `allowit tempo import EXECUTOR_JSON`, set `ALLOWIT_REQUEST_ID`, then request a plan with `allowit tempo execute RECIPIENT AMOUNT`. The CLI verifies the exact request, contract call and authority signature before returning the plan (exit 10); the designated executor signs through its own Tempo wallet. Report its hash with `allowit tempo submit REQUEST_ID TRANSACTION_HASH`, or recover with `allowit tempo status REQUEST_ID`. Only a verified receipt settles a payment. `allowit tempo help` documents configuration, owner-input waiting (exit 11), settled replay (exit 6) and uncertain outcomes. These commands read the policy-scoped capability, never an owner, executor or service private key.
+
+The published Tempo SDK is verified from the same exact Git submodule commit as the native and policy libraries. Its complete crate inputs and enabled features are bound into release provenance. A separate local `ALLOWIT_TEMPO_REVIEW_MANIFEST` mode can review a new, uncommitted Tempo crate on the earlier supported SDK base; it binds that crate and the parent Cargo inputs to explicit SHA256 values. This local mode cannot replace a published Tempo crate or produce release provenance and license packages.
+
 All commands call Rust modules directly. The binary needs no Node runtime. The Go implementation under `reference/go/` is a differential test oracle; the default command and distribution build use Rust. Its historical Go module path remains unchanged.
 
 Main contains the untagged `0.3.0-dev` implementation. No native Rust GitHub Release has been published. The existing `v0.1.0` and `v0.1.1` tags identify earlier Go releases.
 
 ## Build from source
 
-Use Rust 1.85 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
+Use Rust 1.88 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
 
 Native `policy` commands require a local POSIX filesystem for private, durable journals.
 On Windows, use Linux/WSL and keep state in the Linux filesystem, not `/mnt/c` or `/mnt/d`.
@@ -168,7 +172,7 @@ Decimals are plain digits with an optional fraction: no sign, exponent, separato
 
 **Local configuration.** `ALLOWIT_POLICY_DIR` defaults to `.allowit`; `ALLOWIT_POLICY_FILE` may select another policy file. `ALLOWIT_NETWORK`, `ALLOWIT_RPC_URL`, `ALLOWIT_MINT`, `ALLOWIT_EXECUTOR`, `ALLOWIT_AUTHORITY`, and `ALLOWIT_DEPLOYMENT_FILE` configure the native profile. Import persists a public context and refuses conflicting configuration. `ALLOWIT_OWNER_KEYPAIR` is used for owner operations, `ALLOWIT_EXECUTOR_KEYPAIR` for execution, and `ALLOWIT_OWNER` supplies the public owner for execution/status. Keys are private local files. `ALLOWIT_REQUEST_ID` is required for execution and is the durable operation ID. `ALLOWIT_EXECUTION_ACTION` defaults to `transfer`; `ALLOWIT_EXECUTION_MERCHANT` and one of `ALLOWIT_EXECUTION_CONTEXT_JSON` or `ALLOWIT_EXECUTION_CONTEXT_FILE` supply the exact policy input. Context is sent to the trusted backend, so do not put credentials in it. Only an explicitly additional fund/withdraw uses both a fresh ID and `ALLOWIT_ADDITIONAL_OWNER_OPERATION=1` after an expired uncertain operation.
 
-**SDK source pin.** One Git submodule, `repos/AllowIt-hq--allowit-sdk` from `https://github.com/AllowIt-hq/allowit-sdk.git`, supplies three Cargo path dependencies: `allowit-native` (`native-rust/`), its `allowit-paysh-interface` (`crates/paysh-interface/`), and the root `allowit-sdk` policy crate as `allowit-policy-sdk` with `default-features = false, features = ["std", "typed-workflow"]` for the canonical typed workflow types and host evaluator, without the compiler. The parent gitlink pins the exact SDK commit. `vendor/native-sdk.json` records that commit, the submodule path and URL, SHA-256 hashes of the consumed files of each crate (the policy crate's `Cargo.toml` and `src/`), the native crate's unconsumed tooling, and the SDK root license files. The repository keeps no copies of SDK source or license text.
+**SDK source pin.** One Git submodule, `repos/AllowIt-hq--allowit-sdk` from `https://github.com/AllowIt-hq/allowit-sdk.git`, supplies four Cargo path dependencies: `allowit-native` (`native-rust/`), its `allowit-paysh-interface` (`crates/paysh-interface/`), the root `allowit-sdk` policy crate as `allowit-policy-sdk` with `default-features = false, features = ["std", "typed-workflow"]` for the canonical typed workflow types and host evaluator, without the compiler, and `allowit-tempo` (`tempo-rust/`) with no enabled features. The parent gitlink pins the exact SDK commit. `vendor/native-sdk.json` records that commit, the submodule path and URL, SHA-256 hashes of the consumed files of each crate (the policy crate's `Cargo.toml` and `src/` and the Tempo crate's complete input inventory), the native crate's unconsumed tooling, and the SDK root license files. The repository keeps no copies of SDK source or license text.
 
 ```sh
 python3 scripts/sync-native-sdk.py verify              # run by make test/parity/build/dist, CI, provenance and license packaging
@@ -179,11 +183,11 @@ python3 scripts/sync-native-sdk.py pin                 # record and stage the ch
 `verify` requires the following:
 
 - `.gitmodules` names only the canonical URL, the index holds a mode `160000` gitlink at the recorded commit, and the submodule is initialized and clean, including untracked and ignored files, with its `HEAD` at that commit.
-- The two Cargo dependency lines match those above exactly, including the policy SDK's feature selection. Each consumed crate's tracked and checked-out file sets match the pinned Git tree and recorded hashes. The policy crate may not have a build script.
+- The three direct Cargo dependency lines match those above exactly, including the policy SDK's feature selection. Each consumed crate's tracked and checked-out file sets match the pinned Git tree and recorded hashes. The policy and Tempo crates may not have a build script; the Tempo crate's inventory also excludes nested Cargo configuration and symlinks.
 - The SDK root's Cargo discovery inputs (`Cargo.toml`, `Cargo.lock` and everything under `.cargo/`) are regular files, not symlinks, and their file sets and bytes match the pinned commit's tree and blobs. They are checked but not separately recorded in the metadata.
 - CLI-owned directories between the CLI root and SDK (currently `repos/`) are real directories, and their Cargo discovery inputs match the CLI's committed `HEAD`; today `HEAD` has none, so none may exist, even ignored. `verify` leaves the CLI root's own Cargo inputs available for ordinary development.
 - Recorded crate and SDK license hashes match immutable Git blobs, and checked-out bytes match those same blobs. Files reached by `#[path]` or `include_str!` outside the hashed sets are bound by the clean submodule at the pinned commit.
-- `cargo metadata --locked` resolves the three crates to the submodule's manifests and `src/lib.rs`, with no build script or `links`, and enables exactly the pinned features. A `paths` override in any Cargo configuration fails. Binary provenance repeats this check.
+- `cargo metadata --locked` resolves the four crates to the submodule's manifests and `src/lib.rs`, with no build script or `links`, and enables exactly the pinned features. A `paths` override in any Cargo configuration fails. Binary provenance repeats this check.
 
 Hashes read CRLF as LF in text files, so a clean Windows `core.autocrlf` checkout verifies. Any other change fails, including one hidden by a local Git filter, `assume-unchanged`/`skip-worktree` or a replace ref. Inherited `GIT_*` variables are ignored. License packaging copies checked-out notices unchanged. `update` and `pin` hash commit blobs, refuse checkout drift, and stage the gitlink and metadata for review without committing.
 

@@ -188,6 +188,102 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(sorted(policy["files"]), sorted(fixture.git(self.sdk, "ls-files", "--", "Cargo.toml", "src").split("\n")))
         self.assertEqual(result["payshInterface"]["src/lib.rs"], blob("crates/paysh-interface/src/lib.rs"))
 
+    def test_records_published_tempo_sources_without_changing_native_release(self):
+        result = self.manifest()
+        tempo = result["sdk"]["tempoSdk"]
+        self.assertEqual({k: v for k, v in tempo.items() if k != "files"}, {
+            "path": "tempo-rust", "package": "allowit-tempo", "defaultFeatures": True, "features": []})
+        commit = fixture.git(self.sdk, "rev-parse", "HEAD")
+        blobs = provenance.native_sdk.crate_blobs(self.sdk, commit, "tempo-rust")
+        self.assertEqual(tempo["files"], {name: provenance.native_sdk.digest(raw) for name, raw in blobs.items()})
+        self.assertTrue({"Cargo.toml", "Cargo.lock", "src/lib.rs"}.issubset(tempo["files"]))
+        release = json.loads((self.sdk / "native-rust/src/release.json").read_text())
+        self.assertEqual(result["nativeRelease"], {key: release[key] for key in ["contractRevision", "sourceBundle", "artifacts"]})
+
+    def test_refuses_tempo_source_change_committed_and_repinned(self):
+        path = self.sdk / "tempo-rust/src/lib.rs"
+        path.write_text(path.read_text() + "\n// changed verifier\n")
+        fixture.commit(self.sdk, "Tempo source drift")
+        fixture.repin(self.repo)
+        with self.assertRaisesRegex(ValueError, "SDK Tempo crate differs from its pin: src/lib.rs"):
+            self.manifest()
+
+    def test_refuses_hidden_tempo_source_and_lockfile_changes(self):
+        for name in ["tempo-rust/src/lib.rs", "tempo-rust/Cargo.lock"]:
+            original = (self.sdk / name).read_bytes()
+            for flag in ["--skip-worktree", "--assume-unchanged"]:
+                with self.subTest(name=name, flag=flag):
+                    fixture.hide(self.repo, name, original + b"\n// hidden\n", flag)
+                    for action in [self.manifest, lambda: provenance.native_sdk.describe(self.repo)]:
+                        with self.assertRaisesRegex(ValueError, "checkout differs from its pinned commit"):
+                            action()
+                    fixture.git(self.sdk, "update-index", flag.replace("--", "--no-", 1), "--", name)
+                    (self.sdk / name).write_bytes(original)
+        self.manifest()
+
+    def test_refuses_tempo_identity_missing_metadata_and_hash_drift(self):
+        changes = [lambda v: v.pop("tempoSdk"), lambda v: v["tempoSdk"].update(package="other-package"),
+                   lambda v: v["tempoSdk"].update(path="../other"), lambda v: v["tempoSdk"].update(features=["compiler"]),
+                   lambda v: v["tempoSdk"].update(defaultFeatures=False), lambda v: v["tempoSdk"].update(defaultFeatures=1)]
+        for change in changes:
+            with self.subTest(change=change):
+                original = (self.repo / "vendor/native-sdk.json").read_text()
+                self.metadata(change)
+                with self.assertRaisesRegex(ValueError, "Tempo crate identity"):
+                    self.manifest()
+                (self.repo / "vendor/native-sdk.json").write_text(original)
+                fixture.commit(self.repo, "restore Tempo identity")
+        self.metadata(lambda v: v["tempoSdk"]["files"].update({"src/lib.rs": "0" * 64}))
+        with self.assertRaisesRegex(ValueError, "Tempo crate differs from its pin"):
+            self.manifest()
+
+    def test_refuses_tempo_dependency_alias_path_and_features(self):
+        path = self.repo / "Cargo.toml"
+        original = path.read_text()
+        expected = provenance.native_sdk.TEMPO_DEPENDENCY
+        self.assertIn(expected, original)
+        for replacement in [expected.replace("tempo-rust", "../other"), expected.replace("allowit-tempo =", "other-tempo ="),
+                            expected.replace(" }", ', features = ["compiler"] }'), ""]:
+            with self.subTest(replacement=replacement):
+                path.write_text(original.replace(expected, replacement))
+                with self.assertRaisesRegex(ValueError, "Cargo must build the SDK from its submodule"):
+                    provenance.native_sdk.verify(self.repo)
+        path.write_text(original)
+        path.write_text(original + '\n[features]\nextra = ["allowit-tempo/compiler"]\n')
+        with self.assertRaisesRegex(ValueError, "Cargo must build the SDK from its submodule"):
+            provenance.native_sdk.verify(self.repo)
+
+    def test_refuses_unrecorded_tempo_build_and_discovery_inputs(self):
+        for name in ["build.rs", "src/injected.rs", ".cargo/config.toml"]:
+            with self.subTest(name=name):
+                relative = "tempo-rust/" + name
+                fixture.exclude(self.repo, "/" + relative)
+                path = self.sdk / relative
+                path.parent.mkdir(exist_ok=True)
+                path.write_text("fn main() {}\n")
+                with self.assertRaisesRegex(ValueError, "submodule must be clean"):
+                    self.manifest()
+                with patch.object(provenance.native_sdk, "checkout", lambda root: root / fixture.SDK):
+                    with self.assertRaisesRegex(ValueError, "build script" if name == "build.rs" else "Tempo crate file set"):
+                        provenance.native_sdk.verify(self.repo)
+                path.unlink()
+        self.manifest()
+
+    def test_refuses_tempo_library_symlink_hidden_from_status(self):
+        name = "tempo-rust/src/lib.rs"
+        fixture.git(self.sdk, "update-index", "--skip-worktree", "--", name)
+        path = self.sdk / name
+        path.unlink()
+        path.symlink_to(self.sdk / "native-rust/src/lib.rs")
+        self.assertEqual(fixture.git(self.sdk, "status", "--porcelain", "--untracked-files=all", "--ignored"), "")
+        with self.assertRaisesRegex(ValueError, "regular files"):
+            self.manifest()
+
+    def test_release_provenance_cannot_use_local_tempo_review(self):
+        with patch.dict(os.environ, {"ALLOWIT_TEMPO_REVIEW_MANIFEST": str(Path(self.tmp.name) / "review.json")}):
+            with self.assertRaisesRegex(ValueError, "release provenance"):
+                self.manifest()
+
     def test_refuses_policy_sdk_change_committed_and_repinned(self):
         typed = self.sdk / "src/typed_workflow.rs"
         typed.write_text(typed.read_text() + "\n// drift\n")
@@ -614,9 +710,9 @@ class ResolvedTests(unittest.TestCase):
         sdk = fixture.ROOT / fixture.SDK
         with tempfile.TemporaryDirectory() as tmp:
             # Same names and versions outside the submodule, as an untrusted parent config could name.
-            for name in ["native-rust", "crates/paysh-interface"]:
+            for name in ["native-rust", "crates/paysh-interface", "tempo-rust"]:
                 shutil.copytree(sdk / name, Path(tmp) / name, ignore=shutil.ignore_patterns("target"))
-            for crate, package in [("native-rust", "allowit-native"), ("crates/paysh-interface", "allowit-paysh-interface")]:
+            for crate, package in [("native-rust", "allowit-native"), ("crates/paysh-interface", "allowit-paysh-interface"), ("tempo-rust", "allowit-tempo")]:
                 with self.subTest(package=package):
                     with self.assertRaisesRegex(ValueError, "does not build " + package):
                         provenance.native_sdk.resolved(fixture.ROOT, f'paths=["{Path(tmp) / crate}"]')
@@ -651,6 +747,25 @@ class ResolvedTests(unittest.TestCase):
         for change, message in [(feature, "unpinned features of allowit-sdk"), (missing, "unpinned features of allowit-sdk"), (build, "does not build allowit-native"), (links, "does not build allowit-sdk"), (library, "does not build allowit-sdk")]:
             with self.subTest(change=change.__name__), self.mutated(change):
                 with self.assertRaisesRegex(ValueError, message):
+                    provenance.native_sdk.resolved(fixture.ROOT)
+
+    def test_refuses_tempo_resolution_identity_and_execution_inputs(self):
+        def tempo(value):
+            return next(p for p in value["packages"] if p["name"] == "allowit-tempo")
+        def feature(value):
+            package = tempo(value)
+            next(n for n in value["resolve"]["nodes"] if n["id"] == package["id"])["features"].append("injected")
+        def build(value):
+            tempo(value)["targets"].append({"kind": ["custom-build"], "src_path": "/tmp/build.rs"})
+        def links(value):
+            tempo(value)["links"] = "injected"
+        def manifest(value):
+            tempo(value)["manifest_path"] = "/tmp/Cargo.toml"
+        def library(value):
+            next(t for t in tempo(value)["targets"] if {"lib", "rlib"} & set(t["kind"]))["src_path"] = "/tmp/lib.rs"
+        for change in [feature, build, links, manifest, library]:
+            with self.subTest(change=change.__name__), self.mutated(change):
+                with self.assertRaisesRegex(ValueError, "unpinned features of allowit-tempo" if change == feature else "does not build allowit-tempo"):
                     provenance.native_sdk.resolved(fixture.ROOT)
 
 

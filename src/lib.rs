@@ -9,6 +9,7 @@ mod policy;
 mod policy_native;
 mod request;
 mod skill;
+mod tempo;
 mod typed_request;
 mod typed_run;
 use crate::{
@@ -87,6 +88,7 @@ fn execute(args: &[String], stdout: &mut String, stderr: &mut String) -> Result<
         }
         "policy" => policy::run(&args[1..], stdout, stderr),
         "paysh" => paysh::run(&args[1..], stdout, stderr),
+        "tempo" => tempo::run(&args[1..], stdout, stderr),
         "show" | "eval" | "exec" | "status" => action(&args[0], &args[1..], stdout, stderr),
         _ => Err(Error::usage(format!(
             "unknown command {} (show, eval, exec, status, policy)",

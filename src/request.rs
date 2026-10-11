@@ -380,7 +380,7 @@ pub(crate) fn build_body(kind: &str, f: &Flags, s: &Skill, stdin: &mut dyn Read)
     Ok(b)
 }
 fn check_wallet(kind: &str, b: &Body, s: &Skill) -> Result<()> {
-    if !s.local() && !(b.recipient.is_empty() && kind == "eval") && !solana_address(&b.recipient) {
+    if !(s.local() || b.recipient.is_empty() && kind == "eval" || solana_address(&b.recipient)) {
         return Err(Error::usage(
             "--addr must be the recipient's Solana address",
         ));
