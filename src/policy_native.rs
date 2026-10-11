@@ -10,7 +10,7 @@ use allowit_native::{
     crypto::{Key, LocalSigner},
     journal::FileJournal,
     lifecycle::{PolicyLifecycle, Record},
-    native::{ExecutionRequestIdentity, Options, number},
+    native::{ExecutionRequestIdentity, Options},
     policy::{Policy, genesis},
     rpc::HttpRpc,
 };
@@ -347,6 +347,10 @@ pub(crate) fn run(
         }
         return Ok(if audit_pending { 5 } else { 0 });
     }
+    let request_id = env_value("ALLOWIT_REQUEST_ID");
+    let saved_request_id = std::env::var_os("ALLOWIT_REQUEST_ID")
+        .is_some()
+        .then_some(request_id.as_str());
     let options = match name {
         "deploy" => Options {
             amount: Some(pos[0].clone()),
@@ -365,17 +369,9 @@ pub(crate) fn run(
             amount: Some(pos[0].clone()),
             ..Options::default()
         },
-        "close" => {
-            let state = native(client.state(&policy, owner, true, None))?
-                .ok_or_else(|| Error::config("Deploy the native policy first"))?;
-            Options {
-                instance_slot: Some(native(number(&state.instance_slot))?),
-                ..Options::default()
-            }
-        }
+        "close" => native(lifecycle.close_options(&policy, owner, saved_request_id))?,
         _ => Options::default(),
     };
-    let request_id = env_value("ALLOWIT_REQUEST_ID");
     let method = if name == "tune-action" {
         "tune_action"
     } else {
@@ -426,11 +422,7 @@ pub(crate) fn run(
             owner,
             method,
             &options,
-            if std::env::var_os("ALLOWIT_REQUEST_ID").is_none() {
-                None
-            } else {
-                Some(&request_id)
-            },
+            saved_request_id,
             |tx, role| {
                 if role != "owner" {
                     return Err(allowit_native::error::Error::config(
