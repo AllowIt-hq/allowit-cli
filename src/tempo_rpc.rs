@@ -91,7 +91,7 @@ impl Rpc {
         }
         let max_gas = env_value("ALLOWIT_TEMPO_MAX_GAS");
         let max_gas = if max_gas.is_empty() {
-            1_000_000
+            1_500_000
         } else {
             max_gas
                 .parse::<u64>()

@@ -17,7 +17,7 @@ Configuration:
                                  default $XDG_STATE_HOME/allowit/tempo or
                                  $HOME/.local/state/allowit/tempo
   ALLOWIT_TEMPO_WAIT_SECONDS      finality wait, 0..600 (default 120)
-  ALLOWIT_TEMPO_MAX_GAS           gas cap, 21000..10000000 (default 1000000)
+  ALLOWIT_TEMPO_MAX_GAS           gas cap, 21000..10000000 (default 1500000)
   ALLOWIT_TEMPO_MAX_FEE           total fee cap in test dollars (default 0.1,
                                  positive, at most 1, six decimal places)
   ALLOWIT_EXECUTION_ACTION        default transfer
