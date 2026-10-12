@@ -1,0 +1,42 @@
+name: Go reference compatibility smoke
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Run the full integration regression suite
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: cli-reference-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: reference/go/go.mod
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-integration-reference
+      - name: Smoke native CLI command compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --test parity validation_and_help_match_reference -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/smoke.log"
+          grep -F '1 passed; 0 failed' "$RUNNER_TEMP/smoke.log"
+      - name: Full Go reference parity
+        if: github.event_name == 'workflow_dispatch' && inputs.full
+        run: |
+          cargo test --locked --test parity
+          make parity
