@@ -40,8 +40,6 @@ jobs:
           python3 scripts/test-tempo-sdk-review.py
           cargo fmt --check
           cargo clippy --locked --all-targets -- -D warnings
-          CARGO_TARGET_DIR="$PWD/target" cargo clippy --manifest-path repos/AllowIt-hq--allowit-sdk/native-rust/Cargo.toml --locked --all-targets -- -D warnings
-          CARGO_TARGET_DIR="$PWD/target" cargo clippy --manifest-path repos/AllowIt-hq--allowit-sdk/tempo-rust/Cargo.toml --locked --all-targets -- -D warnings
       - name: Local Rust and Go unit tests
         run: |
           cargo test --locked --lib --bins

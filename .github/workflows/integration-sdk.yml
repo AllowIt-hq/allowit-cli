@@ -23,11 +23,17 @@ jobs:
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           key: cli-integration-sdk
       - name: Verify pinned SDK source
         run: python3 scripts/sync-native-sdk.py verify
+      - name: Preserve pinned SDK lint gates
+        run: |
+          CARGO_TARGET_DIR="$PWD/target" cargo clippy --manifest-path repos/AllowIt-hq--allowit-sdk/native-rust/Cargo.toml --locked --all-targets -- -D warnings
+          CARGO_TARGET_DIR="$PWD/target" cargo clippy --manifest-path repos/AllowIt-hq--allowit-sdk/tempo-rust/Cargo.toml --locked --all-targets -- -D warnings
       - name: Smoke offline SDK policy generation through the CLI
         shell: bash
         run: |
