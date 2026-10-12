@@ -1,0 +1,39 @@
+name: SDK integration smoke
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Run the full integration regression suite
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: cli-sdk-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify pinned SDK source
+        run: python3 scripts/sync-native-sdk.py verify
+      - name: Smoke offline SDK policy generation through the CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --test native generate_is_offline_native_and_preserves_policy_instance -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/smoke.log"
+          grep -F "1 passed; 0 failed" "$RUNNER_TEMP/smoke.log"
+      - name: Full pinned SDK regressions
+        if: github.event_name == 'workflow_dispatch' && inputs.full
+        run: |
+          CARGO_TARGET_DIR="$PWD/target" cargo test --locked --manifest-path repos/AllowIt-hq--allowit-sdk/native-rust/Cargo.toml
+          CARGO_TARGET_DIR="$PWD/target" cargo test --locked --manifest-path repos/AllowIt-hq--allowit-sdk/tempo-rust/Cargo.toml

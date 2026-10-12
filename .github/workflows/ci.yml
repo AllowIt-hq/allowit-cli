@@ -30,8 +30,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools perl make
           echo CC_x86_64_unknown_linux_musl=musl-gcc >> "$GITHUB_ENV"
-      - run: make test
-      - run: make parity
+      - uses: Swatinem/rust-cache@v2
+      - name: Local source and provenance checks
+        run: |
+          python3 scripts/sync-native-sdk.py verify
+          python3 scripts/package-licenses.py
+          python3 scripts/test-package-licenses.py
+          python3 scripts/test-binary-provenance.py
+          python3 scripts/test-tempo-sdk-review.py
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+      - name: Local Rust and Go unit tests
+        run: |
+          cargo test --locked --lib --bins
+          cargo test --locked --test paysh --test vendor
+          cargo test --locked --test native -- --skip generate_is_offline_native_and_preserves_policy_instance
+          cd reference/go && go vet ./... && go test -race -count=1 ./...
+          cd ../.. && go test -race -count=1 ./integration
       - name: Build static Linux binary
         run: make dist
       - name: Check the binary is static and runs
