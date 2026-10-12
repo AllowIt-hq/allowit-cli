@@ -203,9 +203,13 @@ pub(crate) fn clean(mut s: String, token: &str) -> String {
         .collect()
 }
 pub(crate) fn json(v: &Value) -> String {
+    // MPP enables serde_json/preserve_order. Keep the established CLI output
+    // ordering while leaving typed request and identity bytes unchanged.
+    let mut v = v.clone();
+    v.sort_all_objects();
     format!(
         "{}\n",
-        serde_json::to_string_pretty(v)
+        serde_json::to_string_pretty(&v)
             .unwrap()
             .replace('<', "\\u003c")
             .replace('>', "\\u003e")
@@ -215,6 +219,8 @@ pub(crate) fn json(v: &Value) -> String {
     )
 }
 pub(crate) fn print_result(r: &Value, res: &ResultState, id: &str) -> String {
+    let mut r = r.clone();
+    r.sort_all_objects();
     let mut out = format!("state: {}\n{}\n", res.state, res.note);
     if !id.is_empty() {
         out += &format!("clientRequestId: {id}\n");
@@ -305,5 +311,17 @@ mod tests {
         assert!(!s.contains("abcdefghijklmnop"));
         assert!(!s.contains('\u{1b}'));
         assert!(!s.contains('\u{202e}'));
+    }
+    #[test]
+    fn legacy_json_and_text_keep_recursive_sorted_presentation() {
+        let value: Value = serde_json::from_str(r#"{"z":{"b":2,"a":1},"a":0}"#).unwrap();
+        assert_eq!(
+            json(&value),
+            "{\n  \"a\": 0,\n  \"z\": {\n    \"a\": 1,\n    \"b\": 2\n  }\n}\n"
+        );
+        assert_eq!(
+            print_result(&value, &ResultState::new("ready", 0, "Ready"), ""),
+            "state: ready\nReady\na: 0\nz.a: 1\nz.b: 2\n"
+        );
     }
 }

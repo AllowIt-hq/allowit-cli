@@ -52,7 +52,7 @@ pub(crate) fn request_id(value: &str) -> Result<()> {
         ))
     }
 }
-fn amount(value: &str) -> Result<()> {
+pub(crate) fn amount(value: &str) -> Result<()> {
     let parts: Vec<_> = value.split('.').collect();
     let whole = parts.first().copied().unwrap_or_default();
     if value.len() > 80
@@ -174,7 +174,7 @@ impl Bundle {
         })
     }
     pub fn call(&self, route: &str, body: Value) -> Result<Value> {
-        if !["execute", "report"].contains(&route) {
+        if !["execute", "report", "delivery"].contains(&route) {
             return Err(Error::config("Invalid Tempo capability route"));
         }
         let raw = serde_json::to_vec(&body).map_err(|_| Error::config("Invalid Tempo request"))?;
@@ -182,6 +182,7 @@ impl Bundle {
             return Err(Error::config("Tempo request exceeds 64 KB"));
         }
         let mut builder = Client::builder()
+            .retry(reqwest::retry::never())
             .redirect(Redirect::none())
             .no_proxy()
             .min_tls_version(Version::TLS_1_2)
@@ -236,6 +237,8 @@ pub(crate) struct Intent {
     pub action: String,
     pub merchant: String,
     pub context: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mpp_request: Option<allowit_tempo::MppPaymentRequest>,
 }
 impl Intent {
     pub fn read(recipient: &str, quantity: &str) -> Result<Self> {
@@ -250,7 +253,7 @@ impl Intent {
         if context.len() > 16_384 {
             return Err(Error::config("Execution context exceeds 16 KB"));
         }
-        let context: Value = if context.is_empty() {
+        let mut context: Value = if context.is_empty() {
             json!({})
         } else {
             serde_json::from_str(&context).map_err(|_| {
@@ -262,6 +265,9 @@ impl Intent {
                 "ALLOWIT_EXECUTION_CONTEXT_JSON must be a JSON object",
             ));
         }
+        // mpp's protocol crate enables preserve_order for serde_json. Keep native
+        // context identity identical to the existing engine's sorted JSON maps.
+        context.sort_all_objects();
         Ok(Self {
             id,
             recipient: recipient.to_ascii_lowercase(),
@@ -273,6 +279,7 @@ impl Intent {
             },
             merchant: env_value("ALLOWIT_EXECUTION_MERCHANT"),
             context,
+            mpp_request: None,
         })
     }
 }
@@ -290,18 +297,36 @@ pub(crate) fn checked_plan(
         serde_json::from_value(prepared["transaction"].clone()).map_err(|_| uncertain())?;
     let context = serde_json::to_string(&intent.context)
         .map_err(|_| Error::config("Invalid execution context"))?;
-    allowit_tempo::validate_execution_request(
-        &config,
-        &policy,
-        &transaction,
-        &intent.id,
-        &intent.recipient,
-        &intent.amount,
-        &intent.action,
-        &intent.merchant,
-        Some(&context),
-    )
-    .map_err(|_| {
+    let validation = if let Some(mpp) = &intent.mpp_request {
+        // A signed journal must remain verifiable after challenge expiry. Current
+        // validity is checked before authorization/signing, never on recovery.
+        allowit_tempo::validate_execution_request_mpp(
+            &config,
+            &policy,
+            &transaction,
+            &intent.id,
+            &intent.recipient,
+            &intent.amount,
+            &intent.action,
+            &intent.merchant,
+            Some(&context),
+            mpp,
+            0,
+        )
+    } else {
+        allowit_tempo::validate_execution_request(
+            &config,
+            &policy,
+            &transaction,
+            &intent.id,
+            &intent.recipient,
+            &intent.amount,
+            &intent.action,
+            &intent.merchant,
+            Some(&context),
+        )
+    };
+    validation.map_err(|_| {
         Error::config(
             "Tempo wallet plan failed exact request, policy and authority-signature validation",
         )
@@ -316,12 +341,14 @@ pub(crate) fn checked_plan(
 }
 pub(crate) fn prepare(bundle: &Bundle, intent: &Intent) -> Result<(Value, i32)> {
     let policy = bundle.value["policy"]["id"].as_str().unwrap_or_default();
-    let result = bundle.call(
-        "execute",
-        json!({"policyId":policy,"requestId":intent.id,
+    let mut body = json!({"policyId":policy,"requestId":intent.id,
         "recipient":intent.recipient,"amount":intent.amount,"action":intent.action,
-        "merchant":intent.merchant,"context":intent.context}),
-    )?;
+        "merchant":intent.merchant,"context":intent.context});
+    if let Some(mpp) = &intent.mpp_request {
+        crate::tempo_mpp::validate_intent(bundle, intent, crate::tempo_mpp::now()?)?;
+        body["mppRequest"] = json!(mpp);
+    }
+    let result = bundle.call("execute", body)?;
     if result["requestId"]
         .as_str()
         .is_some_and(|id| id != intent.id)
@@ -360,6 +387,18 @@ pub(crate) fn run(args: &[String], stdout: &mut String, stderr: &mut String) -> 
         stdout.push_str(USAGE);
         return Ok(0);
     }
+    if command == "call" {
+        let options = crate::tempo_mpp::CallOptions::parse(&args[1..])?;
+        let bundle = Bundle::read(&bundle_path())?;
+        return crate::tempo_pay::run(
+            &bundle,
+            "call",
+            &[&options.url, &options.id, &options.max_amount],
+            options.json_output,
+            stdout,
+            stderr,
+        );
+    }
     let mut pos = Vec::new();
     let mut json_output = false;
     for arg in &args[1..] {
@@ -376,7 +415,7 @@ pub(crate) fn run(args: &[String], stdout: &mut String, stderr: &mut String) -> 
         "execute" | "submit" | "pay" => 2,
         _ => {
             return Err(Error::usage(
-                "Unknown Tempo command (import, execute, pay, resume, submit, status)",
+                "Unknown Tempo command (import, execute, pay, call, resume, submit, status)",
             ));
         }
     };
@@ -518,6 +557,20 @@ fn receipt_code(value: &Value) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tempo_help_has_no_carriage_return_markers() {
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        assert_eq!(
+            run(&["--help".into()], &mut stdout, &mut stderr).unwrap(),
+            0
+        );
+        assert!(stderr.is_empty());
+        assert!(!stdout.contains('\r'));
+        let shown = output::clean(stdout, "");
+        assert!(!shown.contains("?\n"));
+        assert!(shown.contains("allowit tempo call URL --id REQUEST_ID --max-amount AMOUNT"));
+    }
     #[test]
     fn exact_amounts_refuse_rounding_and_exponents() {
         for v in ["0", "0.0000001", "1e2", "-1", "01", "1.", "NaN"] {

@@ -290,6 +290,16 @@ impl Chain for Rpc {
         }
         if status == 1 {
             check_transfer(&receipt, token, &tx.to, &intent.recipient, &intent.amount)?;
+            if let Some(mpp) = &intent.mpp_request {
+                check_mpp_transfer(
+                    &receipt,
+                    token,
+                    &tx.to,
+                    &intent.recipient,
+                    &intent.amount,
+                    &allowit_tempo::mpp_memo(&mpp.challenge).map_err(|_| unknown())?,
+                )?;
+            }
         }
         Ok(Some(Finality {
             block_number: u64::try_from(block_number).map_err(|_| unknown())?,
@@ -368,11 +378,93 @@ fn check_transfer(
     }
     Ok(())
 }
+fn check_mpp_transfer(
+    receipt: &Value,
+    token: &str,
+    vault: &str,
+    recipient: &str,
+    amount: &str,
+    memo: &str,
+) -> Result<()> {
+    let topic = allowit_tempo::hex(&allowit_tempo::keccak(
+        "TransferWithMemo(address,address,uint256,bytes32)",
+    ));
+    let sender = format!("0x{}{}", "0".repeat(24), &vault[2..]);
+    let receiver = format!("0x{}{}", "0".repeat(24), &recipient[2..]);
+    let data = format!(
+        "0x{:064x}",
+        allowit_tempo::units(amount).map_err(|_| unknown())?
+    );
+    let count = receipt["logs"]
+        .as_array()
+        .ok_or_else(unknown)?
+        .iter()
+        .filter(|log| {
+            eq_hex(&log["address"], token)
+                && log["removed"] != true
+                && eq_hex(&log["data"], &data)
+                && log["topics"].as_array().is_some_and(|t| {
+                    t.len() == 4
+                        && eq_hex(&t[0], &topic)
+                        && eq_hex(&t[1], &sender)
+                        && eq_hex(&t[2], &receiver)
+                        && eq_hex(&t[3], memo)
+                })
+        })
+        .count();
+    if count != 1 {
+        return Err(unknown());
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::client::tests::{Reply, Seen, Server, serve};
+
+    #[test]
+    fn mpp_finality_requires_one_exact_challenge_bound_token_memo_from_vault() {
+        let (tx, _, intent, token, _, _) = fixture();
+        let memo =
+            allowit_tempo::mpp_memo(&json!({"id":"original-charge","realm":"merchant.example"}))
+                .unwrap();
+        let receipt = json!({"logs":[{"address":token,"removed":false,"topics":[
+            allowit_tempo::hex(&allowit_tempo::keccak("TransferWithMemo(address,address,uint256,bytes32)")),
+            format!("0x{}{}","0".repeat(24),&tx.to[2..]),
+            format!("0x{}{}","0".repeat(24),&intent.recipient[2..]),memo],"data":format!("0x{:064x}",1_000_000)}]});
+        assert!(
+            check_mpp_transfer(&receipt, &token, &tx.to, &intent.recipient, "1", &memo).is_ok()
+        );
+        for field in ["memo", "sender", "token", "removed", "duplicate", "amount"] {
+            let mut changed = receipt.clone();
+            match field {
+                "memo" => {
+                    changed["logs"][0]["topics"][3] = json!(
+                        allowit_tempo::mpp_memo(
+                            &json!({"id":"other-charge","realm":"merchant.example"})
+                        )
+                        .unwrap()
+                    )
+                }
+                "sender" => {
+                    changed["logs"][0]["topics"][1] = changed["logs"][0]["topics"][2].clone()
+                }
+                "token" => changed["logs"][0]["address"] = json!(intent.recipient),
+                "removed" => changed["logs"][0]["removed"] = json!(true),
+                "duplicate" => {
+                    let duplicate = changed["logs"][0].clone();
+                    changed["logs"].as_array_mut().unwrap().push(duplicate);
+                }
+                _ => changed["logs"][0]["data"] = json!(format!("0x{:064x}", 2_000_000)),
+            }
+            assert!(
+                check_mpp_transfer(&changed, &token, &tx.to, &intent.recipient, "1", &memo)
+                    .is_err(),
+                "{field}"
+            );
+        }
+    }
 
     fn rpc_script(results: Vec<Value>) -> (Rpc, Server) {
         let replies = results
@@ -436,6 +528,7 @@ mod tests {
             action: "transfer".into(),
             merchant: String::new(),
             context: json!({}),
+            mpp_request: None,
         };
         let token = tx.fee_token.clone();
         let block_hash = format!("0x{}", "51".repeat(32));

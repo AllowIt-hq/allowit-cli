@@ -200,6 +200,17 @@ class ProvenanceTests(unittest.TestCase):
         release = json.loads((self.sdk / "native-rust/src/release.json").read_text())
         self.assertEqual(result["nativeRelease"], {key: release[key] for key in ["contractRevision", "sourceBundle", "artifacts"]})
 
+    def test_published_tempo_readme_is_bound_and_hidden_drift_is_refused(self):
+        path = self.sdk / "tempo-rust/README.md"
+        original = path.read_bytes()
+        files = self.manifest()["sdk"]["tempoSdk"]["files"]
+        commit = fixture.git(self.sdk, "rev-parse", "HEAD")
+        blob = provenance.native_sdk.crate_blobs(self.sdk, commit, "tempo-rust")["README.md"]
+        self.assertEqual(files["README.md"], provenance.native_sdk.digest(blob))
+        fixture.hide(self.repo, "tempo-rust/README.md", original + b"\nChanged documentation\n", "--skip-worktree")
+        with self.assertRaisesRegex(ValueError, "checkout differs from its pinned commit"):
+            self.manifest()
+
     def test_refuses_tempo_source_change_committed_and_repinned(self):
         path = self.sdk / "tempo-rust/src/lib.rs"
         path.write_text(path.read_text() + "\n// changed verifier\n")
@@ -715,7 +726,7 @@ class ResolvedTests(unittest.TestCase):
             for crate, package in [("native-rust", "allowit-native"), ("crates/paysh-interface", "allowit-paysh-interface"), ("tempo-rust", "allowit-tempo")]:
                 with self.subTest(package=package):
                     with self.assertRaisesRegex(ValueError, "does not build " + package):
-                        provenance.native_sdk.resolved(fixture.ROOT, f'paths=["{Path(tmp) / crate}"]')
+                        provenance.native_sdk.resolved(fixture.ROOT, f'paths=["{(Path(tmp) / crate).as_posix()}"]')
 
     def mutated(self, change):
         real = provenance.native_sdk.subprocess.run

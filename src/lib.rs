@@ -10,6 +10,7 @@ mod policy_native;
 mod request;
 mod skill;
 mod tempo;
+mod tempo_mpp;
 mod tempo_pay;
 mod tempo_rpc;
 mod tempo_store;

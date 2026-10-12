@@ -16,6 +16,31 @@ All commands call Rust modules directly. The binary needs no Node runtime. The G
 
 Main contains the untagged `0.3.0-dev` implementation. No native Rust GitHub Release has been published. The existing `v0.1.0` and `v0.1.1` tags identify earlier Go releases.
 
+`allowit tempo call https://merchant.example/paid --id purchase-0001 --max-amount 0.25`
+buys an API response through the same native vault. It parses a real HTTP 402 using
+the official [Rust MPP SDK](https://github.com/tempoxyz/mpp-rs), validates the exact
+Tempo testnet charge against the exported token and maximum, and binds the original
+HTTP request and challenge into the policy authorization. The confirmed vault
+transfer carries the merchant's challenge/realm attribution memo. Its transaction
+hash credential identifies the vault as the token sender and is submitted once to
+the original HTTPS GET URL. No direct executor-wallet payment is used.
+
+The MVP requires explicit Tempo chain 42431, push/hash credentials and client-paid
+fees. Only canonical HTTPS URLs without query, credentials or fragment are accepted;
+redirects, custom request headers, split payments and sponsored/pull transactions
+are refused. A successful HTTP response needs a matching `Payment-Receipt`; a UTF-8
+body up to 64 KB is returned escaped, including in `--json`. The response is stored
+only in the private journal. Backend history records the executor's bounded report
+and receipt reference, which do not establish independent proof from the provider.
+
+Repeating the call with the same ID reuses the saved challenge and signed transaction.
+`tempo resume` cannot authorize another charge, fetch a replacement challenge, or
+blindly resend an already-attempted HTTP credential. If payment is confirmed but the
+response was lost, it reports `response_unavailable` and exits 5. A saved successful
+API response is returned on recovery with exit 6. Keep the original bundle and
+journal; after owner input and before a signature exists, rerun the exact original
+call with its URL, ID and maximum. Legacy native-v1 journals remain readable.
+
 ## Build from source
 
 Use Rust 1.88 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.

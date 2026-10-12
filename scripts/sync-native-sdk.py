@@ -171,7 +171,7 @@ def tempo_sources(sdk, commit):
     if not {'Cargo.toml', 'Cargo.lock', 'src/lib.rs'}.issubset(blobs) or set(blobs) != tracked or inventory(crate) != tracked:
         raise ValueError('SDK Tempo crate file set differs from its pinned commit')
     for name in blobs:
-        if name not in {'Cargo.toml', 'Cargo.lock', 'LICENSE', 'LICENSE.md'} and not re.fullmatch(r'(?:src/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.rs|tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.(?:rs|json))', name):
+        if name not in {'Cargo.toml', 'Cargo.lock', 'LICENSE', 'LICENSE.md', 'README.md'} and not re.fullmatch(r'(?:src/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.rs|tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.(?:rs|json))', name):
             raise ValueError('Unexpected SDK Tempo crate file: ' + name)
     unchanged(crate, blobs)
     return blobs
