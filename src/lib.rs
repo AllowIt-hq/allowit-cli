@@ -10,6 +10,10 @@ mod policy_native;
 mod request;
 mod skill;
 mod tempo;
+mod tempo_pay;
+mod tempo_rpc;
+mod tempo_store;
+mod tempo_transaction;
 mod typed_request;
 mod typed_run;
 use crate::{

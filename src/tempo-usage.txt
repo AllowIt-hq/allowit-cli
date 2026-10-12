@@ -2,13 +2,24 @@ Tempo execution uses an owner-exported, policy-scoped capability.
 
   allowit tempo import EXECUTOR_JSON
   allowit tempo execute RECIPIENT AMOUNT [--json]
+  allowit tempo pay RECIPIENT AMOUNT [--json]
+  allowit tempo resume REQUEST_ID [--json]
   allowit tempo submit REQUEST_ID TRANSACTION_HASH [--json]
   allowit tempo status REQUEST_ID [--json]
 
 Configuration:
   ALLOWIT_TEMPO_BUNDLE  executor bundle (default .allowit-tempo/executor.json)
   ALLOWIT_URL           optional origin, must match the exported origin
-  ALLOWIT_REQUEST_ID    explicit request identity; required for execute
+  ALLOWIT_REQUEST_ID    explicit request identity; required for execute/pay
+  ALLOWIT_TEMPO_EXECUTOR_KEY_FILE private 0600 file: 32-byte hex executor key
+  ALLOWIT_TEMPO_RPC_URL           optional RPC override (chain must match)
+  ALLOWIT_TEMPO_STATE_DIR         private POSIX journal base directory
+                                 default $XDG_STATE_HOME/allowit/tempo or
+                                 $HOME/.local/state/allowit/tempo
+  ALLOWIT_TEMPO_WAIT_SECONDS      finality wait, 0..600 (default 120)
+  ALLOWIT_TEMPO_MAX_GAS           gas cap, 21000..10000000 (default 1500000)
+  ALLOWIT_TEMPO_MAX_FEE           total fee cap in test dollars (default 0.1,
+                                 positive, at most 1, six decimal places)
   ALLOWIT_EXECUTION_ACTION        default transfer
   ALLOWIT_EXECUTION_MERCHANT      optional merchant
   ALLOWIT_EXECUTION_CONTEXT_JSON  bounded runtime context object
@@ -19,10 +30,30 @@ wallet plan. It prints that plan, spends nothing and exits 10. The designated
 executor signs and sends through its own Tempo wallet. Submit reports only
 that transaction's hash; settled requires a backend-verified receipt.
 
+Pay validates that same plan, signs one native 0x76 vault call using only the
+designated executor key, and sends it directly through RPC. It persists the
+complete signed transaction before sending. Confirmation requires canonical
+finality, the exact token transfer and a matching settled backend operation.
+No Node runtime or external payment script is needed.
+
+Resume checks the original signed transaction without reading a key, obtaining
+another authorization or signing a replacement. It first checks the saved
+hash. If that transaction is absent, it may rebroadcast only the exact saved
+bytes with the same hash and account nonce. A missing receipt remains
+pending/uncertain. Keep the same journal, bundle, request ID and exact intent;
+do not create a new request or erase its journal after an uncertain outcome.
+
+Use Linux/WSL and keep keys/journals on its Linux filesystem. Pay serializes all
+vaults sharing an executor and chain in one journal. Use that same journal for
+every process and keep this executor dedicated to these payments. The executor
+needs fee-token funds of its own; vault funds pay the authorized recipient.
+Only testnet/localnet is supported. No mainnet or legacy transaction fallback.
+
 Never give the agent a server authority key. Owner lifecycle operations stay
-in the browser. No owner or executor private-key file is read by these commands.
+in the browser. Import/execute/submit/status never read an executor key;
+pay reads only the executor key; no command reads an owner or authority key.
 Preserve the same request ID and exact intent after an uncertain outcome.
 
 Exit codes: 0 imported/settled, 2 usage, 3 configuration, 5 uncertain,
-6 already-settled execute replay,
+6 already-settled replay,
 10 wallet plan prepared, 11 awaiting owner input, 12 submitted, 20 denied/failed.
