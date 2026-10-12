@@ -32,6 +32,8 @@ struct Record {
     attempted: bool,
     finality: Option<Finality>,
     report: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    purchase: Option<crate::tempo_mpp::Purchase>,
 }
 impl Record {
     fn new(bundle: &Bundle, intent: Intent) -> Self {
@@ -48,6 +50,7 @@ impl Record {
             attempted: false,
             finality: None,
             report: None,
+            purchase: None,
         }
     }
     fn matches(&self, bundle: &Bundle) -> Result<()> {
@@ -61,6 +64,38 @@ impl Record {
             ));
         }
         request_id(&self.intent.id)?;
+        if self.intent.mpp_request.is_some() != self.purchase.is_some() {
+            return Err(Error::config(
+                "MPP intent is missing its original private HTTP journal",
+            ));
+        }
+        if let Some(purchase) = &self.purchase {
+            purchase.matches(bundle, &self.intent)?;
+            if purchase.http_attempted
+                && (!self.finality.as_ref().is_some_and(|f| f.success)
+                    || self
+                        .report
+                        .as_ref()
+                        .is_none_or(|r| r["operation"]["status"] != "settled"))
+            {
+                return Err(Error::config(
+                    "MPP response attempt is missing a finalized settled payment",
+                ));
+            }
+            if let Some(receipt) = purchase.response.as_ref().and_then(|r| r.receipt.as_ref()) {
+                let hash = self
+                    .signed
+                    .as_ref()
+                    .map(|s| s.hash.as_str())
+                    .unwrap_or_default();
+                let header = mpp::format_receipt(
+                    &serde_json::from_value(receipt.clone())
+                        .map_err(|_| Error::config("Invalid saved MPP receipt"))?,
+                )
+                .map_err(|_| Error::config("Invalid saved MPP receipt"))?;
+                crate::tempo_mpp::checked_receipt_header(&header, hash)?;
+            }
+        }
         if let Some(finality) = &self.finality {
             let h = &finality.block_hash;
             if h.len() != 66
@@ -287,6 +322,10 @@ fn result(record: &Record, state: &str, code: i32, details: Option<Value>) -> Va
     if let Some(finality) = &record.finality {
         value["finality"] = json!(finality);
     }
+    if let Some(request) = &record.intent.mpp_request {
+        value["url"] = json!(request.url);
+        value["httpMethod"] = json!(request.method);
+    }
     if let Some(details) = details {
         value["result"] = details;
     }
@@ -294,7 +333,9 @@ fn result(record: &Record, state: &str, code: i32, details: Option<Value>) -> Va
 }
 fn render(bundle: &Bundle, value: &Value, json_output: bool) -> String {
     let rendered = if json_output {
-        serde_json::to_string_pretty(value).unwrap() + "\n"
+        let mut value = value.clone();
+        value.sort_all_objects();
+        serde_json::to_string_pretty(&value).unwrap() + "\n"
     } else {
         let mut text = format!(
             "Tempo request {}\nVault: {}\nAmount: {} (token {})\n",
@@ -305,6 +346,9 @@ fn render(bundle: &Bundle, value: &Value, json_output: bool) -> String {
         );
         if let Some(hash) = value["transactionHash"].as_str() {
             text.push_str(&format!("Transaction: {hash}\n"));
+        }
+        if let Some(url) = value["url"].as_str() {
+            text.push_str(&format!("API request: GET {url}\n"));
         }
         let status = match value["state"].as_str() {
             Some("settled") => "Payment confirmed (finalized)",
@@ -331,9 +375,71 @@ fn render(bundle: &Bundle, value: &Value, json_output: bool) -> String {
                 value["requestId"].as_str().unwrap_or_default()
             ));
         }
+        if let Some(purchase) = value.get("purchase") {
+            let received = purchase["state"] == "response_received";
+            text.push_str(if received { "API response received\n" } else {
+                "API response unavailable; payment remains confirmed. The HTTP credential is not retried.\n"
+            });
+            if let Some(status) = purchase["http_status"].as_u64() {
+                text.push_str(&format!("HTTP status: {status}\n"));
+            }
+            if let Some(body) = purchase["body"].as_str() {
+                // Escaped UTF-8 returns the useful API result without terminal controls.
+                text.push_str(&format!(
+                    "Response: {}\n",
+                    serde_json::to_string(body).unwrap()
+                ));
+            }
+            if value["deliveryReported"] == false {
+                text.push_str("Site response report unavailable; the original result remains in the private journal.\n");
+            }
+        }
         text
     };
     bundle.clean(rendered)
+}
+fn render_record(bundle: &Bundle, record: &Record, value: &Value, json_output: bool) -> String {
+    let mut value = value.clone();
+    // Scrub reflected secrets in the raw body before JSON escaping changes
+    // their spelling (for example an opaque JSON string containing quotes).
+    if let Some(body) = value["purchase"]["body"].as_str() {
+        let mut body = bundle.clean(body.to_string());
+        if let Some(request) = &record.intent.mpp_request {
+            if let Some(signed) = &record.signed
+                && let Ok((_, credential)) = crate::tempo_mpp::credential(
+                    request,
+                    record.config["chainId"].as_u64().unwrap_or_default(),
+                    record.policy["vault"].as_str().unwrap_or_default(),
+                    &signed.hash,
+                )
+            {
+                body = crate::output::clean(body, &credential);
+            }
+            if let Some(opaque) = request.challenge["opaque"].as_str() {
+                body = crate::output::clean(body, opaque);
+            }
+        }
+        value["purchase"]["body"] = json!(body);
+    }
+    let mut text = render(bundle, &value, json_output);
+    if let Some(request) = &record.intent.mpp_request {
+        // A response may reflect request headers. Preserve its raw bounded body
+        // privately, but never print an executable Payment credential or opaque.
+        if let Some(signed) = &record.signed
+            && let Ok((_, credential)) = crate::tempo_mpp::credential(
+                request,
+                record.config["chainId"].as_u64().unwrap_or_default(),
+                record.policy["vault"].as_str().unwrap_or_default(),
+                &signed.hash,
+            )
+        {
+            text = crate::output::clean(text, &credential);
+        }
+        if let Some(opaque) = request.challenge["opaque"].as_str() {
+            text = crate::output::clean(text, opaque);
+        }
+    }
+    text
 }
 fn reconcile<C: Chain, F: Fn(&str) -> Result<Value>>(
     bundle: &Bundle,
@@ -540,8 +646,14 @@ fn authorize<
     }
     let plan = checked_plan(bundle, &record.intent, &prepared)?;
     check_expiry(&plan)?;
+    if record.intent.mpp_request.is_some() {
+        crate::tempo_mpp::validate_intent(bundle, &record.intent, crate::tempo_mpp::now()?)?;
+    }
     let native = chain.build(&plan)?;
     check_expiry(&plan)?;
+    if record.intent.mpp_request.is_some() {
+        crate::tempo_mpp::validate_intent(bundle, &record.intent, crate::tempo_mpp::now()?)?;
+    }
     let signed = sign(&native, &plan.from)?;
     record.native = Some(native);
     record.signed = Some(signed);
@@ -578,6 +690,171 @@ fn load_record(store: &Store, id: &str) -> Result<Option<Record>> {
     }
     Ok(record)
 }
+fn load_call_record<F>(
+    bundle: &Bundle,
+    store: &Store,
+    url: &str,
+    id: &str,
+    maximum: &str,
+    fetch: F,
+) -> Result<Record>
+where
+    F: FnOnce() -> Result<(Intent, crate::tempo_mpp::Purchase)>,
+{
+    request_id(id)?;
+    crate::tempo_mpp::endpoint_url(url)?;
+    crate::tempo::amount(maximum)?;
+    if let Some(record) = load_record(store, id)? {
+        record.matches(bundle)?;
+        if record
+            .intent
+            .mpp_request
+            .as_ref()
+            .is_none_or(|r| r.url != url)
+            || record
+                .purchase
+                .as_ref()
+                .is_none_or(|p| p.max_amount != maximum)
+        {
+            return Err(Error::config(
+                "Request ID already binds another original URL or maximum amount; resume it",
+            ));
+        }
+        return Ok(record);
+    }
+    let (intent, purchase) = fetch()?;
+    if intent.id != id
+        || intent.mpp_request.as_ref().is_none_or(|m| m.url != url)
+        || purchase.max_amount != maximum
+    {
+        return Err(Error::config(
+            "MPP challenge fetch changed the original call",
+        ));
+    }
+    let mut record = Record::new(bundle, intent);
+    record.purchase = Some(purchase);
+    record.matches(bundle)?;
+    // The original HTTP request and challenge precede policy authorization/RPC.
+    store.save(id, &record)?;
+    Ok(record)
+}
+
+fn finish_purchase<D, R>(
+    bundle: &Bundle,
+    store: &Store,
+    record: &mut Record,
+    mut payment: Value,
+    payment_code: i32,
+    deliver: D,
+    report_delivery: R,
+) -> Result<(Value, i32)>
+where
+    D: FnOnce(&allowit_tempo::MppPaymentRequest, &str) -> crate::tempo_mpp::ApiResponse,
+    R: FnOnce(Value) -> Result<Value>,
+{
+    record.matches(bundle)?;
+    if record.purchase.is_none() || payment["state"] != "settled" {
+        return Ok((payment, payment_code));
+    }
+    if !record.finality.as_ref().is_some_and(|f| f.success)
+        || record
+            .report
+            .as_ref()
+            .is_none_or(|r| r["operation"]["status"] != "settled")
+    {
+        return Err(Error::config(
+            "MPP HTTP submission requires a finalized, backend-settled payment",
+        ));
+    }
+    let request = record.intent.mpp_request.as_ref().unwrap().clone();
+    let hash = record
+        .signed
+        .as_ref()
+        .ok_or_else(|| Error::config("Missing MPP transaction proof"))?
+        .hash
+        .clone();
+    let was_attempted = record.purchase.as_ref().unwrap().http_attempted;
+    if !was_attempted {
+        record.purchase.as_mut().unwrap().http_attempted = true;
+        // A merchant may consume the credential before a timeout/crash. Persist
+        // this one-attempt marker before GET, independently of payment recovery.
+        store.save(&record.intent.id, record)?;
+        let response = deliver(&request, &hash);
+        record.purchase.as_mut().unwrap().response = Some(response);
+        store.save(&record.intent.id, record)?;
+    }
+    let response = record
+        .purchase
+        .as_ref()
+        .unwrap()
+        .response
+        .clone()
+        .unwrap_or_else(crate::tempo_mpp::ApiResponse::unavailable);
+    let bound = allowit_tempo::validate_mpp_request(
+        &request,
+        record.config["chainId"].as_u64().unwrap_or_default(),
+        record.policy["token"].as_str().unwrap_or_default(),
+        &record.intent.recipient,
+        &record.intent.amount,
+        0,
+    )
+    .map_err(|_| Error::config("Invalid original MPP request"))?;
+    if !record.purchase.as_ref().unwrap().delivery_reported {
+        let body = json!({"policyId":record.policy["id"],"requestId":record.intent.id,
+            "transactionHash":hash,"delivery":response.public_report(&bound.challenge_digest)});
+        if report_delivery(body.clone())
+            .is_ok_and(|reply| checked_delivery_report(&reply, &body, &bound))
+        {
+            record.purchase.as_mut().unwrap().delivery_reported = true;
+            store.save(&record.intent.id, record)?;
+        }
+    }
+    let code = if response.state == "response_received" {
+        if was_attempted { 6 } else { 0 }
+    } else {
+        5
+    };
+    payment["purchase"] = json!(response);
+    payment["deliveryReported"] = json!(record.purchase.as_ref().unwrap().delivery_reported);
+    payment["exitCode"] = json!(code);
+    Ok((payment, code))
+}
+fn checked_delivery_report(
+    reply: &Value,
+    sent: &Value,
+    purchase: &allowit_tempo::MppPurchase,
+) -> bool {
+    let hash = sent["transactionHash"].as_str().unwrap_or_default();
+    let operation = &reply["operation"];
+    if checked_receipt(
+        reply,
+        sent["policyId"].as_str().unwrap_or_default(),
+        sent["requestId"].as_str().unwrap_or_default(),
+        Some(hash),
+    )
+    .is_err()
+        || operation["status"] != "settled"
+        || operation["purchase"] != json!(purchase)
+    {
+        return false;
+    }
+    let mut delivery = operation["delivery"].clone();
+    if delivery["reportedBy"] != "executor"
+        || delivery["transactionHash"] != hash
+        || delivery["reportedAt"].as_str().is_none_or(|t| {
+            time::OffsetDateTime::parse(t, &time::format_description::well_known::Rfc3339).is_err()
+        })
+    {
+        return false;
+    }
+    let Some(object) = delivery.as_object_mut() else {
+        return false;
+    };
+    for field in ["reportedBy", "transactionHash", "reportedAt"] {
+        object.remove(field);
+    }
+    delivery == sent["delivery"]
+}
 pub(crate) fn run(
     bundle: &Bundle,
     command: &str,
@@ -596,26 +873,61 @@ pub(crate) fn run(
     let (id, intent) = if command == "pay" {
         let intent = Intent::read(pos[0], pos[1])?;
         (intent.id.clone(), Some(intent))
+    } else if command == "call" {
+        request_id(pos[1])?;
+        crate::tempo_mpp::endpoint_url(pos[0])?;
+        crate::tempo::amount(pos[2])?;
+        (pos[1].to_owned(), None)
     } else {
         request_id(pos[0])?;
         (pos[0].to_owned(), None)
     };
-    let mut record = match load_record(&store, &id)? {
-        Some(record) => record,
-        None => Record::new(
-            bundle,
-            intent.clone().ok_or_else(|| {
-                Error::config("No saved Tempo request for this ID; preserve the original journal")
-            })?,
-        ),
+    let mut record = if command == "call" {
+        load_call_record(bundle, &store, pos[0], &id, pos[2], || {
+            crate::tempo_mpp::fetch(bundle, pos[0], &id, pos[2])
+        })?
+    } else {
+        match load_record(&store, &id)? {
+            Some(record) => record,
+            None => Record::new(
+                bundle,
+                intent.clone().ok_or_else(|| {
+                    Error::config(
+                        "No saved Tempo request for this ID; preserve the original journal",
+                    )
+                })?,
+            ),
+        }
     };
     record.matches(bundle)?;
+    if command == "call"
+        && (record
+            .intent
+            .mpp_request
+            .as_ref()
+            .is_none_or(|r| r.url != pos[0])
+            || record
+                .purchase
+                .as_ref()
+                .is_none_or(|p| p.max_amount != pos[2]))
+    {
+        return Err(Error::config(
+            "Request ID already binds another original URL or maximum amount; resume it",
+        ));
+    }
     if intent.as_ref().is_some_and(|i| i != &record.intent) {
         return Err(Error::config(
             "Request ID already binds another exact intent; resume the original request",
         ));
     }
-    if command == "pay" && record.signed.is_none() {
+    if command == "call" {
+        stderr.push_str(&format!(
+            "MPP GET {}\nOriginal Tempo charge: {}; maximum: {}\n",
+            pos[0], record.intent.amount, pos[2]
+        ));
+        crate::flush_stderr(stderr);
+    }
+    if matches!(command, "pay" | "call") && record.signed.is_none() {
         stderr.push_str(&format!(
             "Tempo request {id}: evaluating the vault policy\n"
         ));
@@ -638,12 +950,16 @@ pub(crate) fn run(
                 native.sign(&key)
             },
         )? {
-            stdout.push_str(&render(bundle, &value, json_output));
+            stdout.push_str(&render_record(bundle, &record, &value, json_output));
             return Ok(code);
         }
     }
     record.matches(bundle)?;
-    let signed=record.signed.as_ref().ok_or_else(||Error::config("No saved signed transaction. Rerun pay with the same request ID and exact intent after owner input"))?;
+    let signed=record.signed.as_ref().ok_or_else(||Error::config(if record.purchase.is_some() {
+        "No saved signed transaction. After owner input, rerun the original tempo call with the same URL, --id and --max-amount"
+    } else {
+        "No saved signed transaction. Rerun pay with the same request ID and exact intent after owner input"
+    }))?;
     stderr.push_str(&format!(
         "Tempo request {id}\nTransaction: {}\nRecovery: allowit tempo resume {id}\n",
         signed.hash
@@ -664,7 +980,25 @@ pub(crate) fn run(
         },
         wait,
     )?;
-    stdout.push_str(&render(bundle, &value, json_output));
+    let (value, code) = finish_purchase(
+        bundle,
+        &store,
+        &mut record,
+        value,
+        code,
+        |request, hash| {
+            crate::tempo_mpp::deliver(
+                request,
+                bundle.value["config"]["chainId"]
+                    .as_u64()
+                    .unwrap_or_default(),
+                bundle.value["policy"]["vault"].as_str().unwrap_or_default(),
+                hash,
+            )
+        },
+        |body| bundle.call("delivery", body),
+    )?;
+    stdout.push_str(&render_record(bundle, &record, &value, json_output));
     Ok(code)
 }
 
@@ -738,10 +1072,12 @@ mod tests {
                 action: "buy research".into(),
                 merchant: "research".into(),
                 context: json!({"purpose":"research"}),
+                mpp_request: None,
             };
             let context = serde_json::to_string(&intent.context).unwrap();
-            let identity = json!({"policyId":policy["id"], "amount":intent.amount,
+            let mut identity = json!({"policyId":policy["id"], "amount":intent.amount,
                 "recipient":intent.recipient, "action":intent.action, "merchant":intent.merchant, "context":context});
+            identity.sort_all_objects();
             let input_hash = format!(
                 "{:x}",
                 Sha256::digest(serde_json::to_vec(&identity).unwrap())
@@ -817,12 +1153,92 @@ mod tests {
                 "http://127.0.0.1:1",
             )
         }
+        fn with_mpp(id: &str, vault_seed: u8) -> Self {
+            let mut fixture = Self::new(id, vault_seed);
+            fixture.config["network"] = json!("tempo:testnet");
+            fixture.config["chainId"] = json!(42431);
+            fixture.policy["network"] = json!("tempo:testnet");
+            fixture.policy["chainId"] = json!(42431);
+            let mut terms = json!({"amount":"250000","currency":fixture.config["token"],"recipient":fixture.intent.recipient,
+                "methodDetails":{"chainId":42431,"feePayer":false,"supportedModes":["push"]}});
+            terms.sort_all_objects();
+            let challenge = mpp::PaymentChallenge::new(
+                "original-charge",
+                "merchant.example",
+                "tempo",
+                "charge",
+                mpp::Base64UrlJson::from_value(&terms).unwrap(),
+            )
+            .with_opaque(
+                mpp::Base64UrlJson::from_value(&json!({"private":"merchant-original"})).unwrap(),
+            );
+            fixture.intent.action = "GET https://merchant.example/paid".into();
+            fixture.intent.merchant = "https://merchant.example".into();
+            fixture.intent.context = json!({});
+            fixture.intent.mpp_request = Some(
+                crate::tempo_mpp::parse_challenge(
+                    &challenge.to_header().unwrap(),
+                    "https://merchant.example/paid",
+                )
+                .unwrap(),
+            );
+            let mut data = allowit_tempo::unhex(&fixture.native.data).unwrap();
+            data[4..36].copy_from_slice(&word(42431));
+            let identity = allowit_tempo::execution_request_identity(
+                fixture.policy["id"].as_str().unwrap(),
+                &fixture.intent.recipient,
+                &fixture.intent.amount,
+                &fixture.intent.action,
+                &fixture.intent.merchant,
+                Some("{}"),
+                fixture.intent.mpp_request.as_ref(),
+            )
+            .unwrap();
+            let input = format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&identity).unwrap())
+            );
+            data[4 + 11 * 32..4 + 12 * 32]
+                .copy_from_slice(&Sha256::digest(format!("{id}:{input}")));
+            data[4 + 13 * 32..4 + 14 * 32].copy_from_slice(
+                &allowit_tempo::unhex(
+                    &allowit_tempo::mpp_memo(
+                        &fixture.intent.mpp_request.as_ref().unwrap().challenge,
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+            );
+            let words = data[4..4 + 14 * 32].as_chunks::<32>().0.to_vec();
+            let signer = SigningKey::from_bytes((&[7; 32]).into()).unwrap();
+            let (signature, recovery) = signer
+                .sign_prehash_recoverable(
+                    &allowit_tempo::execution_digest(
+                        42431,
+                        fixture.policy["vault"].as_str().unwrap(),
+                        &words,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            data[4 + 16 * 32..4 + 16 * 32 + 64].copy_from_slice(&signature.to_bytes());
+            data[4 + 16 * 32 + 64] = 27 + recovery.to_byte();
+            fixture.native.chain_id = 42431;
+            fixture.native.data = allowit_tempo::hex(&data);
+            fixture.preparation["transaction"]["chainId"] = json!(42431);
+            fixture.preparation["transaction"]["data"] = json!(fixture.native.data);
+            fixture.signed = fixture.native.sign(&[6; 32]).unwrap();
+            fixture
+        }
         fn record(&self) -> Record {
             let mut record = Record::new(&self.bundle(), self.intent.clone());
             record.preparation = Some(self.preparation.clone());
             record.prepare_code = Some(10);
             record.native = Some(self.native.clone());
             record.signed = Some(self.signed.clone());
+            if self.intent.mpp_request.is_some() {
+                record.purchase = Some(crate::tempo_mpp::Purchase::new("1".into()));
+            }
             record
         }
         fn report(&self, success: bool) -> Value {
@@ -830,6 +1246,24 @@ mod tests {
                 "status":if success {"settled"} else {"failed"},"transactionHash":self.signed.hash},
                 "receipt":{"verified":true,"blockNumber":10,"blockHash":allowit_tempo::hex(&[23;32]),
                 "transactionHash":self.signed.hash}})
+        }
+        fn delivery_reply(&self, sent: &Value) -> Value {
+            let purchase = allowit_tempo::validate_mpp_request(
+                self.intent.mpp_request.as_ref().unwrap(),
+                42431,
+                self.policy["token"].as_str().unwrap(),
+                &self.intent.recipient,
+                &self.intent.amount,
+                0,
+            )
+            .unwrap();
+            let mut reply = self.report(true);
+            reply["operation"]["purchase"] = json!(purchase);
+            reply["operation"]["delivery"] = sent["delivery"].clone();
+            reply["operation"]["delivery"]["reportedBy"] = json!("executor");
+            reply["operation"]["delivery"]["transactionHash"] = json!(self.signed.hash);
+            reply["operation"]["delivery"]["reportedAt"] = json!("2026-10-13T00:00:00Z");
+            reply
         }
     }
 
@@ -1613,6 +2047,307 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Value>(&encoded).unwrap()["state"],
             "uncertain"
+        );
+    }
+
+    #[test]
+    fn native_v1_journal_without_optional_mpp_fields_remains_readable() {
+        let fixture = Fixture::new("native-old-v1", 16);
+        let mut value = serde_json::to_value(fixture.record()).unwrap();
+        value.as_object_mut().unwrap().remove("purchase");
+        value["intent"]
+            .as_object_mut()
+            .unwrap()
+            .remove("mpp_request");
+        let record: Record = serde_json::from_value(value).unwrap();
+        assert!(record.purchase.is_none());
+        assert!(record.intent.mpp_request.is_none());
+        record.matches(&fixture.bundle()).unwrap();
+    }
+    #[test]
+    fn original_http_challenge_is_saved_before_authorization_and_signed_proof_before_broadcast() {
+        let fixture = Fixture::with_mpp("mpp-durable-001", 16);
+        let bundle = fixture.bundle();
+        let directory = TestDirectory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let chain = MockChain::new(&fixture, &directory);
+        let mut record = Record::new(&bundle, fixture.intent.clone());
+        record.purchase = Some(crate::tempo_mpp::Purchase::new("1".into()));
+        assert!(
+            authorize(
+                &bundle,
+                &store,
+                &mut record,
+                &chain,
+                |intent| {
+                    let saved = load_record(&store, &intent.id).unwrap().unwrap();
+                    assert_eq!(saved.intent.mpp_request, intent.mpp_request);
+                    assert!(!saved.purchase.unwrap().http_attempted);
+                    assert!(saved.signed.is_none());
+                    Ok((fixture.preparation.clone(), 10))
+                },
+                |native, _| native.sign(&[6; 32])
+            )
+            .unwrap()
+            .is_none()
+        );
+        let saved = load_record(&store, &fixture.intent.id).unwrap().unwrap();
+        assert_eq!(saved.signed.unwrap().hash, fixture.signed.hash);
+        assert!(chain.sends.borrow().is_empty());
+    }
+    #[test]
+    fn same_signed_mpp_record_recovers_same_hash_without_authorizing_or_signing() {
+        let fixture = Fixture::with_mpp("mpp-recovery-001", 16);
+        let bundle = fixture.bundle();
+        let directory = TestDirectory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let chain = MockChain::new(&fixture, &directory);
+        chain.finality.set(Some(true));
+        let mut record = fixture.record();
+        store.save(&fixture.intent.id, &record).unwrap();
+        let (value, code) = reconcile(
+            &bundle,
+            &store,
+            &mut record,
+            &chain,
+            |_| Ok(fixture.report(true)),
+            Duration::ZERO,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(value["transactionHash"], fixture.signed.hash);
+        assert_eq!(chain.builds.get(), 0);
+        assert!(chain.sends.borrow().is_empty());
+        assert!(
+            authorize(
+                &bundle,
+                &store,
+                &mut record,
+                &chain,
+                |_| panic!("No new authorization on recovery"),
+                |_, _| panic!("No replacement signature on recovery")
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn mpp_http_attempt_is_durable_and_response_body_never_uploaded_to_backend() {
+        let fixture = Fixture::with_mpp("mpp-http-once-001", 16);
+        let bundle = fixture.bundle();
+        let directory = TestDirectory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let mut record = fixture.record();
+        record.finality = Some(finality(true));
+        record.report = Some(fixture.report(true));
+        store.save(&fixture.intent.id, &record).unwrap();
+        let payment = result(&record, "settled", 0, None);
+        let body = "{\"answer\":42}".to_owned();
+        let (value,code)=finish_purchase(&bundle,&store,&mut record,payment,0, |original,hash| {
+            let saved=load_record(&store,&fixture.intent.id).unwrap().unwrap();
+            assert!(saved.purchase.unwrap().http_attempted);
+            assert_eq!(original,fixture.intent.mpp_request.as_ref().unwrap()); assert_eq!(hash,fixture.signed.hash);
+            crate::tempo_mpp::ApiResponse{state:"response_received".into(),http_status:Some(200),
+                receipt:Some(json!({"status":"success","method":"tempo","timestamp":"2026-10-13T00:00:00Z","reference":hash})),
+                response_digest:Some(crate::tempo_mpp::digest(body.as_bytes())),response_bytes:Some(body.len()),body:Some(body.clone())}
+        }, |report| {
+            assert!(report["delivery"].get("body").is_none()); assert!(!report.to_string().contains("answer"));
+            Ok(fixture.delivery_reply(&report))
+        }).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(value["purchase"]["body"], body);
+        let payment = result(&record, "settled", 6, None);
+        let (value, code) = finish_purchase(
+            &bundle,
+            &store,
+            &mut record,
+            payment,
+            6,
+            |_, _| panic!("A consumed HTTP credential must not be resent"),
+            |_| panic!("Saved report must not be resent"),
+        )
+        .unwrap();
+        assert_eq!(code, 6);
+        assert_eq!(value["purchase"]["body"], body);
+    }
+    #[test]
+    fn interrupted_http_submission_reports_unavailable_without_resend_or_new_payment() {
+        let fixture = Fixture::with_mpp("mpp-http-crash-001", 16);
+        let bundle = fixture.bundle();
+        let directory = TestDirectory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let mut record = fixture.record();
+        record.finality = Some(finality(true));
+        record.report = Some(fixture.report(true));
+        record.purchase.as_mut().unwrap().http_attempted = true;
+        store.save(&fixture.intent.id, &record).unwrap();
+        let payment = result(&record, "settled", 6, None);
+        let (value, code) = finish_purchase(
+            &bundle,
+            &store,
+            &mut record,
+            payment,
+            6,
+            |_, _| panic!("Unknown HTTP outcome cannot safely replay credential"),
+            |report| {
+                assert_eq!(report["delivery"]["status"], "response_unavailable");
+                Ok(fixture.delivery_reply(&report))
+            },
+        )
+        .unwrap();
+        assert_eq!(code, 5);
+        assert_eq!(value["state"], "settled");
+        assert_eq!(value["transactionHash"], fixture.signed.hash);
+        assert_eq!(value["purchase"]["state"], "response_unavailable");
+    }
+    #[test]
+    fn tampered_challenge_or_underfunded_maximum_never_reaches_authorization() {
+        let fixture = Fixture::with_mpp("mpp-tampered-001", 16);
+        let bundle = fixture.bundle();
+        let directory = TestDirectory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let chain = MockChain::new(&fixture, &directory);
+        for field in ["realm", "id", "url", "max"] {
+            let mut record = fixture.record();
+            record.native = None;
+            record.signed = None;
+            match field {
+                "realm" => {
+                    record.intent.mpp_request.as_mut().unwrap().challenge["realm"] =
+                        json!("other.example")
+                }
+                "id" => {
+                    record.intent.mpp_request.as_mut().unwrap().challenge["id"] =
+                        json!("other-charge")
+                }
+                "url" => {
+                    record.intent.mpp_request.as_mut().unwrap().url =
+                        "https://other.example/paid".into()
+                }
+                _ => record.purchase.as_mut().unwrap().max_amount = "0.1".into(),
+            }
+            // Realm/ID changes are detected by authority-signed plan verification;
+            // URL/max changes fail even before obtaining a plan.
+            assert!(
+                authorize(
+                    &bundle,
+                    &store,
+                    &mut record,
+                    &chain,
+                    |_| Ok((fixture.preparation.clone(), 10)),
+                    |_, _| panic!("Tampered request must never be signed")
+                )
+                .is_err(),
+                "{field}"
+            );
+        }
+        assert_eq!(chain.builds.get(), 0);
+        assert!(chain.sends.borrow().is_empty());
+    }
+    #[test]
+    fn repeated_call_reuses_original_challenge_and_rejects_new_url_or_cap_without_fetching() {
+        let fixture = Fixture::with_mpp("mpp-original-001", 16);
+        let bundle = fixture.bundle();
+        let directory = TestDirectory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let record = fixture.record();
+        store.save(&fixture.intent.id, &record).unwrap();
+        let read = load_call_record(
+            &bundle,
+            &store,
+            "https://merchant.example/paid",
+            &fixture.intent.id,
+            "1",
+            || panic!("A saved request must never fetch a replacement challenge"),
+        )
+        .unwrap();
+        assert_eq!(read.signed.unwrap().hash, fixture.signed.hash);
+        for (url, maximum) in [
+            ("https://merchant.example/other", "1"),
+            ("https://merchant.example/paid", "2"),
+        ] {
+            assert!(
+                load_call_record(
+                    &bundle,
+                    &store,
+                    url,
+                    &fixture.intent.id,
+                    maximum,
+                    || panic!("Changed intent must not fetch or authorize")
+                )
+                .is_err()
+            );
+        }
+    }
+    #[test]
+    fn backend_delivery_acknowledgement_cannot_substitute_payment_or_challenge() {
+        let fixture = Fixture::with_mpp("mpp-report-001", 16);
+        let bound = allowit_tempo::validate_mpp_request(
+            fixture.intent.mpp_request.as_ref().unwrap(),
+            42431,
+            fixture.policy["token"].as_str().unwrap(),
+            &fixture.intent.recipient,
+            &fixture.intent.amount,
+            0,
+        )
+        .unwrap();
+        let sent = json!({"policyId":fixture.policy["id"],"requestId":fixture.intent.id,"transactionHash":fixture.signed.hash,
+            "delivery":{"status":"response_unavailable","challengeDigest":bound.challenge_digest}});
+        let reply = fixture.delivery_reply(&sent);
+        assert!(checked_delivery_report(&reply, &sent, &bound));
+        for field in [
+            "id",
+            "policyId",
+            "transactionHash",
+            "purchase",
+            "reportedBy",
+            "challengeDigest",
+        ] {
+            let mut changed = reply.clone();
+            match field {
+                "purchase" => changed["operation"]["purchase"]["challengeDigest"] = json!("other"),
+                "reportedBy" | "challengeDigest" => {
+                    changed["operation"]["delivery"][field] = json!("other")
+                }
+                _ => changed["operation"][field] = json!("other"),
+            }
+            assert!(!checked_delivery_report(&changed, &sent, &bound), "{field}");
+        }
+        assert!(!checked_delivery_report(&json!({}), &sent, &bound));
+    }
+    #[test]
+    fn reflected_payment_credential_opaque_and_terminal_controls_are_not_printed() {
+        let fixture = Fixture::with_mpp("mpp-private-001", 16);
+        let bundle = fixture.bundle();
+        let record = fixture.record();
+        let request = fixture.intent.mpp_request.as_ref().unwrap();
+        let (_, credential) = crate::tempo_mpp::credential(
+            request,
+            42431,
+            fixture.policy["vault"].as_str().unwrap(),
+            &fixture.signed.hash,
+        )
+        .unwrap();
+        let opaque = request.challenge["opaque"].as_str().unwrap();
+        let mut value = result(&record, "settled", 0, None);
+        value["purchase"] = json!({"state":"response_received","http_status":200,
+            "body":format!("{credential} {opaque} \u{1b}[31mAPIresult")});
+        for json in [true, false] {
+            let text = render_record(&bundle, &record, &value, json);
+            assert!(!text.contains(&credential));
+            assert!(!text.contains(opaque));
+            assert!(!text.contains('\u{1b}'));
+            assert!(text.contains("APIresult"));
+        }
+    }
+    #[test]
+    fn legacy_tempo_json_keeps_sorted_presentation() {
+        let bundle = Fixture::new("native-json-output", 16).bundle();
+        let value: Value =
+            serde_json::from_str(r#"{"state":"settled","result":{"z":1,"a":2},"amount":"1"}"#)
+                .unwrap();
+        assert_eq!(
+            render(&bundle, &value, true),
+            "{\n  \"amount\": \"1\",\n  \"result\": {\n    \"a\": 2,\n    \"z\": 1\n  },\n  \"state\": \"settled\"\n}\n"
         );
     }
 }

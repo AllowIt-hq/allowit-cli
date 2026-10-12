@@ -1,5 +1,9 @@
 # Binary license notices
 
+The MPP adapter uses the official `mpp` 0.15.0 Rust protocol crate with wallet and
+network client features disabled. Its original MIT/Apache notices and those of
+the core header/credential dependencies are checksum-verified in the registry index.
+
 This directory is companion documentation for all `allowit` binaries built by this repository, including the earlier Go `v0.1.0` and `v0.1.1` builds and the Rust Linux and macOS Actions artifacts. Preserve it together with the repository `LICENSE` when redistributing a binary. Older artifact archives may lack these files; obtain this companion directory with those downloads. No binary archive is changed by adding this documentation.
 
 `registry-index.json` covers the union of registry packages in every historical tracked `Cargo.lock`, including platform-specific packages that are not linked into every binary. Each original crate archive was checked against its lockfile checksum. Its unmodified license, copyright and NOTICE files are retained under `crates/NAME/VERSION/`; `r-efi` publishes its license text in `AUTHORS`. Package SPDX expressions and original archive URLs are recorded in the index. An optional license in an expression remains an option, rather than an additional obligation created by this collection.
