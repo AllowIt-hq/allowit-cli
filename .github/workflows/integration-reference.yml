@@ -27,6 +27,8 @@ jobs:
           go-version-file: reference/go/go.mod
       - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-integration-reference
       - name: Smoke native CLI command compatibility
         shell: bash
         run: |

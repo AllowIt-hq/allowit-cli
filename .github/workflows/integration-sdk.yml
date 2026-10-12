@@ -24,6 +24,8 @@ jobs:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-integration-sdk
       - name: Verify pinned SDK source
         run: python3 scripts/sync-native-sdk.py verify
       - name: Smoke offline SDK policy generation through the CLI
