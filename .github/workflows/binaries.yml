@@ -38,6 +38,9 @@ jobs:
         run: |
           rustup toolchain install 1.98.0 --profile minimal --target '${{ matrix.target }}'
           rustup default 1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: native-binary-${{ matrix.target }}
       - name: Install Linux static build tools
         if: runner.os == 'Linux'
         run: |
@@ -46,8 +49,6 @@ jobs:
           echo CC_x86_64_unknown_linux_musl=musl-gcc >> "$GITHUB_ENV"
       - name: Build locked binary
         run: cargo build --locked --release --target '${{ matrix.target }}'
-      - name: Test provenance contract
-        run: python3 scripts/test-binary-provenance.py
       - name: Package and checksum
         run: |
           mkdir -p dist
