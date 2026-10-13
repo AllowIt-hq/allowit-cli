@@ -75,7 +75,24 @@ fn positional(args: &[String]) -> Result<(Vec<String>, bool)> {
     Ok((pos, json))
 }
 
+fn wallet_mode() -> Result<bool> {
+    match env_value("ALLOWIT_PAYSH_MODE").as_str() {
+        "" | "native-vault" => Ok(false),
+        "simple-agent-wallet" => Ok(true),
+        _ => Err(Error::config(
+            "ALLOWIT_PAYSH_MODE must be native-vault or simple-agent-wallet",
+        )),
+    }
+}
 fn policy_id(s: &str) -> Result<&str> {
+    if wallet_mode()?
+        && !s.is_empty()
+        && s.len() <= 128
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+    {
+        return Ok(s);
+    }
     if s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
         Ok(s)
     } else {
@@ -167,7 +184,12 @@ impl Http {
     }
     /// One attempt. Transport and read failures are returned as unknown.
     fn send(&self, route: &str, bearer: Option<&str>, body: Option<&Value>) -> Result<Reply> {
-        let url = format!("{}/api/paysh/{route}", self.origin);
+        let resource = if wallet_mode()? {
+            "agent-wallet"
+        } else {
+            "paysh"
+        };
+        let url = format!("{}/api/{resource}/{route}", self.origin);
         let mut r = match body {
             Some(b) => self
                 .client
@@ -309,7 +331,10 @@ fn cooperating(catalog: &Value) -> Result<String> {
                 "is not an unsigned 64-bit integer",
             )
         })?;
-        let price = if network == "solana:testnet" {
+        let price = if catalog["profile"] == "simple-agent-wallet-v1" && network == "solana:mainnet"
+        {
+            format!("{units} Mainnet USDC base units maximum per call")
+        } else if network == "solana:testnet" {
             format!("{units} test-token units per call on Solana Testnet, not USD or USDC")
         } else {
             format!(

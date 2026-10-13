@@ -880,3 +880,67 @@ fn an_unsafe_capability_is_rejected_before_any_request() {
         Some(format!("Bearer {jwt}").as_str())
     );
 }
+
+#[test]
+fn simple_agent_wallet_uses_server_wallet_route_without_key_export() {
+    let value = json!({"policyId":"policy-wallet-1","operationId":"purchase-1","status":"delivered","receipts":[{"signature":"finalized-fixture","finalizedSlot":8,"action":{"type":"pay"}}],"response":{"result":"ok"}});
+    let (url, seen) = serve(vec![http(200, &value.to_string())]);
+    let output = Command::new(env!("CARGO_BIN_EXE_allowit"))
+        .env_clear()
+        .env("ALLOWIT_URL", &url)
+        .env("ALLOWIT_PAYSH_MODE", "simple-agent-wallet")
+        .env("ALLOWIT_PAYSH_TOKEN", TOKEN)
+        .args([
+            "paysh",
+            "call",
+            "policy-wallet-1",
+            "purchase-1",
+            "configured-service",
+            "{}",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let requests = seen.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/api/agent-wallet/call");
+    assert_eq!(
+        requests[0].header("authorization"),
+        Some(format!("Bearer {TOKEN}").as_str())
+    );
+    assert_eq!(requests[0].json()["policyId"], "policy-wallet-1");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(!text.contains(TOKEN));
+    assert!(!text.contains("privateKey"));
+}
+#[test]
+fn simple_wallet_unknown_result_sends_once_and_preserves_operation_id() {
+    let (url, seen) = serve(vec![http(
+        503,
+        &json!({"error":"Unknown payment"}).to_string(),
+    )]);
+    let output = Command::new(env!("CARGO_BIN_EXE_allowit"))
+        .env_clear()
+        .env("ALLOWIT_URL", &url)
+        .env("ALLOWIT_PAYSH_MODE", "simple-agent-wallet")
+        .env("ALLOWIT_PAYSH_TOKEN", TOKEN)
+        .args([
+            "paysh",
+            "call",
+            "policy-wallet-1",
+            "purchase-1",
+            "configured-service",
+            "{}",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(5));
+    assert_eq!(seen.recv_timeout(Duration::from_secs(5)).unwrap().len(), 1);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("purchase-1"));
+}

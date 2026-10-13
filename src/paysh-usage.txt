@@ -1,13 +1,16 @@
-allowit paysh reconciles retained operations from a legacy AllowIt policy.
+allowit paysh makes policy-controlled PaySH calls and reconciles retained operations.
 
-Use the original retained scoped capability and backend for that policy.
-These commands do not create a policy, issue authority or start a new operation.
+For a simple agent wallet, use the scoped capability from its generated skill.
+The server signs Mainnet USDC x402 payments with that policy wallet.
+The native-vault default preserves retained legacy operations.
 This command holds no signing key and never reads one.
 
 Configuration (environment only):
   ALLOWIT_URL          service origin, e.g. https://allowit.example
                        (http is allowed only for localhost)
   ALLOWIT_PAYSH_TOKEN  the policy's scoped capability (call and status)
+  ALLOWIT_PAYSH_MODE   simple-agent-wallet for the owner-funded Mainnet wallet;
+                       native-vault or empty preserves the legacy route
   ALLOWIT_CA_FILE      optional extra PEM root certificates
 
 Commands:
@@ -15,14 +18,16 @@ Commands:
                  list the PaySH catalog, or this server's cooperating-v1
                  services in test-token units; no token needed
   allowit paysh call POLICY OPERATION_ID SERVICE_ID INPUT_JSON [--json]
-                 reconcile an existing OPERATION_ID with its original input
+                 start a simple-wallet purchase or reconcile the original OPERATION_ID
   allowit paysh status POLICY OPERATION_ID [--json]
                  read, and advance, an earlier call
 
 OPERATION_ID is chosen by the agent: 1 to 128 characters from A-Z a-z 0-9 _ -.
 Use the original OPERATION_ID. Never retry a call with a new OPERATION_ID:
 an unknown result may still have paid. Check it with status, or
-rerun the identical call with the same OPERATION_ID. INPUT_JSON is limited to
+rerun the identical call with the same OPERATION_ID. For simple-agent-wallet, POLICY is the generated policy ID,
+and services lists configured compatible x402 endpoints and maximum prices.
+INPUT_JSON is limited to
 4096 bytes. Each request is sent once; nothing is retried automatically.
 
 awaiting_input means wait for, or ask, the owner to answer in AllowIt Requests.
