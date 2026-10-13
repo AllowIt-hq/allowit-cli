@@ -78,9 +78,9 @@ allowit exec POLICY --request-id dataset-001-exec --rail stellar --op transferXL
 allowit status POLICY REQUEST_ID [--wait 60s]
 ```
 
-Gateway-generated policy and request IDs can begin with `-`. Use `--` before the remaining identifiers, for example `allowit status --wait 60s -- POLICY REQUEST_ID` or `allowit exec --amount 1 --action transfer --addr ADDRESS -- POLICY`. For compatibility with the gateway's generated skills, `--` protects the remaining identifier slots (one policy, or policy plus request for `status`); flags may follow those slots too.
+For IDs beginning with `-`, place `--` before `POLICY` (and `REQUEST_ID` for `status`). Flags may follow these identifiers.
 
-A plain USDC transfer under the customer-workspace policy template, whose actions are `transfer` and `research`:
+USDC transfer with the customer-workspace template (`transfer` and `research` actions):
 
 ```sh
 allowit eval POLICY --request-id pay-001-eval --rail solana --op transferUSDC --addr SOLANA_ADDRESS --amount 1 --action transfer
@@ -103,36 +103,22 @@ allowit exec POLICY --request-id pay-001-exec --rail solana --op transferUSDC --
 | `--budget` | Assert the computed USDC charge. |
 | `--json` | Machine-readable output. |
 
-**Budget charge.** For Local dev plans the CLI computes the USDC charge the server requires, exactly (integer arithmetic): `ceil_to_0.000001(quantity × rate) + Σ maxCostUSDC`, with the fixed test rates published by the server's `/skill` response (SOL 100, XLM 0.1, USDC 1).
+**Budget charge.** Local dev uses integer arithmetic: `ceil_to_0.000001(quantity × rate) + Σ maxCostUSDC`. `/skill` publishes test rates: SOL 100, XLM 0.1, USDC 1.
 
-**`--action` is required.** allowit 0.1.1 defaulted the action to the `--op` value (`transferUSDC`), which made a transport name look like the policy's action. The CLI now refuses a request without `--action` before sending anything (exit 2). Explicit actions produce the same body and the same derived request ID as before. To retry a request that 0.1.1 sent without `--action`, add `--action` set to its op (e.g. `--action transferUSDC`) and keep every other flag: that is the identical request, with the identical derived ID.
+**Actions.** Missing `--action` exits 2 before sending. To retry a 0.1.1 request that omitted it, set `--action` to its original `--op`. Keep every other flag. Explicit actions retain the same request body and derived ID.
 
-**Request IDs.** Give every intended operation its own `--request-id`, and use different IDs for `eval` and `exec` (e.g. `dataset-001-eval`, `dataset-001-exec`). To retry the same request, rerun it unchanged with the same ID: the server returns the stored result instead of applying it again, and rejects the ID if any detail changed. Without `--request-id` the ID is a hash of the owner, policy, command and exact request (for Local dev plans, the plan rather than the rate-derived charge), so an accidental retry is safe but a deliberate identical second purchase collapses into the first. Server state such as the policy revision, source hash or test rates is not part of the ID, so it does not change if the owner edits the policy between attempts. The CLI prints the ID on stderr before sending: `allowit: exec request <ID> (budget charge <AMOUNT> USDC)`, then for `exec`, `allowit: if the result is unknown, retry only with --request-id <ID>`. Network failures and 502/503/504 are retried twice with the same body.
+**Request IDs.** Give each operation its own `--request-id`, including separate IDs for `eval` and `exec`. Retry unchanged with the same ID. The server returns the stored result and rejects changed details. Without this flag, identical purchases share a derived ID. It hashes owner, policy, command and exact request (plan, not rate-derived charge, for Local dev). Policy revision, source hash and test rates do not affect it. The CLI prints the ID and budget charge on stderr before sending. Network failures and HTTP 502/503/504 retry twice with the same body.
 
-**Uncertain results (exit 5).** The request may have been applied. Never retry with a new request ID. The CLI prints the exact next step:
+**Uncertain results (exit 5).** Payment may have occurred. Never choose a new ID. Follow the printed retry or status command:
 
-- If no answer arrived, rerun the same command with the printed `--request-id ID`. AllowIt returns the stored result instead of applying it again, marked `replayed: true`. If the details changed since (e.g. a new test rate changed the charge), AllowIt refuses the reused ID rather than spending twice; that request may already have been applied, so the CLI exits 5 and prints the `allowit status` command that reads it by your `--request-id`.
-- If AllowIt accepted the request but its result could not be read (a failed or invalid `/status` answer while waiting, or an empty, unknown or self-contradictory result), the CLI prints both the client ID and the server `requestId`. Check it with `allowit status --wait 60s -- POLICY ID` (the server `requestId` or your `--request-id`), or rerun with `--request-id CLIENT_ID`. A `status` that finds no request by either ID exits 5: an exec may still be in flight, so rerun that identical exec instead of choosing a new ID.
+- Without an answer, rerun unchanged with the printed `--request-id`. Changed details, including a changed charge, leave the original unresolved. Check `status`.
+- After acceptance, an unreadable result prints both client and server IDs. Run `allowit status --wait 60s -- POLICY ID` with either ID, or retry with the client ID. If neither ID resolves, the exec may still be in flight. Rerun that identical exec.
 
-**Replays (exit 6).** AllowIt marks a stored result returned for a reused request ID with `replayed: true`. With an explicit `--request-id` that is the documented retry: the CLI keeps the stored state and exit code and notes that nothing new was submitted. With a derived ID (no `--request-id`), a separate run of an identical command only matched the earlier request, so the CLI reports `state: replayed` (exit 6) with the stored state as `replayedState`; nothing new was submitted. Pass a new `--request-id` for each intended operation.
+**Replays.** Stored results carry `replayed: true`. Explicit-ID retries retain the stored state and exit code. Derived-ID repeats return `state: replayed`, exit 6 and `replayedState`. Neither submits anything new.
 
-**Flags and output.** A request flag given twice is refused (exit 2). Server text that spans lines is printed as one quoted value, so it cannot add lines that read as fields.
+**Input and output.** Duplicate request flags exit 2. Multiline server text prints as one quoted value. `--context` requires one JSON object: maximum 16 KB, depth 8 and 128 values. Repeated keys and top-level `allowitExecution` are forbidden. The server applies the same limits.
 
-A result is reported only when it is one of the known combinations: `pass` with status `ready`, `submitted`, `recorded` (with `localRecorded: true`) or `settled` (with `executed: true`); `pending`/`evaluating`; `awaiting_input`/`awaiting_input`; `fail`/`denied`. `executed` and `localRecorded`, when present, must agree with the status. `kind`, when present, must be `judgment` or `transaction` and match the command; without it, `status` never reports `ready` as complete. Anything else is reported as uncertain, never as denied or complete. That includes a missing status, `pass` with `evaluating`, `pending` with `denied`, `ready` with `executed: true`, an on-chain status on Local dev, a mock recording on a wallet network, a spend for `eval`/`judgment`, and a `/status` answer for a different request or without its `requestId`. Non-200 2xx answers and redirects to `judge`/`transactions`/`status` are also uncertain.
-
-**Policy description.** Every command first reads `GET …/skill` and checks it before anything is sent to `judge` or `transactions`:
-
-- `owner` and `policyId`, when published, must match `ALLOWIT_TOKEN`.
-- `endpoints.judge`, `.transactions`, `.status` and `.skill`, when published, must name exactly the canonical route `ALLOWIT_URL/api/harness/{owner}/{policy}/{action}`. Relative URLs are resolved against the skill URL. Another origin, scheme, port, path, query or fragment is refused (exit 3). The CLI never sends to a published endpoint: requests and the bearer token go only to the canonical route on `ALLOWIT_URL`.
-- `network` is required and must be `local:dev` (mock execution) or `solana:devnet`, `solana:testnet` or `solana:mainnet` (owner-signed USDC transfers). Any other network is refused, never treated as a wallet network.
-- `executionMode` (`local` / `owner_signed`), `capabilities.mode` / `capabilities.execution` and the typed `contract.profile` (`local_dev` / `solana_owner_signed`) and `contract.capabilities.execution` (`mock` / `owner_signed`), when published, must match the network. Unknown values, a `contract.version` other than 1, or a contract bound to a different `sourceHash` are refused (exit 3).
-- Rails, test rates and plan support come from `contract.capabilities`, then the legacy `capabilities`. A wallet policy that publishes no rails still allows the one transfer its profile defines (`--rail solana --op transferUSDC`). A Local dev policy that publishes none accepts only plain USDC requests. When a typed contract sets `executionPlans`, `memoData` or `contractCalls` to false, the matching flags are refused.
-
-Fields a service omits (`title`, `policyId`, `owner`, `endpoints`, `capabilities`, `contract`) are accepted as omitted. `show` uses `name` when there is no `title`, and prints the token's policy ID marked as not reported by AllowIt.
-
-**Status without a policy description.** `status` only reads a stored request, so it continues when `/skill` fails for a reason other than authentication: a typed-skill assembly refusal (HTTP 409), another non-auth HTTP error, a network failure, or an unreadable or unsupported description. It prints `allowit: the policy description is unavailable (...)` on stderr and reads `…/status` on the canonical route. HTTP 401/403, a redirect, or a description that names another owner, policy or route still stop it (exit 3). Without the network, these are reported normally because they mean the same on every network: `pending`, `awaiting_input`, `denied` and a `ready` judgment (`passed`). `recorded`, `submitted`, `settled`, and a `ready` transaction or a `ready` result without a `kind` could be either a mock recording or a wallet transfer. Those exit 5 with stdout empty and nothing reported as confirmed, including after `--wait`. `status` never resends `judge` or `transactions`.
-
-**Context.** `--context` must be a single JSON object of at most 16 KB, depth 8 and 128 values, with no repeated keys and no top-level `allowitExecution` (AllowIt supplies that field). The server enforces the same limits.
+**Protocol checks.** The CLI checks `/skill`, canonical routes, networks and response states. Inconsistent responses remain uncertain. `status` can recover without a usable policy description, subject to authentication, routing and state checks. It never resends `judge` or `transactions`. See [HTTP API contract](docs/http-api.md) for exact validation and recovery rules.
 
 ## Owner policy lifecycle
 
