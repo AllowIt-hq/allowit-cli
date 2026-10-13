@@ -292,8 +292,11 @@ fn cooperating(catalog: &Value) -> Result<String> {
             "the PaySH catalog {field} {why}; nothing is listed"
         ))
     };
-    if catalog["profile"].as_str() != Some("cooperating-v1") {
-        return Err(bad("profile", "is not cooperating-v1"));
+    if !matches!(
+        catalog["profile"].as_str(),
+        Some("cooperating-v1" | "simple-agent-wallet-v1")
+    ) {
+        return Err(bad("profile", "is not a supported service catalog"));
     }
     if catalog.get("providers").is_some() {
         return Err(bad("reply", "lists both services and providers"));
