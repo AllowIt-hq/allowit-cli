@@ -971,3 +971,21 @@ fn simple_wallet_catalog_names_mainnet_usdc_maximum_price() {
             .contains("1000 Mainnet USDC base units maximum per call")
     );
 }
+
+#[test]
+fn simple_wallet_reports_finalized_payment_with_unknown_delivery() {
+    let value = json!({"policyId":"policy-wallet-1","operationId":"purchase-1","status":"delivery_unknown","receipts":[{"signature":"finalized-fixture","finalizedSlot":9,"action":{"type":"pay","amountUsdcUnits":1000}}],"response":null});
+    let (url, seen) = serve(vec![http(200, &value.to_string())]);
+    let output = Command::new(env!("CARGO_BIN_EXE_allowit"))
+        .env_clear()
+        .env("ALLOWIT_URL", &url)
+        .env("ALLOWIT_PAYSH_MODE", "simple-agent-wallet")
+        .env("ALLOWIT_PAYSH_TOKEN", TOKEN)
+        .args(["paysh", "status", "policy-wallet-1", "purchase-1", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(5));
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["paymentFinalized"], true);
+    assert_eq!(seen.recv_timeout(Duration::from_secs(5)).unwrap().len(), 1);
+}

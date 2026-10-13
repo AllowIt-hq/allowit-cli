@@ -461,7 +461,7 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
         ("pending", 12)
     } else if FAILED.contains(&phase.as_str()) {
         ("failed", 20)
-    } else if phase == UNKNOWN || phase == "settlement_unknown" {
+    } else if phase == UNKNOWN || phase == "settlement_unknown" || phase == "delivery_unknown" {
         ("unknown", 5)
     } else {
         return Err(unknown(
@@ -536,6 +536,9 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
         }
         "confirmed" if paid => "not started; payment is finalized",
         "confirmed" => "not started; payment remains unresolved",
+        "delivery_unknown" => {
+            "payment finalized; the service response is unavailable. Do not pay again for this operation"
+        }
         "settlement_unknown" => {
             "unresolved; the execution transaction could not be verified. Payment may have been sent. Never retry or create a replacement payment"
         }
