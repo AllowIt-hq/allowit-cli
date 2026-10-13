@@ -880,3 +880,131 @@ fn an_unsafe_capability_is_rejected_before_any_request() {
         Some(format!("Bearer {jwt}").as_str())
     );
 }
+
+#[test]
+fn simple_agent_wallet_uses_server_wallet_route_without_key_export() {
+    let value = json!({"policyId":"policy-wallet-1","operationId":"purchase-1","status":"delivered","receipts":[{"signature":"finalized-fixture","finalizedSlot":8,"action":{"type":"pay"}}],"response":{"result":"ok"}});
+    let (url, seen) = serve(vec![http(200, &value.to_string())]);
+    let output = Command::new(env!("CARGO_BIN_EXE_allowit"))
+        .env_clear()
+        .env("ALLOWIT_URL", &url)
+        .env("ALLOWIT_PAYSH_MODE", "simple-agent-wallet")
+        .env("ALLOWIT_PAYSH_TOKEN", TOKEN)
+        .args([
+            "paysh",
+            "call",
+            "policy-wallet-1",
+            "purchase-1",
+            "configured-service",
+            "{}",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let requests = seen.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/api/agent-wallet/call");
+    assert_eq!(
+        requests[0].header("authorization"),
+        Some(format!("Bearer {TOKEN}").as_str())
+    );
+    assert_eq!(requests[0].json()["policyId"], "policy-wallet-1");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(!text.contains(TOKEN));
+    assert!(!text.contains("privateKey"));
+}
+#[test]
+fn simple_wallet_unknown_result_sends_once_and_preserves_operation_id() {
+    let (url, seen) = serve(vec![http(
+        503,
+        &json!({"error":"Unknown payment"}).to_string(),
+    )]);
+    let output = Command::new(env!("CARGO_BIN_EXE_allowit"))
+        .env_clear()
+        .env("ALLOWIT_URL", &url)
+        .env("ALLOWIT_PAYSH_MODE", "simple-agent-wallet")
+        .env("ALLOWIT_PAYSH_TOKEN", TOKEN)
+        .args([
+            "paysh",
+            "call",
+            "policy-wallet-1",
+            "purchase-1",
+            "configured-service",
+            "{}",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(5));
+    assert_eq!(seen.recv_timeout(Duration::from_secs(5)).unwrap().len(), 1);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("purchase-1"));
+}
+
+#[test]
+fn simple_wallet_catalog_names_mainnet_usdc_maximum_price() {
+    let value = json!({"profile":"simple-agent-wallet-v1","services":[{"id":"quicknode-solana-rpc","name":"Quicknode Solana RPC","network":"solana:mainnet","priceUsdcUnits":1000,"priceIsMaximum":true}]});
+    let (url, seen) = serve(vec![http(200, &value.to_string())]);
+    let output = Command::new(env!("CARGO_BIN_EXE_allowit"))
+        .env_clear()
+        .env("ALLOWIT_URL", &url)
+        .env("ALLOWIT_PAYSH_MODE", "simple-agent-wallet")
+        .args(["paysh", "services"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        seen.recv_timeout(Duration::from_secs(5)).unwrap()[0].path,
+        "/api/agent-wallet/catalog"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("1000 Mainnet USDC base units maximum per call")
+    );
+}
+
+#[test]
+fn simple_wallet_reports_finalized_payment_with_unknown_delivery() {
+    let value = json!({"policyId":"policy-wallet-1","operationId":"purchase-1","status":"delivery_unknown","receipts":[{"signature":"finalized-fixture","finalizedSlot":9,"action":{"type":"pay","amountUsdcUnits":1000}}],"response":null});
+    let (url, seen) = serve(vec![http(200, &value.to_string())]);
+    let output = Command::new(env!("CARGO_BIN_EXE_allowit"))
+        .env_clear()
+        .env("ALLOWIT_URL", &url)
+        .env("ALLOWIT_PAYSH_MODE", "simple-agent-wallet")
+        .env("ALLOWIT_PAYSH_TOKEN", TOKEN)
+        .args(["paysh", "status", "policy-wallet-1", "purchase-1", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(5));
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["paymentFinalized"], true);
+    assert_eq!(seen.recv_timeout(Duration::from_secs(5)).unwrap().len(), 1);
+}
+
+#[test]
+fn simple_wallet_text_receipt_labels_real_mainnet_usdc_units() {
+    let value = json!({"policyId":"policy-wallet-1","operationId":"purchase-1","status":"delivered","receipts":[{"signature":"finalized-fixture","finalizedSlot":9,"network":"solana:mainnet","action":{"type":"pay","amountUsdcUnits":1000}}],"response":{"ok":true}});
+    let (url, seen) = serve(vec![http(200, &value.to_string())]);
+    let output = Command::new(env!("CARGO_BIN_EXE_allowit"))
+        .env_clear()
+        .env("ALLOWIT_URL", &url)
+        .env("ALLOWIT_PAYSH_MODE", "simple-agent-wallet")
+        .env("ALLOWIT_PAYSH_TOKEN", TOKEN)
+        .args(["paysh", "status", "policy-wallet-1", "purchase-1"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let body = String::from_utf8_lossy(&output.stdout);
+    assert!(body.contains("0.001000 Mainnet USDC (1000 base units)"));
+    assert!(!body.contains("test-token"));
+    assert_eq!(seen.recv_timeout(Duration::from_secs(5)).unwrap().len(), 1);
+}

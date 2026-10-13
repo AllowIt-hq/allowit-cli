@@ -75,7 +75,24 @@ fn positional(args: &[String]) -> Result<(Vec<String>, bool)> {
     Ok((pos, json))
 }
 
+fn wallet_mode() -> Result<bool> {
+    match env_value("ALLOWIT_PAYSH_MODE").as_str() {
+        "" | "native-vault" => Ok(false),
+        "simple-agent-wallet" => Ok(true),
+        _ => Err(Error::config(
+            "ALLOWIT_PAYSH_MODE must be native-vault or simple-agent-wallet",
+        )),
+    }
+}
 fn policy_id(s: &str) -> Result<&str> {
+    if wallet_mode()?
+        && !s.is_empty()
+        && s.len() <= 128
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+    {
+        return Ok(s);
+    }
     if s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
         Ok(s)
     } else {
@@ -167,7 +184,12 @@ impl Http {
     }
     /// One attempt. Transport and read failures are returned as unknown.
     fn send(&self, route: &str, bearer: Option<&str>, body: Option<&Value>) -> Result<Reply> {
-        let url = format!("{}/api/paysh/{route}", self.origin);
+        let resource = if wallet_mode()? {
+            "agent-wallet"
+        } else {
+            "paysh"
+        };
+        let url = format!("{}/api/{resource}/{route}", self.origin);
         let mut r = match body {
             Some(b) => self
                 .client
@@ -270,8 +292,11 @@ fn cooperating(catalog: &Value) -> Result<String> {
             "the PaySH catalog {field} {why}; nothing is listed"
         ))
     };
-    if catalog["profile"].as_str() != Some("cooperating-v1") {
-        return Err(bad("profile", "is not cooperating-v1"));
+    if !matches!(
+        catalog["profile"].as_str(),
+        Some("cooperating-v1" | "simple-agent-wallet-v1")
+    ) {
+        return Err(bad("profile", "is not a supported service catalog"));
     }
     if catalog.get("providers").is_some() {
         return Err(bad("reply", "lists both services and providers"));
@@ -309,7 +334,10 @@ fn cooperating(catalog: &Value) -> Result<String> {
                 "is not an unsigned 64-bit integer",
             )
         })?;
-        let price = if network == "solana:testnet" {
+        let price = if catalog["profile"] == "simple-agent-wallet-v1" && network == "solana:mainnet"
+        {
+            format!("{units} Mainnet USDC base units maximum per call")
+        } else if network == "solana:testnet" {
             format!("{units} test-token units per call on Solana Testnet, not USD or USDC")
         } else {
             format!(
@@ -433,7 +461,7 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
         ("pending", 12)
     } else if FAILED.contains(&phase.as_str()) {
         ("failed", 20)
-    } else if phase == UNKNOWN || phase == "settlement_unknown" {
+    } else if phase == UNKNOWN || phase == "settlement_unknown" || phase == "delivery_unknown" {
         ("unknown", 5)
     } else {
         return Err(unknown(
@@ -508,6 +536,9 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
         }
         "confirmed" if paid => "not started; payment is finalized",
         "confirmed" => "not started; payment remains unresolved",
+        "delivery_unknown" => {
+            "payment finalized; the service response is unavailable. Do not pay again for this operation"
+        }
         "settlement_unknown" => {
             "unresolved; the execution transaction could not be verified. Payment may have been sent. Never retry or create a replacement payment"
         }
@@ -563,6 +594,17 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
                 "swap {} lamports in, at least {} test-token units out",
                 a["amountInLamports"], a["minOutUsdc"]
             ),
+            Some("pay")
+                if r["network"] == "solana:mainnet" && a["amountUsdcUnits"].as_u64().is_some() =>
+            {
+                let units = a["amountUsdcUnits"].as_u64().unwrap();
+                format!(
+                    "pay {}.{:06} Mainnet USDC ({} base units)",
+                    units / 1_000_000,
+                    units % 1_000_000,
+                    units
+                )
+            }
             Some("pay") => format!("pay {} test-token units", a["amountUsdc"]),
             _ => "unrecognized action".into(),
         };
