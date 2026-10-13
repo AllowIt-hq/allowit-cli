@@ -1,45 +1,6 @@
 # allowit
 
-`allowit` is a native Rust CLI for AllowIt policies. Its HTTP commands send agent requests through the AllowIt service; its native policy commands use the pinned Rust SDK locally for generation, signing, receipt validation and recovery. The CLI cannot bypass the policy, owner approval or server request schema.
-
-Tempo uses the separately versioned `allowit tempo` command set. Import the owner's exported executor bundle with `allowit tempo import EXECUTOR_JSON`. Set `ALLOWIT_REQUEST_ID` and `ALLOWIT_TEMPO_EXECUTOR_KEY_FILE`, then run `allowit tempo pay RECIPIENT AMOUNT` to validate the exact policy and authority signature, sign a native `0x76` vault call with the designated executor key, broadcast it and verify canonical finality, the token transfer and the backend settlement. No payment wrapper or Node runtime is needed. Owner create/fund/revoke/withdraw operations stay in the browser; the agent never receives an owner or authority key.
-
-`allowit tempo resume REQUEST_ID` recovers the saved transaction without a signing key or another authorization. Signed bytes and the local hash are durable before broadcast; retries reconcile that same hash and may rebroadcast only the exact saved bytes if the transaction is absent. Keep the original bundle, exact intent and executor-wide journal, including after timeouts. A missing receipt cannot prove the transaction was never sent. Payments across different vaults using the same executor and chain are serialized until the earlier signed transaction is finalized. Keep this executor dedicated to these payments and use the same state directory in every process.
-
-`ALLOWIT_TEMPO_STATE_DIR` defaults to `$XDG_STATE_HOME/allowit/tempo` or `$HOME/.local/state/allowit/tempo`, with a separate executor/chain subdirectory. Keys and journals require a private local POSIX filesystem; on Windows use WSL's Linux filesystem. The key file contains a 32-byte hexadecimal secp256k1 key (optional `0x` prefix), is owned by the current user and has mode `0600`. The executor needs its own fee-token balance. RPC defaults to the exported configuration; `ALLOWIT_TEMPO_RPC_URL` may override it, but the live chain must match. Only Tempo testnet/localnet is supported. Gas is capped at 1,500,000 and the maximum total fee at 0.1 test dollar by default; `ALLOWIT_TEMPO_MAX_GAS` and `ALLOWIT_TEMPO_MAX_FEE` document bounded overrides in `allowit tempo help`. Fees are denominated in attodollars per gas, independently of token decimal precision. Finality waiting defaults to 120 seconds (`ALLOWIT_TEMPO_WAIT_SECONDS`, 0–600); exit 12 means pending, exit 5 means uncertain. Neither means confirmed. Recovery never chooses a new account nonce, requests another authorization or signs a replacement; rebroadcasting the same signed bytes cannot create a second payment.
-
-The existing `allowit tempo execute RECIPIENT AMOUNT` remains prepare-only (exit 10), without key loading or chain broadcast. `submit REQUEST_ID TRANSACTION_HASH` reports an externally signed transaction, and `status REQUEST_ID` reads the backend record. `pay` prints real request, vault, amount, transaction hash and final status; `--json` returns these fields with `state` and `exitCode`. Policy denials exit 20 without signing or sending, owner-input requests exit 11, and settled replays exit 6. The command does not implement owner lifecycle operations or change wallet interfaces.
-
-The published Tempo SDK is verified from the same exact Git submodule commit as the native and policy libraries. Its complete crate inputs and enabled features are bound into release provenance. A separate local `ALLOWIT_TEMPO_REVIEW_MANIFEST` mode can review a new, uncommitted Tempo crate on the earlier supported SDK base; it binds that crate and the parent Cargo inputs to explicit SHA256 values. This local mode cannot replace a published Tempo crate or produce release provenance and license packages.
-
-All commands call Rust modules directly. The binary needs no Node runtime. The Go implementation under `reference/go/` is a differential test oracle; the default command and distribution build use Rust. Its historical Go module path remains unchanged.
-
-Main contains the untagged `0.3.0-dev` implementation. No native Rust GitHub Release has been published. The existing `v0.1.0` and `v0.1.1` tags identify earlier Go releases.
-
-`allowit tempo call https://merchant.example/paid --id purchase-0001 --max-amount 0.25`
-buys an API response through the same native vault. It parses a real HTTP 402 using
-the official [Rust MPP SDK](https://github.com/tempoxyz/mpp-rs), validates the exact
-Tempo testnet charge against the exported token and maximum, and binds the original
-HTTP request and challenge into the policy authorization. The confirmed vault
-transfer carries the merchant's challenge/realm attribution memo. Its transaction
-hash credential identifies the vault as the token sender and is submitted once to
-the original HTTPS GET URL. No direct executor-wallet payment is used.
-
-The MVP requires explicit Tempo chain 42431, push/hash credentials and client-paid
-fees. Only canonical HTTPS URLs without query, credentials or fragment are accepted;
-redirects, custom request headers, split payments and sponsored/pull transactions
-are refused. A successful HTTP response needs a matching `Payment-Receipt`; a UTF-8
-body up to 64 KB is returned escaped, including in `--json`. The response is stored
-only in the private journal. Backend history records the executor's bounded report
-and receipt reference, which do not establish independent proof from the provider.
-
-Repeating the call with the same ID reuses the saved challenge and signed transaction.
-`tempo resume` cannot authorize another charge, fetch a replacement challenge, or
-blindly resend an already-attempted HTTP credential. If payment is confirmed but the
-response was lost, it reports `response_unavailable` and exits 5. A saved successful
-API response is returned on recovery with exit 6. Keep the original bundle and
-journal; after owner input and before a signature exists, rerun the exact original
-call with its URL, ID and maximum. Legacy native-v1 journals remain readable.
+`allowit` is a native Rust CLI for AllowIt policies. HTTP commands send agent requests through the AllowIt service. Native policy commands use the pinned Rust SDK for generation, signing, receipt validation and recovery. The CLI cannot bypass the policy, owner approval or server request schema.
 
 ## Build from source
 
@@ -80,6 +41,10 @@ The **Native binaries** workflow validates PRs and supports manual builds of Lin
 The CLI is independent of the optional hosted-agent runtime. A host can install the same binary used by an external agent; this repository contains no sandbox launcher, supervisor or model proxy.
 
 Each **Native binaries** artifact also includes `allowit-PLATFORM.provenance.json` (schema version 1, kind `rust-native`). It records the binary target and SHA-256, exact CLI commit and source tree, the SDK submodule path, canonical URL, pinned commit and consumed file hashes, and native contract release identity. It is written only after the shared SDK verifier passes and the CLI root's Cargo inputs match the committed source (see **SDK source pin**). Staging consumers should select a trusted workflow run, verify the binary checksum against this manifest, and compare the release identity with their backend before executing a downloaded skill. The manifest describes the workflow build; it is not a signature or a standalone attestation from an arbitrary download.
+
+All commands call Rust modules directly. The binary needs no Node runtime. The Go implementation under `reference/go/` is a differential test oracle; the default command and distribution build use Rust. Its historical Go module path remains unchanged.
+
+Main contains the untagged `0.3.0-dev` implementation. No native Rust GitHub Release has been published. The existing `v0.1.0` and `v0.1.1` tags identify earlier Go releases.
 
 ## Configure
 
@@ -207,6 +172,8 @@ An expired unsigned server approval exits 3 with its original request ID and nev
 
 **SDK source pin.** One Git submodule, `repos/AllowIt-hq--allowit-sdk` from `https://github.com/AllowIt-hq/allowit-sdk.git`, supplies four Cargo path dependencies: `allowit-native` (`native-rust/`), its `allowit-paysh-interface` (`crates/paysh-interface/`), the root `allowit-sdk` policy crate as `allowit-policy-sdk` with `default-features = false, features = ["std", "typed-workflow"]` for the canonical typed workflow types and host evaluator, without the compiler, and `allowit-tempo` (`tempo-rust/`) with no enabled features. The parent gitlink pins the exact SDK commit. `vendor/native-sdk.json` records that commit, the submodule path and URL, SHA-256 hashes of the consumed files of each crate (the policy crate's `Cargo.toml` and `src/` and the Tempo crate's complete input inventory), the native crate's unconsumed tooling, and the SDK root license files. The repository keeps no copies of SDK source or license text.
 
+The published Tempo SDK is verified from the same exact Git submodule commit as the native and policy libraries. Its complete crate inputs and enabled features are bound into release provenance. A separate local `ALLOWIT_TEMPO_REVIEW_MANIFEST` mode can review a new, uncommitted Tempo crate on the earlier supported SDK base; it binds that crate and the parent Cargo inputs to explicit SHA256 values. This local mode cannot replace a published Tempo crate or produce release provenance and license packages.
+
 ```sh
 python3 scripts/sync-native-sdk.py verify              # run by make test/parity/build/dist, CI, provenance and license packaging
 python3 scripts/sync-native-sdk.py update FULL_COMMIT  # check out an exact SDK commit, record and stage it
@@ -227,6 +194,10 @@ Hashes read CRLF as LF in text files, so a clean Windows `core.autocrlf` checkou
 Binary provenance additionally requires a clean parent status and binds the CLI root's Cargo inputs to committed `HEAD`, including ignored files and changes hidden by index flags. Generated `target/` and `dist/` stay ignored. These checks cover Cargo discovery from the SDK crate through the CLI root. Directories above the CLI checkout, `CARGO_HOME`, environment variables and the Rust toolchain are trusted build context; they are neither checked nor recorded.
 
 **Hosted execution authorization.** A backend-exported executor bundle contains `audit: {origin, token}`. Import saves this policy-scoped capability in the private local journal. The CLI sends only the high-level action, merchant, context, recipient and amount to `POST /api/native/execute`; the backend evaluates the owner-bound policy and returns an authority-only signature over its exact prepared transaction. The CLI reconstructs and checks the approval commitment, signer set, instructions and message, adds only the executor signature, persists the complete proof, then requires a durable `POST /api/native/report` acknowledgment before chain broadcast. Identical retries reconcile the saved proof without obtaining another approval or allocating another payment. Missing, redirected or inconsistent responses block broadcast or produce exit 5. `policy status` retries reporting without signing or broadcasting. The token is never printed; the executor bundle and journal contain this private capability and must not be shared publicly. Denial, unresolved owner input, or a required provider failure produces no execution signature. Owner operations remain independent of the provider and authority.
+
+## Tempo payments and API calls
+
+Use `allowit tempo` with an owner-exported executor bundle for native vault payments and paid API requests. See [Tempo usage](docs/tempo.md) for configuration, commands and recovery.
 
 ## PaySH agent calls
 
