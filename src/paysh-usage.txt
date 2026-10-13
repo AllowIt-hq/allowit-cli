@@ -15,8 +15,8 @@ Configuration (environment only):
 
 Commands:
   allowit paysh services [--json]
-                 list the PaySH catalog, or this server's cooperating-v1
-                 services in test-token units; no token needed
+                 list compatible Mainnet USDC wallet endpoints, or the legacy
+                 PaySH catalog in native-vault mode; no token needed
   allowit paysh call POLICY OPERATION_ID SERVICE_ID INPUT_JSON [--json]
                  start a simple-wallet purchase or reconcile the original OPERATION_ID
   allowit paysh status POLICY OPERATION_ID [--json]
