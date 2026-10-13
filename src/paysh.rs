@@ -594,6 +594,17 @@ fn report(mut v: Value, policy: &str, op: &str, json: bool, stdout: &mut String)
                 "swap {} lamports in, at least {} test-token units out",
                 a["amountInLamports"], a["minOutUsdc"]
             ),
+            Some("pay")
+                if r["network"] == "solana:mainnet" && a["amountUsdcUnits"].as_u64().is_some() =>
+            {
+                let units = a["amountUsdcUnits"].as_u64().unwrap();
+                format!(
+                    "pay {}.{:06} Mainnet USDC ({} base units)",
+                    units / 1_000_000,
+                    units % 1_000_000,
+                    units
+                )
+            }
             Some("pay") => format!("pay {} test-token units", a["amountUsdc"]),
             _ => "unrecognized action".into(),
         };

@@ -989,3 +989,22 @@ fn simple_wallet_reports_finalized_payment_with_unknown_delivery() {
     assert_eq!(body["paymentFinalized"], true);
     assert_eq!(seen.recv_timeout(Duration::from_secs(5)).unwrap().len(), 1);
 }
+
+#[test]
+fn simple_wallet_text_receipt_labels_real_mainnet_usdc_units() {
+    let value = json!({"policyId":"policy-wallet-1","operationId":"purchase-1","status":"delivered","receipts":[{"signature":"finalized-fixture","finalizedSlot":9,"network":"solana:mainnet","action":{"type":"pay","amountUsdcUnits":1000}}],"response":{"ok":true}});
+    let (url, seen) = serve(vec![http(200, &value.to_string())]);
+    let output = Command::new(env!("CARGO_BIN_EXE_allowit"))
+        .env_clear()
+        .env("ALLOWIT_URL", &url)
+        .env("ALLOWIT_PAYSH_MODE", "simple-agent-wallet")
+        .env("ALLOWIT_PAYSH_TOKEN", TOKEN)
+        .args(["paysh", "status", "policy-wallet-1", "purchase-1"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let body = String::from_utf8_lossy(&output.stdout);
+    assert!(body.contains("0.001000 Mainnet USDC (1000 base units)"));
+    assert!(!body.contains("test-token"));
+    assert_eq!(seen.recv_timeout(Duration::from_secs(5)).unwrap().len(), 1);
+}
