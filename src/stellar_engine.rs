@@ -140,7 +140,7 @@ impl Bundle {
             .map_err(|_| Error::uncertain("Stellar engine outcome is unresolved; retain the original request ID and journal"))?;
         if response.status() != reqwest::StatusCode::OK {
             return Err(Error::uncertain(
-                "Stellar engine did not acknowledge the original operation; no credential was sent",
+                "Stellar engine did not acknowledge the original operation; keep its original ID and journal",
             ));
         }
         let mut bytes = Vec::new();
