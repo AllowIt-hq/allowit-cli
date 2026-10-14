@@ -75,6 +75,14 @@ awaiting owner input return exit 20 and 11 without an executor signature or paid
 HTTP request. An expired unsigned quote exits 12 and cannot be refreshed under
 the same ID. The agent must never have the authority key.
 
+Automatic purchases require an upfront `allowit-stellar-http-binding-v1` merchant
+quote and a fresh signed merchant attestation. Before approval and first delivery,
+the CLI verifies the original request and challenge hashes, exact saved intent,
+merchant HTTPS origin, and the original quote's public key and verifier hash.
+Attempted and settled historical journals recover their exact saved receipts
+without obtaining fresh merchant evidence, including quotes created before this
+binding profile was supported.
+
 `call` saves the complete signed credential and a durable attempted marker
 before its single paid HTTP request, after the engine durably acknowledges the
 exact signed proof. Repeating the same ID preserves the URL, semantic intent,
@@ -201,7 +209,7 @@ An expired unsigned server approval exits 3 with its original request ID and nev
 
 **Local configuration.** `ALLOWIT_POLICY_DIR` defaults to `.allowit`; `ALLOWIT_POLICY_FILE` may select another policy file. `ALLOWIT_NETWORK`, `ALLOWIT_RPC_URL`, `ALLOWIT_MINT`, `ALLOWIT_EXECUTOR`, `ALLOWIT_AUTHORITY`, and `ALLOWIT_DEPLOYMENT_FILE` configure the native profile. Import persists a public context and refuses conflicting configuration. `ALLOWIT_OWNER_KEYPAIR` is used for owner operations, `ALLOWIT_EXECUTOR_KEYPAIR` for execution, and `ALLOWIT_OWNER` supplies the public owner for execution/status. Keys are private local files. `ALLOWIT_REQUEST_ID` is required for execution and is the durable operation ID. `ALLOWIT_EXECUTION_ACTION` defaults to `transfer`; `ALLOWIT_EXECUTION_MERCHANT` and one of `ALLOWIT_EXECUTION_CONTEXT_JSON` or `ALLOWIT_EXECUTION_CONTEXT_FILE` supply the exact policy input. Context is sent to the trusted backend, so do not put credentials in it. Only an explicitly additional fund/withdraw uses both a fresh ID and `ALLOWIT_ADDITIONAL_OWNER_OPERATION=1` after an expired uncertain operation.
 
-**SDK source pin.** One Git submodule, `repos/AllowIt-hq--allowit-sdk` from `https://github.com/AllowIt-hq/allowit-sdk.git`, supplies four Cargo path dependencies: `allowit-native` (`native-rust/`), its `allowit-paysh-interface` (`crates/paysh-interface/`), the root `allowit-sdk` policy crate as `allowit-policy-sdk` with `default-features = false, features = ["std", "typed-workflow"]` for the canonical typed workflow types and host evaluator, without the compiler, and `allowit-tempo` (`tempo-rust/`) with no enabled features. The parent gitlink pins the exact SDK commit. `vendor/native-sdk.json` records that commit, the submodule path and URL, SHA-256 hashes of the consumed files of each crate (the policy crate's `Cargo.toml` and `src/` and the Tempo crate's complete input inventory), the native crate's unconsumed tooling, and the SDK root license files. The repository keeps no copies of SDK source or license text.
+**SDK source pin.** One Git submodule, `repos/AllowIt-hq--allowit-sdk` from `https://github.com/AllowIt-hq/allowit-sdk.git`, supplies four direct Cargo path dependencies: `allowit-native` (`native-rust/`), the root `allowit-sdk` policy crate as `allowit-policy-sdk` with `default-features = false, features = ["std", "typed-workflow"]` for the canonical typed workflow types and host evaluator, without the compiler, `allowit-tempo` (`tempo-rust/`), and `allowit-stellar` (`stellar-rust/`). The native crate's `allowit-paysh-interface` dependency (`crates/paysh-interface/`) comes from the same pin. The parent gitlink pins the exact SDK commit. `vendor/native-sdk.json` records that commit, the submodule path and URL, SHA-256 hashes of the consumed files of each crate (the policy crate's `Cargo.toml` and `src/` and the Tempo and Stellar crates' complete input inventories), the native crate's unconsumed tooling, and the SDK root license files. The Stellar inventory includes its native verifier and published merchant helper inputs; the buyer remains native Rust. The repository keeps no copies of SDK source or license text.
 
 The published Tempo SDK is verified from the same exact Git submodule commit as the native and policy libraries. Its complete crate inputs and enabled features are bound into release provenance. A separate local `ALLOWIT_TEMPO_REVIEW_MANIFEST` mode can review a new, uncommitted Tempo crate on the earlier supported SDK base; it binds that crate and the parent Cargo inputs to explicit SHA256 values. This local mode cannot replace a published Tempo crate or produce release provenance and license packages.
 

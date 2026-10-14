@@ -191,8 +191,13 @@ def stellar_sources(sdk, commit):
     tracked = {name[len(STELLAR_CRATE) + 1:] for name in listed(sdk, STELLAR_CRATE)}
     if not {'Cargo.toml', 'Cargo.lock', 'src/lib.rs'}.issubset(blobs) or set(blobs) != tracked or inventory(crate) != tracked:
         raise ValueError('SDK Stellar crate file set differs from its pinned commit')
+    merchant_inputs = {
+        'merchant/.gitignore', 'merchant/README.md', 'merchant/index.mjs',
+        'merchant/package.json', 'merchant/package-lock.json',
+        'merchant/test/boundary.test.mjs',
+    }
     for name in blobs:
-        if name not in {'Cargo.toml', 'Cargo.lock', 'LICENSE', 'LICENSE.md', 'README.md', '.gitignore'} and not re.fullmatch(r'(?:src/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.rs|tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.(?:rs|json|mjs))', name):
+        if name not in {'Cargo.toml', 'Cargo.lock', 'LICENSE', 'LICENSE.md', 'README.md', '.gitignore'} | merchant_inputs and not re.fullmatch(r'(?:src/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.rs|tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.(?:rs|json|mjs))', name):
             raise ValueError('Unexpected SDK Stellar crate file: ' + name)
     unchanged(crate, blobs)
     return blobs

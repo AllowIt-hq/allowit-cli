@@ -233,6 +233,7 @@ mod cooperating {
     use super::*;
     use allowit_stellar::{Config, PreparedPayment, SignedPayment};
     use base64::{Engine, engine::general_purpose::STANDARD};
+    use ed25519_dalek::{Signer, SigningKey};
     use std::{
         fs,
         io::{BufRead, BufReader, Write},
@@ -397,6 +398,22 @@ mod cooperating {
             );
         }
         fn import_bundle(&mut self) {
+            let issued_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            // Seed [8; 32] is explicitly public fixture data, never a merchant key file.
+            self.source["paymentRequired"]["accepts"][0]["extra"] = json!({
+                "areFeesSponsored":true,
+                "paymentFlow":"upfront",
+                "allowitHttpBinding": {
+                    "profile":allowit_stellar::http_binding::HTTP_BINDING_PROFILE,
+                    "quoteId":"c".repeat(64),"issuedAt":issued_at,"expiresAt":issued_at+300,
+                    "merchant":"fixture","action":"research",
+                    "verificationKey":allowit_stellar::account_for_seed(&[8;32]),
+                    "verifierHash":"d".repeat(64)
+                }
+            });
             let bundle = json!({"version":1,"profile":allowit_stellar::PROFILE,"origin":format!("https://merchant.example:{}",self.port),"capability":format!("stellar-executor.{}","a".repeat(32)),"config":self.source["config"],"policy":{"id":"a".repeat(64),"revision":1,"sourceHash":"b".repeat(64)}});
             let path = self.directory.join("bundle.json");
             fs::write(&path, bundle.to_string()).unwrap();
@@ -549,6 +566,44 @@ mod cooperating {
             })
     }
 
+    fn merchant_binding(prepared: &PreparedPayment) -> Value {
+        let quote = &prepared.request.selected_offer["extra"]["allowitHttpBinding"];
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let claims = allowit_stellar::http_binding::AttestationClaims {
+            profile: allowit_stellar::http_binding::HTTP_BINDING_PROFILE.into(),
+            merchant: quote["merchant"].as_str().unwrap().into(),
+            action: quote["action"].as_str().unwrap().into(),
+            origin: url::Url::parse(&prepared.request.url)
+                .unwrap()
+                .origin()
+                .ascii_serialization(),
+            request_hash: prepared.request_hash.clone(),
+            challenge_hash: allowit_stellar::hex(&allowit_stellar::sha256(
+                allowit_stellar::canonical_json(&prepared.request.payment_required).unwrap(),
+            )),
+            nonce: "e".repeat(64),
+            issued_at: at,
+            expires_at: (at + 45).min(quote["expiresAt"].as_u64().unwrap()),
+            verifier_hash: quote["verifierHash"].as_str().unwrap().into(),
+        };
+        // This public deterministic seed is used only by the cooperating fixture.
+        let signature = SigningKey::from_bytes(&[8; 32])
+            .sign(&allowit_stellar::http_binding::attestation_digest(&claims).unwrap());
+        json!({"claims":claims,"signature":allowit_stellar::hex(&signature.to_bytes()),"verificationKey":allowit_stellar::account_for_seed(&[8;32])})
+    }
+
+    #[test]
+    fn engine_attester() {
+        let Ok(raw) = std::env::var("ALLOWIT_STELLAR_TEST_ENGINE_ATTEST") else {
+            return;
+        };
+        let prepared: PreparedPayment = serde_json::from_str(&raw).unwrap();
+        println!("{}", merchant_binding(&prepared));
+    }
+
     /// Fixture signer, isolated from the buyer and never compiled in the binary.
     #[test]
     fn engine_signer() {
@@ -594,7 +649,10 @@ mod cooperating {
         source["rpcTransaction"]["txHash"] = json!(hash);
         source["paymentResponse"] = json!(STANDARD.encode(serde_json::to_vec(&json!({"success":true,"transaction":hash,"network":prepared.config.network,"payer":prepared.config.vault})).unwrap()));
         fs::write(path, source.to_string()).unwrap();
-        println!("{}", serde_json::to_string(&approval).unwrap());
+        println!(
+            "{}",
+            json!({"approval":approval,"merchantBinding":merchant_binding(&prepared)})
+        );
     }
 
     #[test]
@@ -669,6 +727,117 @@ mod cooperating {
             false,
         );
         assert_eq!(changed.status.code(), Some(3));
+        assert_eq!(fixture.paid_count(), 1);
+    }
+
+    #[test]
+    fn merchant_response_mismatches_stop_before_executor_signing_or_paid_http() {
+        for (path, value) in [
+            (vec!["requestHash"], json!("f".repeat(64))),
+            (
+                vec!["operation", "exactRequest", "context"],
+                json!({"purpose":"other"}),
+            ),
+            (
+                vec!["merchantBinding", "claims", "origin"],
+                json!("https://other.example"),
+            ),
+            (
+                vec!["merchantBinding", "claims", "challengeHash"],
+                json!("f".repeat(64)),
+            ),
+            (vec!["merchantBinding", "signature"], json!("00".repeat(64))),
+            (
+                vec!["merchantBinding", "verificationKey"],
+                json!(allowit_stellar::account_for_seed(&[9; 32])),
+            ),
+        ] {
+            let mut fixture = Fixture::new();
+            fixture.import_bundle();
+            fixture.source["engineResponseMutation"] = json!({"path":path,"value":value});
+            fixture.source["engineMutationRoute"] = json!("execute");
+            fixture.save();
+            let out = fixture.call_auto("merchant-mismatch-001", false);
+            assert_eq!(out.status.code(), Some(3));
+            assert!(String::from_utf8_lossy(&out.stderr).contains("binding"));
+            assert!(!String::from_utf8_lossy(&out.stderr).contains("signing key"));
+            assert_eq!(fixture.paid_count(), 0);
+            let events = fs::read_to_string(fixture.directory.join("requests.jsonl")).unwrap();
+            assert!(!events.contains("\"authMode\": \"enforce\""));
+        }
+    }
+
+    #[test]
+    fn pre_delivery_acknowledgment_requires_fresh_matching_merchant_proof() {
+        let mut fixture = Fixture::new();
+        fixture.import_bundle();
+        fixture.source["engineResponseMutation"] =
+            json!({"path":["merchantBinding","claims","expiresAt"],"value":1});
+        fixture.source["engineMutationRoute"] = json!("report");
+        fixture.save();
+        let out = fixture.call_auto("merchant-report-001", true);
+        assert_eq!(out.status.code(), Some(3));
+        assert_eq!(fixture.paid_count(), 0);
+        let path = fixture.directory.join("state/operations").join(format!(
+            "request-{}.json",
+            allowit_stellar::hex(&allowit_stellar::sha256("merchant-report-001"))
+        ));
+        let record: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert!(record["signed"].is_object());
+        assert_eq!(record["attempted"], false);
+        assert_eq!(record["proof_acknowledged"], false);
+    }
+
+    #[test]
+    fn historical_attempted_engine_journal_without_binding_profile_recovers_exact_receipt() {
+        let mut fixture = Fixture::new();
+        fixture.import();
+        let id = "historical-engine-001";
+        let prepared = fixture.prepare(id);
+        assert!(prepared.request.selected_offer["extra"]["allowitHttpBinding"].is_null());
+        let approval = fixture.approve(id);
+        fixture.bind_receipt(&prepared);
+        let out = fixture.child(
+            &[
+                "call",
+                &fixture.url(),
+                "--id",
+                id,
+                "--max-amount",
+                "0.001",
+                "--approval",
+                approval.to_str().unwrap(),
+                "--json",
+            ],
+            true,
+            false,
+        );
+        assert_eq!(out.status.code(), Some(0));
+        fixture.import_bundle();
+        let path = fixture.directory.join("state/operations").join(format!(
+            "request-{}.json",
+            allowit_stellar::hex(&allowit_stellar::sha256(id))
+        ));
+        let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let intent =
+            json!({"action":"research","merchant":"fixture","context":{"purpose":"dataset"}});
+        record["intent"] = intent.clone();
+        record["engine_policy"] = fixture.source["bundle"]["policy"].clone();
+        record["proof_acknowledged"] = json!(true);
+        fs::write(&path, record.to_string()).unwrap();
+        let signed: SignedPayment = serde_json::from_value(record["signed"].clone()).unwrap();
+        let result = json!({"requestId":id,"policyId":fixture.source["bundle"]["policy"]["id"],"binding":{"config":fixture.source["config"],"policy":fixture.source["bundle"]["policy"]},"proofAcknowledged":true,"signedDigest":stellar_engine::signed_digest(&signed).unwrap(),"operation":{"id":id,"policyId":fixture.source["bundle"]["policy"]["id"],"method":"execute","status":"settled","transactionHash":record["settlement"]["transaction"]}});
+        fs::write(fixture.directory.join(format!("{id}-engine.json")), json!({"intent":{"prepared":prepared,"action":intent["action"],"merchant":intent["merchant"],"context":intent["context"]},"result":result}).to_string()).unwrap();
+        for command in ["status", "resume"] {
+            let out = fixture.child(&[command, id, "--json"], false, false);
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert_eq!(json_output(&out)["paymentVerified"], true);
+        }
         assert_eq!(fixture.paid_count(), 1);
     }
 

@@ -680,6 +680,13 @@ fn observe_engine(bundle: &Bundle, record: &mut Record) -> Result<()> {
     bundle.check_binding(&result, &record.id)?;
     if let Some(signed) = &record.signed {
         bundle.check_proof(&result, &record.id, signed)?;
+        if !record.attempted {
+            bundle.check_delivery_binding(
+                &result,
+                record.intent.as_ref().unwrap(),
+                &record.prepared,
+            )?;
+        }
         record.proof_acknowledged = true;
         if result["operation"]["status"] == "settled" {
             let hash = result["operation"]["transactionHash"]
@@ -726,6 +733,8 @@ fn report_outcomes(bundle: &Bundle, record: &mut Record) -> Result<()> {
             .ok_or_else(|| Error::config("Missing verified Stellar receipt"))?;
         let result = bundle.report(
             &record.id,
+            record.intent.as_ref().unwrap(),
+            &record.prepared,
             signed,
             Some(&receipt.transaction),
             record.attempted,
@@ -993,7 +1002,12 @@ pub(crate) fn run(args: &[String], stdout: &mut String, _stderr: &mut String) ->
                         return output(&record, options.json, stdout);
                     }
                     Some("allow") => {
-                        let approval = bundle.approval(&result, &record.prepared)?;
+                        let approval = bundle.approval(
+                            &result,
+                            &record.id,
+                            record.intent.as_ref().unwrap(),
+                            &record.prepared,
+                        )?;
                         record.approval = Some(approval.clone());
                         record.decision = Some("allow".into());
                         store.save(&record.id, &record)?;
@@ -1035,10 +1049,24 @@ pub(crate) fn run(args: &[String], stdout: &mut String, _stderr: &mut String) ->
         let rpc = validate_live(&config, &record)?;
         rpc.enforce(&config, &record.prepared, record.signed.as_ref().unwrap())?;
         if let Some(bundle) = engine {
-            bundle.report(&record.id, record.signed.as_ref().unwrap(), None, false)?;
+            let acknowledged = bundle.report(
+                &record.id,
+                record.intent.as_ref().unwrap(),
+                &record.prepared,
+                record.signed.as_ref().unwrap(),
+                None,
+                false,
+            )?;
             record.proof_acknowledged = true;
             store.save(&record.id, &record)?;
             let _ = validate_live(&config, &record)?;
+            // Final RPC reads may outlast a short merchant attestation. Recheck
+            // the same acknowledged evidence at the credential delivery boundary.
+            bundle.check_delivery_binding(
+                &acknowledged,
+                record.intent.as_ref().unwrap(),
+                &record.prepared,
+            )?;
         }
         // These exact persisted bytes are the only credential ever sent for this ID.
         record.attempted = true;
@@ -1055,7 +1083,14 @@ pub(crate) fn run(args: &[String], stdout: &mut String, _stderr: &mut String) ->
         if let Some(bundle) = engine {
             // Attempted is advisory uncertainty, never settlement proof. Even
             // when HTTP delivery fails, the saved credential remains original.
-            let reported = bundle.report(&record.id, record.signed.as_ref().unwrap(), None, true);
+            let reported = bundle.report(
+                &record.id,
+                record.intent.as_ref().unwrap(),
+                &record.prepared,
+                record.signed.as_ref().unwrap(),
+                None,
+                true,
+            );
             store.save(&record.id, &record)?;
             if delivered.is_ok() {
                 reported?;
@@ -1075,7 +1110,14 @@ pub(crate) fn run(args: &[String], stdout: &mut String, _stderr: &mut String) ->
             if !record.proof_acknowledged
                 && let Some(signed) = &record.signed
             {
-                bundle.report(&record.id, signed, None, record.attempted)?;
+                bundle.report(
+                    &record.id,
+                    record.intent.as_ref().unwrap(),
+                    &record.prepared,
+                    signed,
+                    None,
+                    record.attempted,
+                )?;
                 record.proof_acknowledged = true;
                 store.save(&record.id, &record)?;
             }

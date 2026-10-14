@@ -198,11 +198,12 @@ class ProvenanceTests(unittest.TestCase):
         blobs = provenance.native_sdk.crate_blobs(self.sdk, commit, "stellar-rust")
         self.assertEqual(stellar["files"], {name: provenance.native_sdk.digest(raw) for name, raw in blobs.items()})
         self.assertTrue({"Cargo.toml", "Cargo.lock", "src/lib.rs"}.issubset(stellar["files"]))
+        self.assertTrue({"src/http_binding.rs", "src/bin/allowit-stellar-http.rs", "merchant/index.mjs", "merchant/package-lock.json"}.issubset(stellar["files"]))
         release = json.loads((self.sdk / "native-rust/src/release.json").read_text())
         self.assertEqual(result["nativeRelease"]["sourceBundle"], release["sourceBundle"])
 
     def test_refuses_hidden_stellar_source_and_lock_changes(self):
-        for name in ["stellar-rust/src/lib.rs", "stellar-rust/Cargo.lock"]:
+        for name in ["stellar-rust/src/lib.rs", "stellar-rust/Cargo.lock", "stellar-rust/src/http_binding.rs", "stellar-rust/merchant/index.mjs"]:
             with self.subTest(name=name):
                 path = self.sdk / name
                 original = path.read_bytes()

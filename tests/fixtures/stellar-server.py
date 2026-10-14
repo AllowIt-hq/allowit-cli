@@ -13,6 +13,13 @@ import time
 directory = pathlib.Path(sys.argv[1])
 
 
+def attest(prepared):
+    """Only the Rust test driver signs with the explicitly public fixture seed."""
+    env = dict(os.environ, ALLOWIT_STELLAR_TEST_ENGINE_ATTEST=json.dumps(prepared))
+    output = subprocess.check_output([sys.argv[2], "--exact", "cooperating::engine_attester", "--nocapture"], env=env).decode()
+    return next(json.loads(line) for line in output.splitlines() if line.startswith("{"))
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
@@ -68,6 +75,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             operation_file = directory / (request["requestId"] + "-engine.json")
             operation = json.loads(operation_file.read_text()) if operation_file.exists() else None
             result = {"requestId": request["requestId"], "policyId": policy["id"], "binding": {"config": fixture["config"], "policy": policy}, "operation": {"id": request["requestId"], "policyId": policy["id"], "method": "execute", "status": "prepared"}}
+            original = request if self.path.endswith("/execute") else operation["intent"] if operation else None
+            if original:
+                prepared = original["prepared"]
+                identity = {"action": original["action"], "merchant": original["merchant"], "context": original["context"], "url": prepared["request"]["url"], "recipient": prepared["request"]["selectedOffer"]["payTo"], "amount": prepared["request"]["selectedOffer"]["amount"]}
+                result["requestHash"] = prepared["requestHash"]
+                result["operation"].update(requestHash=prepared["requestHash"], identity=identity, exactRequest=identity)
+                if operation and operation["result"].get("merchantBinding"):
+                    result["merchantBinding"] = operation["result"]["merchantBinding"]
+                    result["operation"]["merchantBinding"] = result["merchantBinding"]
             if self.path.endswith("/execute"):
                 if operation and operation["intent"] != request:
                     self.reply(409, {})
@@ -77,11 +93,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if decision == "allow":
                     if operation and operation.get("approval"):
                         result["approval"] = operation["approval"]
+                        result["merchantBinding"] = attest(prepared)
                     else:
                         env = dict(os.environ, ALLOWIT_STELLAR_TEST_ENGINE_PREPARED=json.dumps(request["prepared"]), ALLOWIT_STELLAR_TEST_ENGINE_FIXTURE=str(directory / "fixture.json"))
                         output = subprocess.check_output([sys.argv[2], "--exact", "cooperating::engine_signer", "--nocapture"], env=env).decode()
-                        approval = next(json.loads(line) for line in output.splitlines() if line.startswith("{"))
-                        result["approval"] = approval
+                        proof = next(json.loads(line) for line in output.splitlines() if line.startswith("{"))
+                        result.update(proof)
+                    result["operation"]["merchantBinding"] = result["merchantBinding"]
                     if fixture.get("engineBadApproval"):
                         result["approval"]["signature"] = "00" * 64
                 operation = {"intent": request, "approval": result.get("approval"), "result": result}
@@ -98,6 +116,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 result["proofAcknowledged"] = not fixture.get("engineBadAck", False)
                 result["signedDigest"] = hashlib.sha256(json.dumps(request["signed"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
                 result["operation"]["status"] = "settled" if request.get("transactionHash") else "signed"
+                if not request.get("attempted"):
+                    result["merchantBinding"] = attest(prepared)
+                    result["operation"]["merchantBinding"] = result["merchantBinding"]
                 if request.get("transactionHash"):
                     result["operation"]["transactionHash"] = request["transactionHash"]
                 operation["result"] = result
@@ -115,6 +136,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             if fixture.get("engineWrongBinding"):
                 result["binding"]["policy"]["revision"] += 1
+            mutation = fixture.get("engineResponseMutation")
+            if mutation and (not fixture.get("engineMutationRoute") or self.path.endswith("/" + fixture["engineMutationRoute"])):
+                target = result
+                for key in mutation["path"][:-1]:
+                    target = target[key]
+                target[mutation["path"][-1]] = mutation["value"]
             self.reply(200, result)
             return
         method = request["method"]

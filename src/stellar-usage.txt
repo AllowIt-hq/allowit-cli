@@ -36,7 +36,12 @@ server. ALLOWIT_URL, if set, must match the exported origin exactly.
 
 Automatic call fetches and durably saves its original quote/plan, sends that exact
 intent to the engine, verifies its policy/configuration binding and detached
-authority signature, and reads only the executor key. Use --action or
+authority signature, and reads only the executor key. Automatic purchases require
+the merchant's upfront allowit-stellar-http-binding-v1 quote declaration and a
+fresh signed merchant attestation. The CLI checks the original request and
+challenge hashes, full saved intent, HTTPS merchant origin, and the quote's
+verification key and verifier hash before accepting approval and again before
+first credential delivery. Use --action or
 ALLOWIT_EXECUTION_ACTION for the real semantic action; --merchant and --context
 may instead use ALLOWIT_EXECUTION_MERCHANT and ALLOWIT_EXECUTION_CONTEXT_JSON.
 Labels/context do not establish merchant identity or answer owner questions.
@@ -74,7 +79,9 @@ Call reads only the executor key. It saves the complete
 credential and an attempted marker before sending PAYMENT-SIGNATURE exactly
 once. It never creates a replacement quote or nonce. Resume/status read no key,
 never sign or resend, and verify an available settlement against the exact chain
-receipt. If the HTTP result lost its receipt, resume --transaction HASH uses the
+receipt. Attempted and settled historical journals do not require a new merchant
+attestation or a replacement quote, including older quotes without the binding
+profile. If the HTTP result lost its receipt, resume --transaction HASH uses the
 original transaction hash as a lookup hint. Exact saved authorization, transfer
 and chain metadata must match. A verified payment unblocks the executor while
 service delivery stays unavailable (exit 5); another transaction is rejected.
