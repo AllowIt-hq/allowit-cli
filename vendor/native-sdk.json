@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-  "commit": "4e2536461005376726f270af9c70797079c07408",
+  "commit": "5e7b462b5797d18acf9aecf84188ab27685723b4",
   "crate": "native-rust",
   "submodule": {
     "path": "repos/AllowIt-hq--allowit-sdk",
@@ -62,7 +62,7 @@
       "src/readability.rs": "5432fd2bdb7e27e63f10c49787fa45d0f3d6fdab84990bae0ede363b00d2d983",
       "src/registry.rs": "7fe111bb6e1cb5ca18fd0fff6ad6c6e67ce217dddfc0acd52e06604868efd0fc",
       "src/requirements.rs": "d0a4350a9d42731c9cdc78604de3a41ee615ed4bbd28d8a91800677e152132a3",
-      "src/runtime.rs": "a2bebf84af40829c48d01f7691dd360e3ec37c2c9b0ebbdcd268b47739445123",
+      "src/runtime.rs": "0361620f541651541bf346096a0ceaf1bdd68569559fd8b5c25e4d8661156e6f",
       "src/spending.rs": "06e6a022df74c7ad33745ea11ec97166cda1f2e059e707aecf82176a5ddac15d",
       "src/trace.rs": "b8d4a89465dfc825f5a1820ddf2203bf7208c6b144e64c708a559af72331a626",
       "src/typed_workflow.rs": "5dfda6b5002c4590c0a0963e8bcda7e8a7dfc27e79b63ee311062f6a539de574",
@@ -94,8 +94,8 @@
       "Cargo.lock": "815702a3dfc5698da42659e4e81f342d615ad5bab5802de4aa0cad32c4c3d54a",
       "Cargo.toml": "699b217489b95992b57fd9c684ac22ad2ba47ddc723252b69ca58faab18deb22",
       "README.md": "a61185465f21171a9e4d2fca4a5a534188687d94f23b8717e9a0103e44349cea",
-      "src/lib.rs": "bf6fac0c6401cfd0fac4a862a566f74adad1b52c90a92bd0a5066b643e47be76",
-      "src/tests.rs": "05e1d8751c31980dcacd0e94a97b19336d665d073cfea8cea563bd0cae4fa198",
+      "src/lib.rs": "3d96bcc45ff093b0c0639c0a4b0ca077ff2b998e51faae678b64808138c1772b",
+      "src/tests.rs": "b9f8b86360a168f734f11f446700f5c4d7def67faca13ac7d688351e0152e7e0",
       "tests/fixtures/contract-host.json": "4205c6fd56ea32d7dedef5b640d084409519bd3f4810d00eea5bc3e2f02c6803",
       "tests/fixtures/golden.json": "7cc12dbc3be3e5b20083acada66f59a03ed14b6f486ccc286222362c57b2e55a",
       "tests/fixtures/x402-vault.json": "2622cc4716ca39fbac878656984fc1567ef9dc693a6f2480945688632667a4ee",
