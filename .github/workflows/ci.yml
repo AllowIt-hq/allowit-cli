@@ -43,7 +43,9 @@ jobs:
       - name: Local Rust and Go unit tests
         run: |
           cargo test --locked --lib --bins
-          cargo test --locked --test paysh --test vendor
+          cargo test --locked --test paysh --test vendor --test stellar
+          CARGO_TARGET_DIR="$PWD/target" cargo test --manifest-path repos/AllowIt-hq--allowit-sdk/stellar-rust/Cargo.toml --locked
+          CARGO_TARGET_DIR="$PWD/target" cargo clippy --manifest-path repos/AllowIt-hq--allowit-sdk/stellar-rust/Cargo.toml --locked --all-targets -- -D warnings
           cargo test --locked --test native -- --skip generate_is_offline_native_and_preserves_policy_instance
           cd reference/go && go vet ./... && go test -race -count=1 ./...
           cd ../.. && go test -race -count=1 ./integration

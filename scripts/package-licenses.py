@@ -59,7 +59,9 @@ def validate(root):
             if file.is_symlink() or hashlib.sha256(file.read_bytes()).hexdigest() != item['sha256']:
                 raise ValueError('Notice file is missing or changed')
         found[identity] = record
-    for label, lock in [('Current', root / 'Cargo.lock'), ('SDK Tempo', root / native_sdk.SUBMODULE / native_sdk.TEMPO_CRATE / 'Cargo.lock')]:
+    for label, lock in [('Current', root / 'Cargo.lock'),
+                        ('SDK Tempo', root / native_sdk.SUBMODULE / native_sdk.TEMPO_CRATE / 'Cargo.lock'),
+                        ('SDK Stellar', root / native_sdk.SUBMODULE / native_sdk.STELLAR_CRATE / 'Cargo.lock')]:
         for package in lock_packages(lock.read_text()):
             if package.get('source', '').startswith('registry+'):
                 record = found.get((package['name'], package['version']))
