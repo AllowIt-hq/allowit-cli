@@ -44,4 +44,3 @@ Request IDs: give each intended operation its own --request-id and separate IDs
 for eval and exec; rerun with the same ID only to retry the same request. After
 exit 5 never retry with a new ID: rerun with the printed --request-id, or check
 it with allowit status, which accepts the server requestId or your --request-id.
-Stellar x402: allowit stellar help

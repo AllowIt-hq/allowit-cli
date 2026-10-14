@@ -101,7 +101,7 @@ fn execute(args: &[String], stdout: &mut String, stderr: &mut String) -> Result<
         "stellar" => stellar::run(&args[1..], stdout, stderr),
         "show" | "eval" | "exec" | "status" => action(&args[0], &args[1..], stdout, stderr),
         _ => Err(Error::usage(format!(
-            "unknown command {} (show, eval, exec, status, policy, paysh, tempo, stellar)",
+            "unknown command {} (show, eval, exec, status, policy)",
             error::quoted(&args[0])
         ))),
     }
