@@ -239,7 +239,10 @@ mod cooperating {
         os::unix::fs::PermissionsExt,
         process::{Child, Stdio},
     };
-    use stellar_xdr::{Limits, ReadXdr, SequenceNumber, TransactionEnvelope, WriteXdr};
+    use stellar_xdr::{
+        DiagnosticEvent, Limits, ReadXdr, SequenceNumber, TransactionEnvelope, TransactionMeta,
+        WriteXdr,
+    };
 
     struct Fixture {
         directory: PathBuf,
@@ -300,6 +303,27 @@ mod cooperating {
             let config: Config = serde_json::from_value(source["config"].clone()).unwrap();
             source["stateReadTransaction"] =
                 json!(allowit_stellar::state_read_transaction(&config).unwrap());
+            let meta = TransactionMeta::from_xdr_base64(
+                source["rpcTransaction"]["resultMetaXdr"].as_str().unwrap(),
+                Limits::none(),
+            )
+            .unwrap();
+            let events = match meta {
+                TransactionMeta::V3(meta) => meta.soroban_meta.unwrap().events.to_vec(),
+                TransactionMeta::V4(meta) => meta.operations[0].events.to_vec(),
+                _ => panic!("Expected Soroban test metadata"),
+            };
+            source["simulationEvents"] = json!(
+                events
+                    .iter()
+                    .map(|event| DiagnosticEvent {
+                        in_successful_contract_call: true,
+                        event: event.clone(),
+                    }
+                    .to_xdr_base64(Limits::none())
+                    .unwrap())
+                    .collect::<Vec<_>>()
+            );
             fs::write(directory.join("config.json"), source["config"].to_string()).unwrap();
             for (file, seed) in [("executor.hex", 2u8), ("authority.hex", 4u8)] {
                 let path = directory.join(file);
@@ -598,6 +622,11 @@ mod cooperating {
             .position(|v| v["route"] == "/api/stellar/report")
             .unwrap();
         let paid = events.iter().position(|v| v["kind"] == "paid").unwrap();
+        let enforced = events
+            .iter()
+            .position(|v| v["authMode"] == "enforce")
+            .unwrap();
+        assert!(enforced < proof);
         assert!(proof < paid);
         assert!(
             events
@@ -641,6 +670,66 @@ mod cooperating {
         );
         assert_eq!(changed.status.code(), Some(3));
         assert_eq!(fixture.paid_count(), 1);
+    }
+
+    #[test]
+    fn recording_nonce_rent_is_not_the_signed_custom_auth_fee() {
+        let mut fixture = Fixture::new();
+        fixture.import_bundle();
+        fixture.source["minResourceFee"] = json!("770813");
+        fixture.source["enforcingMinResourceFee"] = json!("24105");
+        fixture.save();
+        let out = fixture.call_auto("recording-fee-001", true);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(fixture.paid_count(), 1);
+        assert_eq!(json_output(&out)["paymentVerified"], true);
+    }
+
+    #[test]
+    fn enforced_fee_and_exact_transfer_failures_preserve_signed_proof_without_send() {
+        for (field, value) in [
+            ("enforcingMinResourceFee", json!("49901")),
+            ("enforcingTransactionData", json!("AAAA")),
+            ("simulationEvents", json!([])),
+            ("simulationEvents", json!(["AAAA"])),
+        ] {
+            let mut fixture = Fixture::new();
+            fixture.import_bundle();
+            fixture.source[field] = value;
+            fixture.save();
+            let out = fixture.call_auto("enforcing-failed-001", true);
+            assert_eq!(out.status.code(), Some(3));
+            assert_eq!(fixture.paid_count(), 0);
+            let path = fixture.directory.join("state/operations").join(format!(
+                "request-{}.json",
+                allowit_stellar::hex(&allowit_stellar::sha256("enforcing-failed-001"))
+            ));
+            let original: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert!(original["signed"].is_object());
+            assert_eq!(original["attempted"], false);
+            assert_eq!(original["proof_acknowledged"], false);
+            fs::remove_file(fixture.directory.join("executor.hex")).unwrap();
+            let retry = fixture.call_auto("enforcing-failed-001", false);
+            assert_eq!(retry.status.code(), Some(3));
+            assert_eq!(
+                serde_json::from_slice::<Value>(&fs::read(path).unwrap()).unwrap(),
+                original
+            );
+            let events = fs::read_to_string(fixture.directory.join("requests.jsonl")).unwrap();
+            assert_eq!(
+                events
+                    .lines()
+                    .filter(|line| line.contains("\"route\": \"/api/stellar/execute\""))
+                    .count(),
+                1
+            );
+            assert_eq!(fixture.paid_count(), 0);
+        }
     }
 
     #[test]
@@ -696,6 +785,8 @@ mod cooperating {
             assert_eq!(record["attempted"], false);
             if flag != "engineBadAck" {
                 assert_eq!(record["signed"], Value::Null);
+                let events = fs::read_to_string(fixture.directory.join("requests.jsonl")).unwrap();
+                assert!(!events.contains("\"authMode\": \"enforce\""));
             }
             assert!(!String::from_utf8_lossy(&out.stderr).contains("signing key"));
         }

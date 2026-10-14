@@ -118,7 +118,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.reply(200, result)
             return
         method = request["method"]
-        self.record({"kind": "rpc", "method": method})
+        self.record({"kind": "rpc", "method": method, "authMode": request.get("params", {}).get("authMode")})
         if method == "getNetwork":
             result = {"passphrase": "Test SDF Network ; September 2015"}
         elif method == "getLatestLedger":
@@ -128,6 +128,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif method == "simulateTransaction":
             if request["params"]["transaction"] == fixture["stateReadTransaction"]:
                 result = {"results": [{"xdr": fixture["stateResultXdr"], "auth": []}]}
+            elif request["params"].get("authMode") == "enforce":
+                result = {"results": [{"xdr": "AAAAAQ==", "auth": []}], "transactionData": fixture.get("enforcingTransactionData", fixture["transactionData"]), "minResourceFee": fixture.get("enforcingMinResourceFee", "1000"), "events": fixture["simulationEvents"], "latestLedger": fixture.get("ledger", 3450)}
             else:
                 result = {"results": [{"xdr": "AAAAAQ==", "auth": [fixture["authorizationXdr"]]}], "transactionData": fixture["transactionData"], "minResourceFee": fixture["minResourceFee"]}
             if fixture.get("restore"):

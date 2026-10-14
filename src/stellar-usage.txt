@@ -61,6 +61,13 @@ acknowledgment of the exact signed proof. Engine failure never selects manual
 approval implicitly. --approval FILE and authorize are explicit diagnostic tools;
 they cannot replace approval for an existing engine-managed operation.
 
+Recording simulation discovers the authorization; its temporary nonce rent is
+not the final custom-account fee. After persisting both signatures, call enforces
+that exact transaction through RPC simulation and checks one successful canonical
+USDC transfer and resource fee plus inclusion fee at most 50000 stroops. Failure
+keeps the original signed journal and sends no credential. The sponsored
+facilitator rebuilds transaction resources; the authorization remains exact.
+
 Call reads only the executor key. It saves the complete
 credential and an attempted marker before sending PAYMENT-SIGNATURE exactly
 once. It never creates a replacement quote or nonce. Resume/status read no key,

@@ -3,10 +3,14 @@ use crate::{
     config::env_value,
     error::{Error, Result},
 };
-use allowit_stellar::{Config, VaultState};
+use allowit_stellar::{Config, PreparedPayment, SignedPayment, VaultState};
 use reqwest::{blocking::Client, redirect::Policy};
 use serde_json::{Value, json};
 use std::{io::Read, time::Duration};
+use stellar_xdr::{
+    ContractEventBody, ContractEventType, DiagnosticEvent, HostFunction, Limits, OperationBody,
+    ReadXdr, ScAddress, ScVal, SorobanTransactionData, TransactionEnvelope,
+};
 
 fn checked<T>(value: std::result::Result<T, String>) -> Result<T> {
     value.map_err(|_| {
@@ -122,6 +126,27 @@ impl Rpc {
         let result = self.read("simulateTransaction", json!({"transaction":transaction}))?;
         checked_simulation(result)
     }
+    pub(crate) fn enforce(
+        &self,
+        config: &Config,
+        prepared: &PreparedPayment,
+        signed: &SignedPayment,
+    ) -> Result<()> {
+        checked(allowit_stellar::validate_signed(config, prepared, signed))?;
+        let result = self.read(
+            "simulateTransaction",
+            json!({"transaction":signed.transaction_xdr,"authMode":"enforce"}),
+        )?;
+        let result = checked_simulation(result)?;
+        if result["latestLedger"].as_u64().is_none_or(|ledger| {
+            ledger == 0 || ledger >= u64::from(prepared.signature_expiration_ledger)
+        }) {
+            return Err(Error::config(
+                "Stellar signed simulation is stale; retain the original signed journal",
+            ));
+        }
+        validate_enforcement(signed, result)
+    }
     pub(crate) fn network(&self, config: &Config) -> Result<()> {
         let network = self.read("getNetwork", json!({}))?;
         let passphrase = match config.network.as_str() {
@@ -159,10 +184,85 @@ impl Rpc {
     }
 }
 
+fn validate_enforcement(signed: &SignedPayment, result: Value) -> Result<()> {
+    let invalid = || {
+        Error::config(
+            "Stellar signed authorization simulation failed exact transfer or facilitator fee checks; retain the original signed journal",
+        )
+    };
+    let fee = result["minResourceFee"]
+        .as_str()
+        .and_then(|n| n.parse::<u32>().ok())
+        .ok_or_else(invalid)?;
+    if fee
+        .checked_add(100)
+        .is_none_or(|n| n > allowit_stellar::MAX_TRANSACTION_FEE_STROOPS)
+        || result["results"][0]["xdr"] != "AAAAAQ=="
+    {
+        return Err(invalid());
+    }
+    let limits = Limits {
+        depth: 64,
+        len: 2_097_152,
+    };
+    let resources = SorobanTransactionData::from_xdr_base64(
+        result["transactionData"].as_str().ok_or_else(invalid)?,
+        limits.clone(),
+    )
+    .map_err(|_| invalid())?;
+    if resources.resource_fee < 0 || resources.resource_fee > i64::from(fee) {
+        return Err(invalid());
+    }
+    let envelope = TransactionEnvelope::from_xdr_base64(&signed.transaction_xdr, limits.clone())
+        .map_err(|_| invalid())?;
+    let TransactionEnvelope::Tx(tx) = envelope else {
+        return Err(invalid());
+    };
+    let operation = tx.tx.operations.first().ok_or_else(invalid)?;
+    let OperationBody::InvokeHostFunction(op) = &operation.body else {
+        return Err(invalid());
+    };
+    let HostFunction::InvokeContract(transfer) = &op.host_function else {
+        return Err(invalid());
+    };
+    let ScAddress::Contract(asset) = &transfer.contract_address else {
+        return Err(invalid());
+    };
+    if transfer.args.len() != 3 {
+        return Err(invalid());
+    }
+    let events = result["events"].as_array().ok_or_else(invalid)?;
+    let mut contract_events = 0;
+    for encoded in events {
+        let event =
+            DiagnosticEvent::from_xdr_base64(encoded.as_str().ok_or_else(invalid)?, limits.clone())
+                .map_err(|_| invalid())?;
+        if event.event.type_ != ContractEventType::Contract {
+            continue;
+        }
+        contract_events += 1;
+        let ContractEventBody::V0(body) = &event.event.body;
+        if !event.in_successful_contract_call
+            || event.event.contract_id.as_ref() != Some(asset)
+            || !(3..=4).contains(&body.topics.len())
+            || body.topics[0] != ScVal::Symbol("transfer".try_into().map_err(|_| invalid())?)
+            || body.topics[1] != transfer.args[0]
+            || body.topics[2] != transfer.args[1]
+            || body.data != transfer.args[2]
+        {
+            return Err(invalid());
+        }
+    }
+    if contract_events != 1 {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 fn checked_simulation(result: Value) -> Result<Value> {
     if !result["restorePreamble"].is_null() {
         return Err(Error::config(
-            "Stellar simulation requires unsupported restoration; no signing key was read",
+            "Stellar simulation requires unsupported restoration; retain the original journal",
         ));
     }
     if !result["error"].is_null() || result["results"].as_array().is_none_or(|r| r.len() != 1) {
@@ -176,6 +276,61 @@ fn checked_simulation(result: Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use stellar_xdr::{Int128Parts, TransactionMeta, WriteXdr};
+
+    #[test]
+    fn enforcement_requires_one_successful_exact_asset_transfer() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../repos/AllowIt-hq--allowit-sdk/stellar-rust/tests/fixtures/x402-vault.json"
+        ))
+        .unwrap();
+        let signed: SignedPayment = serde_json::from_value(fixture["signed"].clone()).unwrap();
+        let meta = TransactionMeta::from_xdr_base64(
+            fixture["rpcTransaction"]["resultMetaXdr"].as_str().unwrap(),
+            Limits::none(),
+        )
+        .unwrap();
+        let events = match meta {
+            TransactionMeta::V3(meta) => meta.soroban_meta.unwrap().events.to_vec(),
+            TransactionMeta::V4(meta) => meta.operations[0].events.to_vec(),
+            _ => panic!("Expected golden Soroban metadata"),
+        };
+        let event = DiagnosticEvent {
+            in_successful_contract_call: true,
+            event: events[0].clone(),
+        };
+        let simulation = |events: Vec<DiagnosticEvent>| {
+            json!({
+                "minResourceFee":"49900", "transactionData":fixture["transactionData"],
+                "results":[{"xdr":"AAAAAQ=="}],
+                "events":events.iter().map(|e|e.to_xdr_base64(Limits::none()).unwrap()).collect::<Vec<_>>()
+            })
+        };
+        assert!(validate_enforcement(&signed, simulation(vec![event.clone()])).is_ok());
+        assert!(
+            validate_enforcement(&signed, simulation(vec![event.clone(), event.clone()])).is_err()
+        );
+        for mutation in 0..5 {
+            let mut altered = event.clone();
+            match mutation {
+                0 => altered.in_successful_contract_call = false,
+                1 => altered.event.contract_id = None,
+                2 => {
+                    let ContractEventBody::V0(body) = &mut altered.event.body;
+                    *body.topics.iter_mut().nth(1).unwrap() = ScVal::Void;
+                }
+                3 => {
+                    let ContractEventBody::V0(body) = &mut altered.event.body;
+                    *body.topics.iter_mut().nth(2).unwrap() = ScVal::Void;
+                }
+                _ => {
+                    let ContractEventBody::V0(body) = &mut altered.event.body;
+                    body.data = ScVal::I128(Int128Parts { hi: 0, lo: 1 });
+                }
+            }
+            assert!(validate_enforcement(&signed, simulation(vec![altered])).is_err());
+        }
+    }
     #[test]
     fn restoration_and_ambiguous_simulation_are_rejected_before_signing() {
         let result = json!({"results":[{"xdr":"AAAAAQ==","auth":[]}],"restorePreamble":{"transactionData":"AAAA","minResourceFee":"1"}});

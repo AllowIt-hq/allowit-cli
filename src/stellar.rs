@@ -441,7 +441,7 @@ fn prepare(config: &Config, url: &str, id: &str, max: &str) -> Result<Record> {
         payment_required: required,
         selected_offer: selected,
     };
-    let mut prepared = checked(allowit_stellar::prepare_payment(
+    let prepared = checked(allowit_stellar::prepare_payment(
         config,
         &state,
         request,
@@ -450,17 +450,10 @@ fn prepare(config: &Config, url: &str, id: &str, max: &str) -> Result<Record> {
         current + timeout.min(120),
         current,
     ))?;
-    let data = simulation["transactionData"]
-        .as_str()
-        .ok_or_else(|| Error::config("Stellar simulation omitted resource data"))?;
-    let fee = simulation["minResourceFee"]
-        .as_str()
-        .ok_or_else(|| Error::config("Stellar simulation omitted resource fee"))?;
-    prepared.transaction_xdr = checked(allowit_stellar::attach_simulation_data(
-        &prepared.transaction_xdr,
-        data,
-        fee,
-    ))?;
+    // Recording discovers only the exact authorization invocation. Its nonce
+    // rent estimate and footprint omit custom-account authentication. The
+    // published sponsored facilitator rebuilds resources after signatures;
+    // enforce-simulate those saved signatures before any credential delivery.
     Ok(Record {
         version: 1,
         id: id.into(),
@@ -1039,6 +1032,8 @@ pub(crate) fn run(args: &[String], stdout: &mut String, _stderr: &mut String) ->
             ))?);
             store.save(&record.id, &record)?;
         }
+        let rpc = validate_live(&config, &record)?;
+        rpc.enforce(&config, &record.prepared, record.signed.as_ref().unwrap())?;
         if let Some(bundle) = engine {
             bundle.report(&record.id, record.signed.as_ref().unwrap(), None, false)?;
             record.proof_acknowledged = true;
