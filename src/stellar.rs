@@ -1,7 +1,8 @@
-//! Native contract-backed Stellar x402 purchases with explicit operator approval.
+//! Native contract-backed Stellar x402 purchases with scoped engine approval.
 use crate::{
     config::env_value,
     error::{Error, Result},
+    stellar_engine::{Bundle, Intent},
     stellar_http,
     stellar_rpc::Rpc,
     stellar_store::Store,
@@ -17,7 +18,7 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 const USAGE: &str = include_str!("stellar-usage.txt");
 #[derive(Clone, Serialize, Deserialize)]
@@ -34,6 +35,29 @@ struct Record {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     settlement: Option<SettlementReceipt>,
     verified: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    intent: Option<Intent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    engine_policy: Option<crate::stellar_engine::PolicyBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    approval: Option<DetachedApproval>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    decision: Option<String>,
+    #[serde(default)]
+    proof_acknowledged: bool,
+    #[serde(default)]
+    delivery_reported: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExecutorSecret {
+    seed: String,
+}
+impl Drop for ExecutorSecret {
+    fn drop(&mut self) {
+        self.seed.zeroize();
+    }
 }
 
 fn checked<T>(value: std::result::Result<T, String>) -> Result<T> {
@@ -89,6 +113,9 @@ struct Options {
     max: Option<String>,
     approval: Option<PathBuf>,
     transaction: Option<String>,
+    action: Option<String>,
+    merchant: Option<String>,
+    context: Option<String>,
     json: bool,
 }
 impl Options {
@@ -99,6 +126,9 @@ impl Options {
             max: None,
             approval: None,
             transaction: None,
+            action: None,
+            merchant: None,
+            context: None,
             json: false,
         };
         let mut args = args.iter();
@@ -135,6 +165,27 @@ impl Options {
                     }
                     result.transaction = Some(hash.to_ascii_lowercase());
                 }
+                "--action" if result.action.is_none() => {
+                    result.action = Some(
+                        args.next()
+                            .ok_or_else(|| Error::usage("Missing --action value"))?
+                            .clone(),
+                    );
+                }
+                "--merchant" if result.merchant.is_none() => {
+                    result.merchant = Some(
+                        args.next()
+                            .ok_or_else(|| Error::usage("Missing --merchant value"))?
+                            .clone(),
+                    );
+                }
+                "--context" if result.context.is_none() => {
+                    result.context = Some(
+                        args.next()
+                            .ok_or_else(|| Error::usage("Missing --context JSON"))?
+                            .clone(),
+                    );
+                }
                 _ if !arg.starts_with('-') => result.pos.push(arg.clone()),
                 _ => return Err(Error::usage("Unknown or repeated Stellar option")),
             }
@@ -159,12 +210,56 @@ impl Options {
         Ok((&self.pos[0], id, max))
     }
     fn operation(&self) -> Result<&str> {
-        if self.pos.len() != 1 || self.id.is_some() || self.max.is_some() || self.approval.is_some()
+        if self.pos.len() != 1
+            || self.id.is_some()
+            || self.max.is_some()
+            || self.approval.is_some()
+            || self.action.is_some()
+            || self.merchant.is_some()
+            || self.context.is_some()
         {
             return Err(Error::usage("Use one original Stellar request ID"));
         }
         request_id(&self.pos[0])?;
         Ok(&self.pos[0])
+    }
+    fn intent(&self) -> Result<Intent> {
+        let action = self
+            .action
+            .clone()
+            .unwrap_or_else(|| env_value("ALLOWIT_EXECUTION_ACTION"));
+        let merchant = self
+            .merchant
+            .clone()
+            .unwrap_or_else(|| env_value("ALLOWIT_EXECUTION_MERCHANT"));
+        let raw = self
+            .context
+            .clone()
+            .unwrap_or_else(|| env_value("ALLOWIT_EXECUTION_CONTEXT_JSON"));
+        if action.trim().is_empty()
+            || action.len() > 256
+            || merchant.len() > 256
+            || raw.len() > 16_384
+        {
+            return Err(Error::usage(
+                "Use --action ACTION (or ALLOWIT_EXECUTION_ACTION) and bounded merchant/context values",
+            ));
+        }
+        let mut context: Value = if raw.is_empty() {
+            json!({})
+        } else {
+            serde_json::from_str(&raw)
+                .map_err(|_| Error::usage("Execution context must be a JSON object"))?
+        };
+        if !context.is_object() {
+            return Err(Error::usage("Execution context must be a JSON object"));
+        }
+        context.sort_all_objects();
+        Ok(Intent {
+            action,
+            merchant,
+            context,
+        })
     }
 }
 fn request_id(value: &str) -> Result<()> {
@@ -243,6 +338,21 @@ fn seed(env: &str) -> Result<Zeroizing<[u8; 32]>> {
     Ok(key)
 }
 
+fn executor_seed(configuration: &Store, config: &Config) -> Result<Zeroizing<[u8; 32]>> {
+    let key = if env_value("ALLOWIT_STELLAR_EXECUTOR_KEY_FILE").is_empty() {
+        let secret = configuration.load::<ExecutorSecret>("executor-secret")?.ok_or_else(|| Error::config("Import an executor seed in the private bundle or set ALLOWIT_STELLAR_EXECUTOR_KEY_FILE"))?;
+        Zeroizing::new(checked(allowit_stellar::decode_seed(&secret.seed))?)
+    } else {
+        seed("ALLOWIT_STELLAR_EXECUTOR_KEY_FILE")?
+    };
+    if allowit_stellar::account_for_seed(&key) != config.executor {
+        return Err(Error::config(
+            "Executor signing key differs from the pinned Stellar configuration",
+        ));
+    }
+    Ok(key)
+}
+
 fn validate_record(config: &Config, record: &Record) -> Result<()> {
     request_id(&record.id)?;
     stellar_http::endpoint(&record.url)?;
@@ -256,6 +366,9 @@ fn validate_record(config: &Config, record: &Record) -> Result<()> {
         || record.delivery.is_some() && !record.attempted
         || record.verified && record.delivery.is_none() && record.settlement.is_none()
         || record.settlement.is_some() && (!record.attempted || record.signed.is_none())
+        || record.engine_policy.is_some() != record.intent.is_some()
+        || record.proof_acknowledged && (record.signed.is_none() || record.engine_policy.is_none())
+        || record.delivery_reported && record.delivery.is_none()
     {
         return Err(Error::config(
             "Contradictory Stellar journal; preserve the original request",
@@ -281,6 +394,13 @@ fn validate_record(config: &Config, record: &Record) -> Result<()> {
             config,
             &record.prepared,
             signed,
+        ))?;
+    }
+    if let Some(approval) = &record.approval {
+        checked(allowit_stellar::verify_approval(
+            config,
+            &record.prepared,
+            approval,
         ))?;
     }
     Ok(())
@@ -352,6 +472,12 @@ fn prepare(config: &Config, url: &str, id: &str, max: &str) -> Result<Record> {
         delivery: None,
         settlement: None,
         verified: false,
+        intent: None,
+        engine_policy: None,
+        approval: None,
+        decision: None,
+        proof_acknowledged: false,
+        delivery_reported: false,
     })
 }
 
@@ -414,19 +540,54 @@ fn output(record: &Record, json_output: bool, stdout: &mut String) -> Result<i32
     } else if record.signed.is_some() {
         "signed"
     } else {
-        "prepared"
+        record.decision.as_deref().unwrap_or("prepared")
     };
     let code = if delivered {
         0
     } else if record.attempted || record.verified {
         5
+    } else if record.decision.as_deref() == Some("deny") {
+        20
+    } else if record.decision.as_deref() == Some("awaiting_input") {
+        11
+    } else if record.decision.as_deref() == Some("expired") {
+        12
     } else {
         10
     };
+    let response = record.delivery.as_ref().map(|delivery| {
+        let body = delivery.body.as_ref().map(|raw| {
+            let mut value = raw.clone();
+            if let Some(signed) = &record.signed {
+                value = value
+                    .replace(&signed.payment_signature, "[redacted]")
+                    .replace(&signed.transaction_xdr, "[redacted]");
+            }
+            value
+                .chars()
+                .map(|c| {
+                    if matches!(c, '\n' | '\t') {
+                        c
+                    } else if c < '\u{20}'
+                        || ('\u{7f}'..'\u{a0}').contains(&c)
+                        || ('\u{202a}'..='\u{202e}').contains(&c)
+                        || ('\u{2066}'..='\u{2069}').contains(&c)
+                    {
+                        '?'
+                    } else {
+                        c
+                    }
+                })
+                .collect::<String>()
+        });
+        // Provider metadata is untrusted and may reflect executable bytes.
+        // Public receipt fields come only from the independently checked identity.
+        json!({"httpStatus":delivery.status,"body":body,"receipt":record.settlement})
+    });
     if json_output {
         *stdout += &format!(
             "{}\n",
-            json!({"requestId":record.id,"status":status,"paymentVerified":record.verified,"deliveryAvailable":delivered,"settlement":if record.verified {serde_json::to_value(&record.settlement).map_err(|_|Error::config("Invalid settled receipt"))?}else{Value::Null},"requestHash":record.prepared.request_hash,"authorizationDigest":record.prepared.authorization_digest,"prepared":if record.attempted {Value::Null}else{serde_json::to_value(&record.prepared).map_err(|_|Error::config("Invalid Stellar plan"))?},"response":if record.verified {record.delivery.as_ref().map(|d|json!({"httpStatus":d.status,"body":d.body,"receipt":d.receipt})).unwrap_or(Value::Null)} else {Value::Null}})
+            json!({"requestId":record.id,"status":status,"decision":record.decision,"proofAcknowledged":record.proof_acknowledged,"paymentVerified":record.verified,"deliveryAvailable":delivered,"deliveryReported":record.delivery_reported,"settlement":if record.verified {serde_json::to_value(&record.settlement).map_err(|_|Error::config("Invalid settled receipt"))?}else{Value::Null},"requestHash":record.prepared.request_hash,"authorizationDigest":record.prepared.authorization_digest,"prepared":if record.attempted {Value::Null}else{serde_json::to_value(&record.prepared).map_err(|_|Error::config("Invalid Stellar plan"))?},"response":if record.verified {response.clone().unwrap_or(Value::Null)} else {Value::Null}})
         );
     } else {
         *stdout += &format!("Stellar request {}: {status}\n", record.id);
@@ -436,7 +597,7 @@ fn output(record: &Record, json_output: bool, stdout: &mut String) -> Result<i32
             *stdout += &format!(
                 "HTTP {}\n{}\n",
                 delivery.status,
-                serde_json::to_string(&delivery.body)
+                serde_json::to_string(&response.as_ref().unwrap()["body"])
                     .map_err(|_| Error::config("Invalid response"))?
             );
         }
@@ -518,6 +679,91 @@ fn reconcile(config: &Config, record: &mut Record) -> Result<()> {
     Ok(())
 }
 
+fn observe_engine(bundle: &Bundle, record: &mut Record) -> Result<()> {
+    let result = bundle.call(
+        "status",
+        json!({"policyId":bundle.policy.id,"requestId":record.id}),
+    )?;
+    bundle.check_binding(&result, &record.id)?;
+    if let Some(signed) = &record.signed {
+        bundle.check_proof(&result, &record.id, signed)?;
+        record.proof_acknowledged = true;
+        if result["operation"]["status"] == "settled" {
+            let hash = result["operation"]["transactionHash"]
+                .as_str()
+                .ok_or_else(|| {
+                    Error::config("Engine settlement omitted its transaction identity")
+                })?;
+            checked(allowit_stellar::unhex::<32>(hash))?;
+            if let Some(saved) = &record.settlement {
+                if saved.transaction != hash {
+                    return Err(Error::config(
+                        "Engine settlement differs from the original Stellar receipt",
+                    ));
+                }
+            } else if record.attempted {
+                record.settlement = Some(SettlementReceipt {
+                    transaction: hash.into(),
+                    payer: record.prepared.config.vault.clone(),
+                    network: record.prepared.config.network.clone(),
+                });
+            }
+        }
+    } else {
+        let decision = result["decision"]
+            .as_str()
+            .ok_or_else(|| Error::config("Engine status omitted its policy decision"))?;
+        if !["allow", "deny", "awaiting_input", "expired", "evaluating"].contains(&decision) {
+            return Err(Error::config("Invalid Stellar engine decision state"));
+        }
+        record.decision = Some(decision.into());
+    }
+    Ok(())
+}
+
+fn report_outcomes(bundle: &Bundle, record: &mut Record) -> Result<()> {
+    if record.verified {
+        let signed = record
+            .signed
+            .as_ref()
+            .ok_or_else(|| Error::config("Missing saved Stellar credential"))?;
+        let receipt = record
+            .settlement
+            .as_ref()
+            .ok_or_else(|| Error::config("Missing verified Stellar receipt"))?;
+        let result = bundle.report(
+            &record.id,
+            signed,
+            Some(&receipt.transaction),
+            record.attempted,
+        )?;
+        if result["operation"]["status"] != "settled"
+            || result["operation"]["transactionHash"] != receipt.transaction
+        {
+            return Err(Error::uncertain(
+                "The engine has not independently confirmed the original Stellar settlement",
+            ));
+        }
+    }
+    if record.verified
+        && !record.delivery_reported
+        && let Some(delivery) = &record.delivery
+    {
+        let delivered =
+            record.verified && (200..300).contains(&delivery.status) && delivery.body.is_some();
+        let body = delivery.body.as_deref().unwrap_or_default();
+        let result = bundle.call("delivery", json!({"policyId":bundle.policy.id,"requestId":record.id,"delivery":{"status":if delivered {"delivered"}else{"unavailable"},"httpStatus":delivery.status,"responseDigest":allowit_stellar::hex(&allowit_stellar::sha256(body)),"responseBytes":body.len()}}))?;
+        bundle.check_binding(&result, &record.id)?;
+        if result["deliveryAcknowledged"] != true {
+            return Err(Error::uncertain(
+                "The engine has not acknowledged Stellar API delivery; preserve the original journal",
+            ));
+        }
+        record.delivery_reported = true;
+    }
+    Ok(())
+}
+
 pub(crate) fn run(args: &[String], stdout: &mut String, _stderr: &mut String) -> Result<i32> {
     if args.is_empty() || matches!(args[0].as_str(), "help" | "--help" | "-h") {
         stdout.push_str(USAGE);
@@ -541,11 +787,44 @@ pub(crate) fn run(args: &[String], stdout: &mut String, _stderr: &mut String) ->
             || options.max.is_some()
             || options.approval.is_some()
             || options.transaction.is_some()
+            || options.action.is_some()
+            || options.merchant.is_some()
+            || options.context.is_some()
         {
             return Err(Error::usage("Use allowit stellar import CONFIG_JSON"));
         }
-        let config: Config = read_json(Path::new(&options.pos[0]))?;
+        let value: Value = read_json(Path::new(&options.pos[0]))?;
+        let mut bundle = if value.get("capability").is_some() || value.get("config").is_some() {
+            let bundle: Bundle = serde_json::from_value(value.clone())
+                .map_err(|_| Error::config("Invalid Stellar executor bundle"))?;
+            bundle.validate()?;
+            Some(bundle)
+        } else {
+            None
+        };
+        let config: Config = if let Some(bundle) = &bundle {
+            bundle.config.clone()
+        } else {
+            serde_json::from_value(value)
+                .map_err(|_| Error::config("Invalid Stellar diagnostic configuration"))?
+        };
         checked(allowit_stellar::validate_config(&config))?;
+        let secret = if let Some(bundle) = bundle.as_mut()
+            && let Some(raw) = bundle.executor_seed.take()
+        {
+            let raw = Zeroizing::new(raw);
+            let key = Zeroizing::new(checked(allowit_stellar::decode_seed(&raw))?);
+            if allowit_stellar::account_for_seed(&key) != config.executor {
+                return Err(Error::config(
+                    "Exported executor seed differs from the pinned Stellar executor",
+                ));
+            }
+            Some(ExecutorSecret {
+                seed: raw.to_string(),
+            })
+        } else {
+            None
+        };
         if let Some(old) = configuration.load::<Config>("configuration")?
             && !same(&old, &config)?
         {
@@ -554,6 +833,26 @@ pub(crate) fn run(args: &[String], stdout: &mut String, _stderr: &mut String) ->
             ));
         }
         configuration.save("configuration", &config)?;
+        if let Some(bundle) = &bundle {
+            if let Some(old) = configuration.load::<Bundle>("bundle")?
+                && !same(&old, bundle)?
+            {
+                return Err(Error::config(
+                    "Use a separate state directory for a different Stellar policy capability",
+                ));
+            }
+            configuration.save("bundle", bundle)?;
+        }
+        if let Some(secret) = &secret {
+            if let Some(old) = configuration.load::<ExecutorSecret>("executor-secret")?
+                && old.seed != secret.seed
+            {
+                return Err(Error::config(
+                    "A different executor key already exists in this Stellar state directory",
+                ));
+            }
+            configuration.save("executor-secret", secret)?;
+        }
         *stdout += if options.json {
             "{\"status\":\"imported\",\"executed\":false}\n"
         } else {
@@ -564,9 +863,23 @@ pub(crate) fn run(args: &[String], stdout: &mut String, _stderr: &mut String) ->
     let config = configuration
         .load::<Config>("configuration")?
         .ok_or_else(|| Error::config("Import the pinned Stellar configuration first"))?;
+    let bundle = configuration.load::<Bundle>("bundle")?;
+    if let Some(bundle) = &bundle {
+        bundle.validate()?;
+        if bundle.config != config {
+            return Err(Error::config(
+                "Stellar bundle differs from the recovery configuration",
+            ));
+        }
+    }
     let store = Store::open(&base.join("operations"))?;
     let mut record = if matches!(command, "prepare" | "call") {
         let (url, id, max) = options.purchase()?;
+        let engine_intent = if command == "call" && options.approval.is_none() && bundle.is_some() {
+            Some(options.intent()?)
+        } else {
+            None
+        };
         if command == "prepare" && options.approval.is_some() {
             return Err(Error::usage(
                 "Prepare does not accept an approval or read signing keys",
@@ -579,16 +892,32 @@ pub(crate) fn run(args: &[String], stdout: &mut String, _stderr: &mut String) ->
                         "Request ID already binds another URL or maximum; resume the original operation",
                     ));
                 }
+                if let Some(intent) = &engine_intent
+                    && record.intent.as_ref() != Some(intent)
+                {
+                    return Err(Error::config(
+                        "Request ID already binds another semantic action, merchant or context",
+                    ));
+                }
+                if record.engine_policy.is_some() && options.approval.is_some() {
+                    return Err(Error::config(
+                        "An engine operation cannot fall back to manual authority approval",
+                    ));
+                }
                 record
             }
-            None if command == "call" => {
+            None if command == "call" && engine_intent.is_none() => {
                 return Err(Error::config(
                     "Prepare this exact Stellar call first and obtain its explicit trusted operator approval",
                 ));
             }
             None => {
                 ensure_executor_available(&store, id)?;
-                let record = prepare(&config, url, id, max)?;
+                let mut record = prepare(&config, url, id, max)?;
+                if let Some(intent) = engine_intent {
+                    record.intent = Some(intent);
+                    record.engine_policy = Some(bundle.as_ref().unwrap().policy.clone());
+                }
                 store.save(id, &record)?;
                 record
             }
@@ -604,7 +933,25 @@ pub(crate) fn run(args: &[String], stdout: &mut String, _stderr: &mut String) ->
         record
     };
     validate_record(&config, &record)?;
+    let engine = if record.engine_policy.is_some() {
+        let bundle = bundle.as_ref().ok_or_else(|| {
+            Error::config("Restore the original Stellar executor bundle for engine recovery")
+        })?;
+        if record.engine_policy.as_ref() != Some(&bundle.policy) {
+            return Err(Error::config(
+                "Engine policy differs from the original Stellar operation",
+            ));
+        }
+        Some(bundle)
+    } else {
+        None
+    };
     if command == "authorize" {
+        if engine.is_some() {
+            return Err(Error::usage(
+                "Engine-managed Stellar operations cannot use diagnostic authorize",
+            ));
+        }
         if record.signed.is_some() || record.attempted {
             return Err(Error::config(
                 "A signed Stellar request cannot be authorized again",
@@ -627,18 +974,63 @@ pub(crate) fn run(args: &[String], stdout: &mut String, _stderr: &mut String) ->
     }
     if command == "call" && !record.attempted {
         ensure_executor_available(&store, &record.id)?;
+        if record.signed.is_none() && record.prepared.expires_at <= now()? {
+            record.decision = Some("expired".into());
+            store.save(&record.id, &record)?;
+            return output(&record, options.json, stdout);
+        }
         let _ = validate_live(&config, &record)?;
         if record.signed.is_none() {
-            let approval: DetachedApproval =
+            let approval: DetachedApproval = if let Some(bundle) = engine {
+                let result = bundle.execute(
+                    &record.id,
+                    maximum(&record.max_amount)?,
+                    record.intent.as_ref().unwrap(),
+                    &record.prepared,
+                )?;
+                match result["decision"].as_str() {
+                    Some(decision @ ("deny" | "awaiting_input" | "expired")) => {
+                        if result.get("approval").is_some_and(|a| !a.is_null()) {
+                            return Err(Error::config(
+                                "A non-allow engine decision must not contain an authority approval",
+                            ));
+                        }
+                        record.decision = Some(decision.into());
+                        store.save(&record.id, &record)?;
+                        return output(&record, options.json, stdout);
+                    }
+                    Some("allow") => {
+                        let approval = bundle.approval(&result, &record.prepared)?;
+                        record.approval = Some(approval.clone());
+                        record.decision = Some("allow".into());
+                        store.save(&record.id, &record)?;
+                        approval
+                    }
+                    _ => {
+                        return Err(Error::uncertain(
+                            "The engine returned no actionable Stellar policy decision; no executor signature was made",
+                        ));
+                    }
+                }
+            } else {
                 read_json(options.approval.as_deref().ok_or_else(|| {
-                    Error::usage("Call requires --approval FILE for this exact prepared plan")
-                })?)?;
+                    Error::usage("Automatic call requires an exported engine bundle; diagnostic call requires explicit --approval FILE")
+                })?)?
+            };
             checked(allowit_stellar::verify_approval(
                 &config,
                 &record.prepared,
                 &approval,
             ))?;
-            let key = seed("ALLOWIT_STELLAR_EXECUTOR_KEY_FILE")?;
+            // Semantic evaluation may outlast the original quote. Neither owner
+            // input nor a server approval extends its timestamp or ledger expiry.
+            if record.prepared.expires_at <= now()? {
+                record.decision = Some("expired".into());
+                store.save(&record.id, &record)?;
+                return output(&record, options.json, stdout);
+            }
+            let _ = validate_live(&config, &record)?;
+            let key = executor_seed(&configuration, &config)?;
             record.signed = Some(checked(allowit_stellar::sign_payment(
                 &config,
                 &record.prepared,
@@ -647,15 +1039,34 @@ pub(crate) fn run(args: &[String], stdout: &mut String, _stderr: &mut String) ->
             ))?);
             store.save(&record.id, &record)?;
         }
+        if let Some(bundle) = engine {
+            bundle.report(&record.id, record.signed.as_ref().unwrap(), None, false)?;
+            record.proof_acknowledged = true;
+            store.save(&record.id, &record)?;
+            let _ = validate_live(&config, &record)?;
+        }
         // These exact persisted bytes are the only credential ever sent for this ID.
         record.attempted = true;
         store.save(&record.id, &record)?;
-        record.delivery = Some(stellar_http::deliver(
+        let delivered = stellar_http::deliver(
             &record.url,
             &record.signed.as_ref().unwrap().payment_signature,
             &record.id,
-        )?);
-        store.save(&record.id, &record)?;
+        );
+        if let Ok(delivery) = &delivered {
+            record.delivery = Some(delivery.clone());
+            store.save(&record.id, &record)?;
+        }
+        if let Some(bundle) = engine {
+            // Attempted is advisory uncertainty, never settlement proof. Even
+            // when HTTP delivery fails, the saved credential remains original.
+            let reported = bundle.report(&record.id, record.signed.as_ref().unwrap(), None, true);
+            store.save(&record.id, &record)?;
+            if delivered.is_ok() {
+                reported?;
+            }
+        }
+        delivered?;
     }
     if options.transaction.is_some() && (!record.attempted || record.signed.is_none()) {
         return Err(Error::config(
@@ -663,6 +1074,20 @@ pub(crate) fn run(args: &[String], stdout: &mut String, _stderr: &mut String) ->
         ));
     }
     if matches!(command, "call" | "resume" | "status") {
+        if let Some(bundle) = engine
+            && command != "call"
+        {
+            if !record.proof_acknowledged
+                && let Some(signed) = &record.signed
+            {
+                bundle.report(&record.id, signed, None, record.attempted)?;
+                record.proof_acknowledged = true;
+                store.save(&record.id, &record)?;
+            }
+            let observed = observe_engine(bundle, &mut record);
+            store.save(&record.id, &record)?;
+            observed?;
+        }
         let saved = record.settlement.clone();
         record.settlement = settlement(&config, &record, options.transaction.as_deref())?;
         let reconciled = reconcile(&config, &mut record);
@@ -673,6 +1098,15 @@ pub(crate) fn run(args: &[String], stdout: &mut String, _stderr: &mut String) ->
         }
         store.save(&record.id, &record)?;
         reconciled?;
+        if let Some(bundle) = engine {
+            let reported = report_outcomes(bundle, &mut record);
+            store.save(&record.id, &record)?;
+            reported?;
+        }
+        if record.signed.is_none() && record.prepared.expires_at <= now()? {
+            record.decision = Some("expired".into());
+            store.save(&record.id, &record)?;
+        }
     }
     output(&record, options.json, stdout)
 }

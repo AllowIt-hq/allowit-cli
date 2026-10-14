@@ -1,23 +1,49 @@
-Stellar contract-backed x402 purchases use an explicit trusted operator approval.
+Stellar contract-backed x402 purchases use scoped engine policy approval.
 
+  allowit stellar import stellar-executor.json
+  allowit stellar call URL --id REQUEST_ID --max-amount AMOUNT --action ACTION [--merchant NAME] [--context JSON] [--json]
+  allowit stellar resume REQUEST_ID [--transaction ORIGINAL_HASH] [--json]
+  allowit stellar status REQUEST_ID [--json]
+
+Explicit trusted-operator diagnostic mode (no semantic policy evaluation):
   allowit stellar import CONFIG_JSON
   allowit stellar prepare URL --id REQUEST_ID --max-amount AMOUNT [--json]
   allowit stellar authorize REQUEST_ID > approval.json
   allowit stellar call URL --id REQUEST_ID --max-amount AMOUNT --approval approval.json [--json]
-  allowit stellar resume REQUEST_ID [--transaction ORIGINAL_HASH] [--json]
-  allowit stellar status REQUEST_ID [--json]
 
 Configure ALLOWIT_STELLAR_STATE_DIR as private local POSIX storage. Default:
 $XDG_STATE_HOME/allowit/stellar or $HOME/.local/state/allowit/stellar.
 ALLOWIT_STELLAR_EXECUTOR_KEY_FILE points to the executor's private 0600 file
 containing its 32-byte hex seed. ALLOWIT_STELLAR_RPC_URL optionally overrides
 the HTTPS RPC URL; the RPC must serve the configured Stellar network.
+If the private application export includes executorSeed (Stellar S seed), import
+checks its public executor and saves it in a distinct private, fsynced key record.
+Call then uses that imported executor key without an environment override.
+The seed is removed from the stored capability bundle and operation journals.
 
 CONFIG_JSON contains network (stellar:testnet or stellar:pubnet), rpcUrl,
 vault and policy (canonical C addresses), owner/executor/authority (three
 separate canonical G addresses), asset (canonical Circle USDC contract),
 vaultWasmHash, policyWasmHash and policySourceHash (nonzero 32-byte hex hashes).
 Import is offline; live contract identity/state checks are required before signing.
+
+The application private executor bundle adds version=1, profile=stellar-native-x402-v1,
+origin (exact HTTPS engine origin), capability, config (the pinned fields above),
+policy {id, revision, sourceHash} and real /api/stellar routes. Hosted semantic
+sourceHash is distinct from the on-chain numeric policySourceHash. The capability
+is sent only to its exported engine origin. The authority secret remains on the
+server. ALLOWIT_URL, if set, must match the exported origin exactly.
+
+Automatic call fetches and durably saves its original quote/plan, sends that exact
+intent to the engine, verifies its policy/configuration binding and detached
+authority signature, and reads only the executor key. Use --action or
+ALLOWIT_EXECUTION_ACTION for the real semantic action; --merchant and --context
+may instead use ALLOWIT_EXECUTION_MERCHANT and ALLOWIT_EXECUTION_CONTEXT_JSON.
+Labels/context do not establish merchant identity or answer owner questions.
+Denied, awaiting_input, expired and failed engine/provider operations never reach
+executor signing or paid HTTP. Owner input uses the application's verified owner
+path. A later answer cannot extend the original quote or change its request ID.
+Fresh quote preparation after expiry requires the owner's explicit safe workflow.
 
 Prepare fetches one original x402 v2 challenge and validates its exact vault,
 Circle USDC asset, network, payee and amount with live pinned contract identities
@@ -30,7 +56,12 @@ reads ALLOWIT_STELLAR_AUTHORITY_KEY_FILE and emits a detached approval for the
 exact validated plan. It does not send a payment. Do not give the agent this key.
 This local approval does not add server semantic policy evaluation.
 
-Call reads only the executor key and detached approval. It saves the complete
+Before sending the credential, automatic call requires the engine's durable
+acknowledgment of the exact signed proof. Engine failure never selects manual
+approval implicitly. --approval FILE and authorize are explicit diagnostic tools;
+they cannot replace approval for an existing engine-managed operation.
+
+Call reads only the executor key. It saves the complete
 credential and an attempted marker before sending PAYMENT-SIGNATURE exactly
 once. It never creates a replacement quote or nonce. Resume/status read no key,
 never sign or resend, and verify an available settlement against the exact chain
@@ -41,10 +72,11 @@ service delivery stays unavailable (exit 5); another transaction is rejected.
 Retain the same journal/configuration/request ID for recovery.
 
 Use Linux or WSL with journal and keys in its Linux filesystem, not /mnt/c.
-No Node runtime, backend Stellar endpoint, managed wallet or frontend is needed.
-Public Stellar purchases spend real funds; no command runs automatically.
+No Node runtime is required. Select the configured network and canonical Circle
+USDC; Testnet examples require the merchant to offer stellar:testnet explicitly.
 
 Exit codes: 0 imported/approved/settled, 2 usage, 3 configuration, 5 uncertain,
-10 prepared. Verified payment with an unavailable or failed HTTP response exits 5.
+10 prepared, 11 awaiting owner input, 12 unsigned expired, 20 policy denied.
+Verified payment with an unavailable or failed HTTP response exits 5.
 Payment and API delivery are separate results. Every process sharing an executor
 must use the same state directory; unresolved signed requests block new purchases.

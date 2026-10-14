@@ -51,33 +51,33 @@ Main contains the untagged `0.3.0-dev` implementation. No native Rust GitHub Rel
 ### Stellar contract-backed x402
 
 `allowit stellar` is a native Rust buyer for Stellar x402 v2. It uses the pinned
-AllowIt vault and policy contract identities, Circle USDC, and explicit detached
-approval from a trusted operator. It does not use a managed wallet or a backend
-Stellar endpoint. Use `allowit stellar help` for the configuration schema and
+AllowIt vault and policy contract identities, Circle USDC, and a scoped engine
+capability exported by the application. The engine evaluates the real semantic
+intent and returns a detached approval for its exact saved x402 plan. Use
+`allowit stellar help` for the configuration schema and
 environment variables. Keys and private recovery journals require Linux/WSL
 storage, with files at 0600 and directories at 0700.
 
 ```sh
-allowit stellar import stellar-config.json
-allowit stellar prepare 'https://agent402.tools/ENDPOINT?QUERY' --id purchase-001 --max-amount 0.01 --json
-# Run only on the trusted operator's machine/key boundary:
-ALLOWIT_STELLAR_AUTHORITY_KEY_FILE=/private/authority.hex allowit stellar authorize purchase-001 > approval.json
-# The agent receives only the detached approval and executor key access:
-ALLOWIT_STELLAR_EXECUTOR_KEY_FILE=/private/executor.hex allowit stellar call 'https://agent402.tools/ENDPOINT?QUERY' --id purchase-001 --max-amount 0.01 --approval approval.json --json
+allowit stellar import stellar-executor.json
+ALLOWIT_STELLAR_EXECUTOR_KEY_FILE=/private/executor.hex allowit stellar call 'https://merchant.example/paid?text=hi' --id purchase-001 --max-amount 0.01 --action research --context '{"purpose":"dataset"}' --json
 allowit stellar resume purchase-001 --json
 # If the HTTP response lost its receipt, reconcile a known original chain hash:
 allowit stellar resume purchase-001 --transaction ORIGINAL_HASH --json
 ```
 
-The URL above is a placeholder; select a real paid Agent402 endpoint. `prepare`
-validates the live network, deployed code hashes, vault state, exact quote,
-amount conversion and Soroban authorization before saving the plan. `authorize`
-prints a signature for that exact prepared operation and sends no payment. This
-explicit operator attestation does not implement server semantic policy
-evaluation. The agent must never have the authority key.
+The URL above is a placeholder; select a real paid endpoint offering the exported
+network's canonical Circle USDC. `call` validates the live network, deployed code
+hashes, vault state, exact quote, amount conversion and Soroban authorization
+before saving the plan. Action, merchant and context follow the engine's native
+policy contract; labels are not merchant evidence or owner answers. Deny and
+awaiting owner input return exit 20 and 11 without an executor signature or paid
+HTTP request. An expired unsigned quote exits 12 and cannot be refreshed under
+the same ID. The agent must never have the authority key.
 
 `call` saves the complete signed credential and a durable attempted marker
-before its single paid HTTP request. Repeating the same ID preserves the URL,
+before its single paid HTTP request, after the engine durably acknowledges the
+exact signed proof. Repeating the same ID preserves the URL, semantic intent,
 maximum, quote and nonce. `resume` and `status` load no key and never send another
 credential. Payment requires an independently verified exact Stellar receipt;
 HTTP delivery is reported separately. A lost result stays uncertain until an
@@ -87,6 +87,11 @@ create a merchant response, sign or resend. Preserve the original journal instea
 of creating a replacement purchase. All processes
 using an executor must share its state directory. Another signed unresolved
 request blocks new purchases.
+
+The explicit diagnostic `prepare` → `authorize` → `call --approval FILE` path
+still accepts a pinned SDK configuration. It has no server semantic evaluation
+and is never a fallback for an engine-managed purchase. Private bundles, seeds
+and recovery journals must remain outside Git and public instructions.
 
 Environment only; the token is never accepted as a flag or URL parameter.
 

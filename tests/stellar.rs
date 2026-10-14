@@ -19,6 +19,9 @@ mod error;
 #[path = "../src/stellar.rs"]
 mod stellar;
 #[cfg(unix)]
+#[path = "../src/stellar_engine.rs"]
+mod stellar_engine;
+#[cfg(unix)]
 #[path = "../src/stellar_http.rs"]
 mod stellar_http;
 #[cfg(unix)]
@@ -108,7 +111,11 @@ fn unsupported_platform_refuses_before_input_keys_and_state() {
 
 #[cfg(unix)]
 fn contract(seed: u8) -> String {
-    let mut bytes = vec![16];
+    strkey(16, seed)
+}
+#[cfg(unix)]
+fn strkey(version: u8, seed: u8) -> String {
+    let mut bytes = vec![version];
     bytes.extend([seed; 32]);
     let mut crc = 0u16;
     for byte in &bytes {
@@ -273,6 +280,7 @@ mod cooperating {
             let mut server = Command::new("python3")
                 .arg(script)
                 .arg(&directory)
+                .arg(std::env::current_exe().unwrap())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .spawn()
@@ -349,6 +357,9 @@ mod cooperating {
                     },
                 )
                 .env("PATH", "");
+            if executor && self.source["bundle"]["executorSeed"].as_str().is_some() {
+                command.env_remove("ALLOWIT_STELLAR_EXECUTOR_KEY_FILE");
+            }
             command.output().unwrap()
         }
         fn import(&self) {
@@ -360,6 +371,55 @@ mod cooperating {
                 "{}",
                 String::from_utf8_lossy(&out.stderr)
             );
+        }
+        fn import_bundle(&mut self) {
+            let bundle = json!({"version":1,"profile":allowit_stellar::PROFILE,"origin":format!("https://merchant.example:{}",self.port),"capability":format!("stellar-executor.{}","a".repeat(32)),"config":self.source["config"],"policy":{"id":"a".repeat(64),"revision":1,"sourceHash":"b".repeat(64)}});
+            let path = self.directory.join("bundle.json");
+            fs::write(&path, bundle.to_string()).unwrap();
+            self.source["bundle"] = bundle;
+            self.save();
+            let out = self.child(&["import", path.to_str().unwrap()], false, false);
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        fn import_seed_bundle(&mut self) {
+            self.import_bundle();
+            self.source["bundle"]["executorSeed"] = json!(strkey(144, 2));
+            let path = self.directory.join("bundle.json");
+            fs::write(&path, self.source["bundle"].to_string()).unwrap();
+            self.save();
+            let out = self.child(&["import", path.to_str().unwrap()], false, false);
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        fn call_auto(&self, id: &str, executor: bool) -> Output {
+            self.child(
+                &[
+                    "call",
+                    &self.url(),
+                    "--id",
+                    id,
+                    "--max-amount",
+                    "0.001",
+                    "--action",
+                    "research",
+                    "--merchant",
+                    "fixture",
+                    "--context",
+                    r#"{"purpose":"dataset"}"#,
+                    "--json",
+                ],
+                executor,
+                false,
+            )
         }
         fn prepare(&self, id: &str) -> PreparedPayment {
             let url = self.url();
@@ -463,6 +523,304 @@ mod cooperating {
                     String::from_utf8_lossy(&out.stderr)
                 )
             })
+    }
+
+    /// Fixture signer, isolated from the buyer and never compiled in the binary.
+    #[test]
+    fn engine_signer() {
+        let Ok(raw) = std::env::var("ALLOWIT_STELLAR_TEST_ENGINE_PREPARED") else {
+            return;
+        };
+        let prepared: PreparedPayment = serde_json::from_str(&raw).unwrap();
+        let path = PathBuf::from(std::env::var("ALLOWIT_STELLAR_TEST_ENGINE_FIXTURE").unwrap());
+        let mut source: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let approval =
+            allowit_stellar::authority_sign(&prepared.config, &prepared, &[4; 32]).unwrap();
+        let signed =
+            allowit_stellar::sign_payment(&prepared.config, &prepared, &[2; 32], &approval)
+                .unwrap();
+        source["signed"] = json!(signed);
+        let mut envelope = TransactionEnvelope::from_xdr_base64(
+            &signed.transaction_xdr,
+            Limits {
+                depth: 64,
+                len: 1_048_576,
+            },
+        )
+        .unwrap();
+        if let TransactionEnvelope::Tx(envelope) = &mut envelope {
+            envelope.tx.fee = 2000;
+            envelope.tx.seq_num = SequenceNumber(50);
+        }
+        let hash = allowit_stellar::hex(
+            &envelope
+                .hash(allowit_stellar::sha256(
+                    allowit_stellar::network_passphrase(&prepared.config.network).unwrap(),
+                ))
+                .unwrap(),
+        );
+        source["rpcTransaction"]["envelopeXdr"] = json!(
+            envelope
+                .to_xdr_base64(Limits {
+                    depth: 64,
+                    len: 1_048_576
+                })
+                .unwrap()
+        );
+        source["rpcTransaction"]["txHash"] = json!(hash);
+        source["paymentResponse"] = json!(STANDARD.encode(serde_json::to_vec(&json!({"success":true,"transaction":hash,"network":prepared.config.network,"payer":prepared.config.vault})).unwrap()));
+        fs::write(path, source.to_string()).unwrap();
+        println!("{}", serde_json::to_string(&approval).unwrap());
+    }
+
+    #[test]
+    fn automatic_engine_approval_reports_exact_proof_before_single_paid_request() {
+        let mut fixture = Fixture::new();
+        fixture.import_bundle();
+        fs::remove_file(fixture.directory.join("authority.hex")).unwrap();
+        let out = fixture.call_auto("engine-purchase-001", true);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(json_output(&out)["proofAcknowledged"], true);
+        assert_eq!(json_output(&out)["paymentVerified"], true);
+        assert_eq!(json_output(&out)["deliveryReported"], true);
+        let events: Vec<Value> = fs::read_to_string(fixture.directory.join("requests.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let proof = events
+            .iter()
+            .position(|v| v["route"] == "/api/stellar/report")
+            .unwrap();
+        let paid = events.iter().position(|v| v["kind"] == "paid").unwrap();
+        assert!(proof < paid);
+        assert!(
+            events
+                .iter()
+                .filter(|v| v["kind"] == "paid" || v["kind"] == "quote")
+                .all(|v| v["bearer"] == false)
+        );
+        assert!(
+            events
+                .iter()
+                .filter(|v| v["kind"] == "engine")
+                .all(|v| v["credential"] == false)
+        );
+        let repeat = fixture.call_auto("engine-purchase-001", false);
+        assert_eq!(repeat.status.code(), Some(0));
+        for command in ["status", "resume"] {
+            let recovered =
+                fixture.child(&[command, "engine-purchase-001", "--json"], false, false);
+            assert_eq!(
+                recovered.status.code(),
+                Some(0),
+                "{}",
+                String::from_utf8_lossy(&recovered.stderr)
+            );
+        }
+        assert_eq!(fixture.paid_count(), 1);
+        let changed = fixture.child(
+            &[
+                "call",
+                &fixture.url(),
+                "--id",
+                "engine-purchase-001",
+                "--max-amount",
+                "0.001",
+                "--action",
+                "other",
+                "--json",
+            ],
+            false,
+            false,
+        );
+        assert_eq!(changed.status.code(), Some(3));
+        assert_eq!(fixture.paid_count(), 1);
+    }
+
+    #[test]
+    fn paid_response_reflection_cannot_print_the_executable_credential() {
+        let mut fixture = Fixture::new();
+        fixture.import_bundle();
+        fixture.source["reflectCredential"] = json!(true);
+        fixture.save();
+        let out = fixture.call_auto("engine-reflection-001", true);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let source: Value =
+            serde_json::from_slice(&fs::read(fixture.directory.join("fixture.json")).unwrap())
+                .unwrap();
+        let printed = String::from_utf8_lossy(&out.stdout);
+        assert!(!printed.contains(source["signed"]["paymentSignature"].as_str().unwrap()));
+        assert!(printed.contains("[redacted]"));
+        assert!(!printed.contains('\u{1b}'));
+        assert_eq!(fixture.paid_count(), 1);
+    }
+
+    #[test]
+    fn engine_deny_owner_input_bad_approval_and_unacknowledged_proof_withhold_payment() {
+        for (flag, value, code) in [
+            ("engineDecision", json!("deny"), 20),
+            ("engineDecision", json!("awaiting_input"), 11),
+            ("engineDecision", json!("provider_error"), 5),
+            ("engineBadApproval", json!(true), 3),
+            ("engineWrongBinding", json!(true), 3),
+            ("engineBadAck", json!(true), 5),
+        ] {
+            let mut fixture = Fixture::new();
+            fixture.import_bundle();
+            fixture.source[flag] = value;
+            fixture.save();
+            let out = fixture.call_auto("engine-withheld-001", flag == "engineBadAck");
+            assert_eq!(
+                out.status.code(),
+                Some(code),
+                "{flag}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert_eq!(fixture.paid_count(), 0);
+            let path = fixture.directory.join("state/operations").join(format!(
+                "request-{}.json",
+                allowit_stellar::hex(&allowit_stellar::sha256("engine-withheld-001"))
+            ));
+            let record: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            assert_eq!(record["attempted"], false);
+            if flag != "engineBadAck" {
+                assert_eq!(record["signed"], Value::Null);
+            }
+            assert!(!String::from_utf8_lossy(&out.stderr).contains("signing key"));
+        }
+    }
+
+    #[test]
+    fn exported_executor_seed_is_private_separate_and_never_needed_by_recovery() {
+        let mut fixture = Fixture::new();
+        fixture.import_seed_bundle();
+        fs::remove_file(fixture.directory.join("executor.hex")).unwrap();
+        fs::remove_file(fixture.directory.join("authority.hex")).unwrap();
+        let out = fixture.call_auto("imported-key-001", true);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let seed = strkey(144, 2);
+        for entry in fs::read_dir(fixture.directory.join("state/configuration")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|s| s == "json") {
+                let bytes = fs::read(&path).unwrap();
+                let value: Value = serde_json::from_slice(&bytes).unwrap();
+                if value.get("seed").is_some() {
+                    assert_eq!(value["seed"], seed);
+                    assert_eq!(
+                        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                        0o600
+                    );
+                    fs::remove_file(path).unwrap();
+                } else {
+                    assert!(!String::from_utf8(bytes).unwrap().contains(&seed));
+                }
+            }
+        }
+        for entry in fs::read_dir(fixture.directory.join("state/operations")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|s| s == "json") {
+                assert!(!fs::read_to_string(path).unwrap().contains(&seed));
+            }
+        }
+        let out = fixture.child(&["resume", "imported-key-001", "--json"], false, false);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(fixture.paid_count(), 1);
+    }
+
+    #[test]
+    fn owner_question_expiry_never_refreshes_original_challenge_or_signs() {
+        let mut fixture = Fixture::new();
+        fixture.import_bundle();
+        fixture.source["engineDecision"] = json!("awaiting_input");
+        fixture.source["paymentRequired"]["accepts"][0]["maxTimeoutSeconds"] = json!(6);
+        fixture.save();
+        let out = fixture.call_auto("owner-expired-001", false);
+        assert_eq!(
+            out.status.code(),
+            Some(11),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        std::thread::sleep(std::time::Duration::from_secs(7));
+        fixture.source["engineDecision"] = json!("allow");
+        fixture.save();
+        let out = fixture.call_auto("owner-expired-001", false);
+        assert_eq!(
+            out.status.code(),
+            Some(12),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(json_output(&out)["status"], "expired");
+        assert_eq!(fixture.paid_count(), 0);
+        let events = fs::read_to_string(fixture.directory.join("requests.jsonl")).unwrap();
+        assert_eq!(
+            events
+                .lines()
+                .filter(|line| serde_json::from_str::<Value>(line).unwrap()["kind"] == "quote")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn lost_report_response_preserves_signed_bytes_and_keyless_recovery() {
+        let mut fixture = Fixture::new();
+        fixture.import_bundle();
+        fixture.source["engineDropReport"] = json!(true);
+        fixture.save();
+        let out = fixture.call_auto("engine-report-loss-001", true);
+        assert_eq!(out.status.code(), Some(5));
+        assert_eq!(fixture.paid_count(), 0);
+        // The server saved the proof before losing its response. Recovery observes
+        // it without invoking either signer or sending a paid request.
+        fixture.source =
+            serde_json::from_slice(&fs::read(fixture.directory.join("fixture.json")).unwrap())
+                .unwrap();
+        fixture.source["engineDropReport"] = json!(false);
+        fixture.save();
+        let out = fixture.child(
+            &["status", "engine-report-loss-001", "--json"],
+            false,
+            false,
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(10),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(json_output(&out)["proofAcknowledged"], true);
+        assert_eq!(fixture.paid_count(), 0);
+        let out = fixture.call_auto("engine-report-loss-001", false);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(fixture.paid_count(), 1);
     }
 
     /// Only this source-identical test driver contains the injected DNS route.

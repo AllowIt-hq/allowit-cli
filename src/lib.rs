@@ -10,6 +10,7 @@ mod policy_native;
 mod request;
 mod skill;
 mod stellar;
+mod stellar_engine;
 mod stellar_http;
 mod stellar_rpc;
 mod stellar_store;
