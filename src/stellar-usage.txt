@@ -40,8 +40,10 @@ authority signature, and reads only the executor key. Use --action or
 ALLOWIT_EXECUTION_ACTION for the real semantic action; --merchant and --context
 may instead use ALLOWIT_EXECUTION_MERCHANT and ALLOWIT_EXECUTION_CONTEXT_JSON.
 Labels/context do not establish merchant identity or answer owner questions.
-Denied, awaiting_input, expired and failed engine/provider operations never reach
-executor signing or paid HTTP. Owner input uses the application's verified owner
+Denied, awaiting_input, expired and failed required policy-provider decisions never
+reach executor signing or paid HTTP. Errors after approval retain the original
+prepared or signed proof; a missing report acknowledgment blocks credential delivery.
+Owner input uses the application's verified owner
 path. A later answer cannot extend the original quote or change its request ID.
 Fresh quote preparation after expiry requires the owner's explicit safe workflow.
 
