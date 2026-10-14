@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-  "commit": "b59a9b25fd951b5f5a96bf9c37f57cd963ad83e1",
+  "commit": "66bb06e0082625a5829415b8339dc3f181157c0f",
   "crate": "native-rust",
   "submodule": {
     "path": "repos/AllowIt-hq--allowit-sdk",
@@ -95,11 +95,11 @@
       "Cargo.toml": "699b217489b95992b57fd9c684ac22ad2ba47ddc723252b69ca58faab18deb22",
       "README.md": "a61185465f21171a9e4d2fca4a5a534188687d94f23b8717e9a0103e44349cea",
       "merchant/.gitignore": "fdbfa3c7117b564f95e6a1df0da816138899d70296ad847f70b5e059724a5af5",
-      "merchant/README.md": "8b8e612fb58fd5c732264763aefac452304b79a93c9181b3c7f253e37b8fd27b",
-      "merchant/index.mjs": "793b22db50dd505249c8d49a356dedb1d9488be81b9f5087b868191bb0fa2bcf",
+      "merchant/README.md": "3e8eab9c4d75100f8731ce442d8fea6104458dc81f8f792848a9b0e321317d4c",
+      "merchant/index.mjs": "e23b6d9e32a4af5b270542f8ef22fdd5ee8a086bc3e805d08a96c5b8a9c9103e",
       "merchant/package-lock.json": "3f230edf0f24407dd01775d485c46d22135e29133c1ea41f63dfddf7cb2c0178",
       "merchant/package.json": "62304c3e08e7fb0e479a9acbee7cbe67f8ca26b50f6d57e6786257e2bf05e890",
-      "merchant/test/boundary.test.mjs": "6920ff04a47bf4937a469190cb12b0cdc246d99164ff7d821065568c77697e41",
+      "merchant/test/boundary.test.mjs": "86aa2d09f34ccde0b8e031ef031d93759bebec7c233e11965f8ac34a1f40681a",
       "src/bin/allowit-stellar-http.rs": "5182ebe75aa35cdb0f87b9b08ac23d0b16e6e50abebd8d9b04fc81866d1ff0de",
       "src/http_binding.rs": "a35080b2504f7db0fb0d2b60ff3154a5e4da50a2084651622195ca2437342e0f",
       "src/lib.rs": "1ed348a25c0b10131f4a4e2053cf2da13cf21c977f822e42ccc18c1983472675",
