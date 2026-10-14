@@ -2,7 +2,7 @@
 name = "allowit-cli"
 version = "0.3.0-dev"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.98"
 license = "MIT"
 publish = false
 
@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 allowit-native = { path = "repos/AllowIt-hq--allowit-sdk/native-rust" }
 allowit-tempo = { path = "repos/AllowIt-hq--allowit-sdk/tempo-rust" }
+allowit-stellar = { path = "repos/AllowIt-hq--allowit-sdk/stellar-rust" }
 # Canonical typed workflow types from the same pinned SDK submodule.
 allowit-policy-sdk = { package = "allowit-sdk", path = "repos/AllowIt-hq--allowit-sdk", default-features = false, features = ["std", "typed-workflow"] }
 base64 = "0.22.1"
@@ -37,3 +38,6 @@ zeroize = "1.8.2"
 lto = true
 codegen-units = 1
 strip = true
+
+[dev-dependencies]
+stellar-xdr = { version = "=28.0.0", features = ["std", "base64"] }

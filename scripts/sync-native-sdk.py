@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Pin, update and verify the canonical SDK Git submodule; no credentials.
 
-One gitlink supplies four Cargo path dependencies: the native Rust crate, its
+One gitlink supplies five Cargo path dependencies: the native Rust crate, its
 PaySH interface crate, the root policy SDK crate with canonical typed workflow
-types and the Tempo execution verifier.
+types and the Tempo and Stellar execution verifiers.
 
 Builds, provenance and license packaging share `verify`. `update` checks out an
 exact SDK commit; `pin` records the checked-out commit. Both stage the gitlink
@@ -31,6 +31,9 @@ POLICY_DEPENDENCY = (f'allowit-policy-sdk = {{ package = "{POLICY_PACKAGE}", pat
 TEMPO_CRATE = 'tempo-rust'
 TEMPO_PACKAGE = 'allowit-tempo'
 TEMPO_DEPENDENCY = f'{TEMPO_PACKAGE} = {{ path = "{SUBMODULE}/{TEMPO_CRATE}" }}'
+STELLAR_CRATE = 'stellar-rust'
+STELLAR_PACKAGE = 'allowit-stellar'
+STELLAR_DEPENDENCY = f'{STELLAR_PACKAGE} = {{ path = "{SUBMODULE}/{STELLAR_CRATE}" }}'
 TEMPO_REVIEW_PIN = '7431732a2d3c35eb6b124e761b9cac1e7a4630e9'
 INTERFACE = 'crates/paysh-interface'
 METADATA = 'vendor/native-sdk.json'
@@ -173,6 +176,24 @@ def tempo_sources(sdk, commit):
     for name in blobs:
         if name not in {'Cargo.toml', 'Cargo.lock', 'LICENSE', 'LICENSE.md', 'README.md'} and not re.fullmatch(r'(?:src/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.rs|tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.(?:rs|json))', name):
             raise ValueError('Unexpected SDK Tempo crate file: ' + name)
+    unchanged(crate, blobs)
+    return blobs
+
+
+def stellar_sources(sdk, commit):
+    """Bind the complete independent Stellar crate and interoperability inputs."""
+    crate = sdk / STELLAR_CRATE
+    if crate.is_symlink() or not crate.is_dir():
+        raise ValueError('SDK Stellar crate must be a real directory')
+    if pinned(sdk, commit, STELLAR_CRATE + '/build.rs') or os.path.lexists(crate / 'build.rs'):
+        raise ValueError('SDK Stellar crate must not have a build script')
+    blobs = crate_blobs(sdk, commit, STELLAR_CRATE)
+    tracked = {name[len(STELLAR_CRATE) + 1:] for name in listed(sdk, STELLAR_CRATE)}
+    if not {'Cargo.toml', 'Cargo.lock', 'src/lib.rs'}.issubset(blobs) or set(blobs) != tracked or inventory(crate) != tracked:
+        raise ValueError('SDK Stellar crate file set differs from its pinned commit')
+    for name in blobs:
+        if name not in {'Cargo.toml', 'Cargo.lock', 'LICENSE', 'LICENSE.md', 'README.md', '.gitignore'} and not re.fullmatch(r'(?:src/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.rs|tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.(?:rs|json|mjs))', name):
+            raise ValueError('Unexpected SDK Stellar crate file: ' + name)
     unchanged(crate, blobs)
     return blobs
 
@@ -328,11 +349,11 @@ def verify(root, allow_review=False):
     module = command(root, 'config', '--file', '.gitmodules', '--get-regexp', r'^submodule\.', capture_output=True, text=True).stdout.split('\n')
     if sorted(filter(None, module)) != [f'submodule.{SUBMODULE}.path {SUBMODULE}', f'submodule.{SUBMODULE}.url {URL}']:
         raise ValueError('.gitmodules must name only the canonical SDK submodule')
-    # Exactly the three direct dependency lines may name the SDK, so no other line can add
+    # Exactly the four direct dependency lines may name the SDK, so no other line can add
     # a feature (for example `allowit-policy-sdk/compiler`) through unification.
     mentions = [line for line in (root / 'Cargo.toml').read_text().splitlines()
-                if any(name in line for name in (SUBMODULE, 'allowit-native', 'allowit-policy-sdk', POLICY_PACKAGE, TEMPO_PACKAGE))]
-    expected_dependencies = [DEPENDENCY, POLICY_DEPENDENCY, TEMPO_DEPENDENCY]
+                if any(name in line for name in (SUBMODULE, 'allowit-native', 'allowit-policy-sdk', POLICY_PACKAGE, TEMPO_PACKAGE, STELLAR_PACKAGE))]
+    expected_dependencies = [DEPENDENCY, POLICY_DEPENDENCY, TEMPO_DEPENDENCY, STELLAR_DEPENDENCY]
     if sorted(mentions) != sorted(expected_dependencies):
         raise ValueError('Cargo must build the SDK from its submodule')
     if listed(root, *COPIES):
@@ -377,6 +398,10 @@ def verify(root, allow_review=False):
         if not isinstance(tempo, dict) or tempo.get('defaultFeatures') is not True or {key: value for key, value in tempo.items() if key != 'files'} != tempo_identity():
             raise ValueError('SDK Tempo crate identity differs from the Cargo dependency')
         recorded(tempo.get('files'), tempo_sources(sdk_root, commit), 'Tempo crate')
+    stellar = sdk.get('stellarSdk')
+    if not isinstance(stellar, dict) or stellar.get('defaultFeatures') is not True or {key: value for key, value in stellar.items() if key != 'files'} != stellar_identity():
+        raise ValueError('SDK Stellar crate identity differs from the Cargo dependency')
+    recorded(stellar.get('files'), stellar_sources(sdk_root, commit), 'Stellar crate')
     discovery(sdk_root, commit)
     # The CLI root's own Cargo inputs are first-party development files; only
     # binary provenance binds them. Directories in between are bound here.
@@ -421,6 +446,7 @@ def describe(root):
     interface = interface_sources(sdk, commit)
     policy = policy_sources(sdk, commit)
     tempo = tempo_sources(sdk, commit)
+    stellar = stellar_sources(sdk, commit)
     discovery(sdk, commit)
     parent(root, *INTERMEDIATE)
     return {
@@ -433,6 +459,7 @@ def describe(root):
         'payshInterface': {name: digest(interface[name]) for name in sorted(interface)},
         'policySdk': {**policy_identity(), 'files': {name: digest(policy[name]) for name in sorted(policy)}},
         'tempoSdk': {**tempo_identity(), 'files': {name: digest(tempo[name]) for name in sorted(tempo)}},
+        'stellarSdk': {**stellar_identity(), 'files': {name: digest(stellar[name]) for name in sorted(stellar)}},
         'licenses': {name: digest(legal[name]) for name in LICENSES if name in legal},
     }
 
@@ -443,6 +470,7 @@ RESOLVED = {
     'allowit-paysh-interface': (INTERFACE, []),
     POLICY_PACKAGE: ('', POLICY_FEATURES),
     TEMPO_PACKAGE: (TEMPO_CRATE, []),
+    STELLAR_PACKAGE: (STELLAR_CRATE, []),
 }
 
 
@@ -487,6 +515,10 @@ def policy_identity():
 
 def tempo_identity():
     return {'path': TEMPO_CRATE, 'package': TEMPO_PACKAGE, 'defaultFeatures': True, 'features': []}
+
+
+def stellar_identity():
+    return {'path': STELLAR_CRATE, 'package': STELLAR_PACKAGE, 'defaultFeatures': True, 'features': []}
 
 
 def pin(root):

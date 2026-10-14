@@ -5,6 +5,7 @@ RUST_TARGET ?= x86_64-unknown-linux-musl
 # this checkout so SDK checks never leave files inside the submodule.
 SDK_CRATE := repos/AllowIt-hq--allowit-sdk/native-rust
 TEMPO_CRATE := repos/AllowIt-hq--allowit-sdk/tempo-rust
+STELLAR_CRATE := repos/AllowIt-hq--allowit-sdk/stellar-rust
 
 .PHONY: test parity integration build dist clean
 
@@ -21,6 +22,8 @@ test:
 	CARGO_TARGET_DIR="$(CURDIR)/target" $(CARGO) clippy --manifest-path $(SDK_CRATE)/Cargo.toml --locked --all-targets -- -D warnings
 	CARGO_TARGET_DIR="$(CURDIR)/target" $(CARGO) test --manifest-path $(TEMPO_CRATE)/Cargo.toml --locked
 	CARGO_TARGET_DIR="$(CURDIR)/target" $(CARGO) clippy --manifest-path $(TEMPO_CRATE)/Cargo.toml --locked --all-targets -- -D warnings
+	CARGO_TARGET_DIR="$(CURDIR)/target" $(CARGO) test --manifest-path $(STELLAR_CRATE)/Cargo.toml --locked
+	CARGO_TARGET_DIR="$(CURDIR)/target" $(CARGO) clippy --manifest-path $(STELLAR_CRATE)/Cargo.toml --locked --all-targets -- -D warnings
 	python3 scripts/sync-native-sdk.py verify
 	cd reference/go && $(GO) vet ./... && $(GO) test -race -count=1 ./...
 	$(GO) test -race -count=1 ./integration

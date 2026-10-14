@@ -1,0 +1,50 @@
+Stellar contract-backed x402 purchases use an explicit trusted operator approval.
+
+  allowit stellar import CONFIG_JSON
+  allowit stellar prepare URL --id REQUEST_ID --max-amount AMOUNT [--json]
+  allowit stellar authorize REQUEST_ID > approval.json
+  allowit stellar call URL --id REQUEST_ID --max-amount AMOUNT --approval approval.json [--json]
+  allowit stellar resume REQUEST_ID [--transaction ORIGINAL_HASH] [--json]
+  allowit stellar status REQUEST_ID [--json]
+
+Configure ALLOWIT_STELLAR_STATE_DIR as private local POSIX storage. Default:
+$XDG_STATE_HOME/allowit/stellar or $HOME/.local/state/allowit/stellar.
+ALLOWIT_STELLAR_EXECUTOR_KEY_FILE points to the executor's private 0600 file
+containing its 32-byte hex seed. ALLOWIT_STELLAR_RPC_URL optionally overrides
+the HTTPS RPC URL; the RPC must serve the configured Stellar network.
+
+CONFIG_JSON contains network (stellar:testnet or stellar:pubnet), rpcUrl,
+vault and policy (canonical C addresses), owner/executor/authority (three
+separate canonical G addresses), asset (canonical Circle USDC contract),
+vaultWasmHash, policyWasmHash and policySourceHash (nonzero 32-byte hex hashes).
+Import is offline; live contract identity/state checks are required before signing.
+
+Prepare fetches one original x402 v2 challenge and validates its exact vault,
+Circle USDC asset, network, payee and amount with live pinned contract identities
+and state. GET query strings are preserved. Maximums use six decimal places;
+Stellar seven-decimal token amounts must map exactly to policy units.
+Prepare saves the original unsigned plan and reads no signing key.
+
+Authorize is a trusted operator command, run separately from the agent. It alone
+reads ALLOWIT_STELLAR_AUTHORITY_KEY_FILE and emits a detached approval for the
+exact validated plan. It does not send a payment. Do not give the agent this key.
+This local approval does not add server semantic policy evaluation.
+
+Call reads only the executor key and detached approval. It saves the complete
+credential and an attempted marker before sending PAYMENT-SIGNATURE exactly
+once. It never creates a replacement quote or nonce. Resume/status read no key,
+never sign or resend, and verify an available settlement against the exact chain
+receipt. If the HTTP result lost its receipt, resume --transaction HASH uses the
+original transaction hash as a lookup hint. Exact saved authorization, transfer
+and chain metadata must match. A verified payment unblocks the executor while
+service delivery stays unavailable (exit 5); another transaction is rejected.
+Retain the same journal/configuration/request ID for recovery.
+
+Use Linux or WSL with journal and keys in its Linux filesystem, not /mnt/c.
+No Node runtime, backend Stellar endpoint, managed wallet or frontend is needed.
+Public Stellar purchases spend real funds; no command runs automatically.
+
+Exit codes: 0 imported/approved/settled, 2 usage, 3 configuration, 5 uncertain,
+10 prepared. Verified payment with an unavailable or failed HTTP response exits 5.
+Payment and API delivery are separate results. Every process sharing an executor
+must use the same state directory; unresolved signed requests block new purchases.

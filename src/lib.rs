@@ -9,6 +9,10 @@ mod policy;
 mod policy_native;
 mod request;
 mod skill;
+mod stellar;
+mod stellar_http;
+mod stellar_rpc;
+mod stellar_store;
 mod tempo;
 mod tempo_mpp;
 mod tempo_pay;
@@ -94,9 +98,10 @@ fn execute(args: &[String], stdout: &mut String, stderr: &mut String) -> Result<
         "policy" => policy::run(&args[1..], stdout, stderr),
         "paysh" => paysh::run(&args[1..], stdout, stderr),
         "tempo" => tempo::run(&args[1..], stdout, stderr),
+        "stellar" => stellar::run(&args[1..], stdout, stderr),
         "show" | "eval" | "exec" | "status" => action(&args[0], &args[1..], stdout, stderr),
         _ => Err(Error::usage(format!(
-            "unknown command {} (show, eval, exec, status, policy)",
+            "unknown command {} (show, eval, exec, status, policy, paysh, tempo, stellar)",
             error::quoted(&args[0])
         ))),
     }

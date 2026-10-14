@@ -10,6 +10,8 @@ This directory is companion documentation for all `allowit` binaries built by th
 
 The Tempo verifier's secp256k1, ECDSA and Keccak dependencies retain their original checksum-verified crate notices. Validation covers both the CLI lockfile used for distribution and the pinned Tempo crate's independent lockfile used for SDK tests.
 
+The Stellar verifier's Ed25519 and official Stellar XDR dependencies also retain their checksum-verified crate notices. Validation includes the pinned Stellar crate's independent lockfile, alongside the CLI and Tempo lockfiles.
+
 `toolchains/` preserves Go's BSD license and vendored standard-library notices, plus Rust's standard-library copyright attribution and referenced license texts, plus the complete musl 1.2.5 copyright and component notices for Rust's self-contained static Linux target. OpenSSL and other bundled C notices are included in the original dependency package files. The root MIT license applies to first-party AllowIt code; it does not replace third-party licenses.
 
 Future artifact builds validate every current registry dependency against this collection and bundle this directory with the binary. If a lockfile introduces a new version, refresh its notices before publishing the artifact.

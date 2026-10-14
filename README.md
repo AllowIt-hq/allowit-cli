@@ -4,7 +4,7 @@
 
 ## Build from source
 
-Use Rust 1.88 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
+Use Rust 1.98 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
 
 Native `policy` commands require a local POSIX filesystem for private, durable journals.
 On Windows, use Linux/WSL and keep state in the Linux filesystem, not `/mnt/c` or `/mnt/d`.
@@ -47,6 +47,46 @@ All commands call Rust modules directly. The binary needs no Node runtime. The G
 Main contains the untagged `0.3.0-dev` implementation. No native Rust GitHub Release has been published. The existing `v0.1.0` and `v0.1.1` tags identify earlier Go releases.
 
 ## Configure
+
+### Stellar contract-backed x402
+
+`allowit stellar` is a native Rust buyer for Stellar x402 v2. It uses the pinned
+AllowIt vault and policy contract identities, Circle USDC, and explicit detached
+approval from a trusted operator. It does not use a managed wallet or a backend
+Stellar endpoint. Use `allowit stellar help` for the configuration schema and
+environment variables. Keys and private recovery journals require Linux/WSL
+storage, with files at 0600 and directories at 0700.
+
+```sh
+allowit stellar import stellar-config.json
+allowit stellar prepare 'https://agent402.tools/ENDPOINT?QUERY' --id purchase-001 --max-amount 0.01 --json
+# Run only on the trusted operator's machine/key boundary:
+ALLOWIT_STELLAR_AUTHORITY_KEY_FILE=/private/authority.hex allowit stellar authorize purchase-001 > approval.json
+# The agent receives only the detached approval and executor key access:
+ALLOWIT_STELLAR_EXECUTOR_KEY_FILE=/private/executor.hex allowit stellar call 'https://agent402.tools/ENDPOINT?QUERY' --id purchase-001 --max-amount 0.01 --approval approval.json --json
+allowit stellar resume purchase-001 --json
+# If the HTTP response lost its receipt, reconcile a known original chain hash:
+allowit stellar resume purchase-001 --transaction ORIGINAL_HASH --json
+```
+
+The URL above is a placeholder; select a real paid Agent402 endpoint. `prepare`
+validates the live network, deployed code hashes, vault state, exact quote,
+amount conversion and Soroban authorization before saving the plan. `authorize`
+prints a signature for that exact prepared operation and sends no payment. This
+explicit operator attestation does not implement server semantic policy
+evaluation. The agent must never have the authority key.
+
+`call` saves the complete signed credential and a durable attempted marker
+before its single paid HTTP request. Repeating the same ID preserves the URL,
+maximum, quote and nonce. `resume` and `status` load no key and never send another
+credential. Payment requires an independently verified exact Stellar receipt;
+HTTP delivery is reported separately. A lost result stays uncertain until an
+original transaction hash can be reconciled. `resume --transaction HASH` requires
+a chain proof matching the exact saved credential and transfer. It does not
+create a merchant response, sign or resend. Preserve the original journal instead
+of creating a replacement purchase. All processes
+using an executor must share its state directory. Another signed unresolved
+request blocks new purchases.
 
 Environment only; the token is never accepted as a flag or URL parameter.
 

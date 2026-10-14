@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-  "commit": "8d0aa9c1ae9813611d471d0fe90e908a515134a0",
+  "commit": "4e2536461005376726f270af9c70797079c07408",
   "crate": "native-rust",
   "submodule": {
     "path": "repos/AllowIt-hq--allowit-sdk",
@@ -82,6 +82,29 @@
       "README.md": "8c289ed76902b75cacf74154ece9b83161ebadce576df167c12cdd80f1ece2b4",
       "src/lib.rs": "a7efdabafeeef25e91ec3e2c849b5582bfde58939da0e93ee1556799fd34de30",
       "src/mpp.rs": "61f01eedc4857055b99fc4f9b671c4deff36855ec145f6eb4f4ccad1eb934060"
+    }
+  },
+  "stellarSdk": {
+    "path": "stellar-rust",
+    "package": "allowit-stellar",
+    "defaultFeatures": true,
+    "features": [],
+    "files": {
+      ".gitignore": "13e460ad00e91bc1f547baf9be20c89fc334d4b9d832be4d68d307791c53133e",
+      "Cargo.lock": "815702a3dfc5698da42659e4e81f342d615ad5bab5802de4aa0cad32c4c3d54a",
+      "Cargo.toml": "699b217489b95992b57fd9c684ac22ad2ba47ddc723252b69ca58faab18deb22",
+      "README.md": "a61185465f21171a9e4d2fca4a5a534188687d94f23b8717e9a0103e44349cea",
+      "src/lib.rs": "bf6fac0c6401cfd0fac4a862a566f74adad1b52c90a92bd0a5066b643e47be76",
+      "src/tests.rs": "05e1d8751c31980dcacd0e94a97b19336d665d073cfea8cea563bd0cae4fa198",
+      "tests/fixtures/contract-host.json": "4205c6fd56ea32d7dedef5b640d084409519bd3f4810d00eea5bc3e2f02c6803",
+      "tests/fixtures/golden.json": "7cc12dbc3be3e5b20083acada66f59a03ed14b6f486ccc286222362c57b2e55a",
+      "tests/fixtures/x402-vault.json": "2622cc4716ca39fbac878656984fc1567ef9dc693a6f2480945688632667a4ee",
+      "tests/node/contract-host.mjs": "e88475aa8f010e1c85cf6c9282ab210d44f08eb55a2a95f26d785371053afb79",
+      "tests/node/golden.mjs": "bc15adaae04b975da29a025585948425bcad31ca5c3d8bba08fd41ccce21701c",
+      "tests/node/package-lock.json": "9464d59449db4cef3baeb8da41d002cc53785f8327881ed59e07a27f98bea3fe",
+      "tests/node/package.json": "3f71db254fdf1b1b2a7958479fcee40618bc4cc6051cb1a03de7491f8e7f3035",
+      "tests/node/verifier.mjs": "9b44cc2bae69f3b3313ccef556c478786c5506359d338ade994aeb8ad9cb2953",
+      "tests/payment.rs": "b7a9d223854c642c6e0fd0573efe4e59c86a56db0be259a8c3a100e87b6a535b"
     }
   },
   "licenses": {
