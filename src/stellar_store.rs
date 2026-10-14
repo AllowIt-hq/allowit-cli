@@ -1,4 +1,4 @@
-//! Executor-wide private proof storage. The lock lives as long as the Store.
+//! Executor-wide private proof storage. The creating process owns the Store lock.
 //! Callers choose one directory per executor, chain and native nonce key.
 use crate::error::{Error, Result};
 use serde::{Serialize, de::DeserializeOwned};
@@ -39,6 +39,25 @@ mod platform {
         directory: File,
         // Never unlink this inode: a replacement lock could admit two writers.
         lock: File,
+        owner_pid: libc::pid_t,
+    }
+
+    impl Drop for Store {
+        fn drop(&mut self) {
+            // flock follows an open-file description through fork, so close alone
+            // can leave the parent's lock held until an unrelated child execs.
+            // A child dropping its inherited handle must not unlock a live parent.
+            if unsafe { libc::getpid() } != self.owner_pid {
+                return;
+            }
+            loop {
+                if unsafe { libc::flock(self.lock.as_raw_fd(), libc::LOCK_UN) } == 0
+                    || std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR)
+                {
+                    break;
+                }
+            }
+        }
     }
 
     fn storage_error() -> Error {
@@ -226,12 +245,23 @@ mod platform {
                     "Another Stellar payment or recovery holds the executor journal lock",
                 ));
             }
-            directory.sync_all().map_err(|_| storage_error())?;
-            let store = Self { directory, lock };
+            let store = Self {
+                directory,
+                lock,
+                owner_pid: unsafe { libc::getpid() },
+            };
+            // From acquisition onward, every error path drops the owner and
+            // explicitly releases its lock even if another process inherited it.
+            store.directory.sync_all().map_err(|_| storage_error())?;
             store.check_lock()?;
             Ok(store)
         }
         fn check_lock(&self) -> Result<()> {
+            if unsafe { libc::getpid() } != self.owner_pid {
+                return Err(Error::config(
+                    "An inherited Stellar journal handle cannot be used by another process",
+                ));
+            }
             if !directory_private(&self.directory.metadata().map_err(|_| storage_error())?) {
                 return Err(storage_error());
             }
@@ -462,6 +492,136 @@ mod platform {
             drop(first);
             let second = Store::open(&directory.0).unwrap();
             assert_eq!(second.entries::<Value>().unwrap().len(), 1);
+        }
+        #[test]
+        fn inherited_process_handle_cannot_use_or_unlock_the_live_owner() {
+            let directory = TestDirectory::new();
+            let owner = Store::open(&directory.0).unwrap();
+            // A fork has a separate process ID but shares both open-file
+            // descriptions. Model that ownership boundary without a second fork.
+            let inherited = Store {
+                directory: owner.directory.try_clone().unwrap(),
+                lock: owner.lock.try_clone().unwrap(),
+                owner_pid: -1,
+            };
+            assert!(inherited.load::<Value>("payment-1").is_err());
+            assert!(inherited.save("payment-1", &json!({"proof":1})).is_err());
+            assert!(inherited.entries::<Value>().is_err());
+            drop(inherited);
+            assert!(
+                Store::open(&directory.0).is_err(),
+                "An inherited handle must not release its live owner's lock"
+            );
+            owner.save("payment-1", &json!({"proof":"owner"})).unwrap();
+            drop(owner);
+            assert!(Store::open(&directory.0).is_ok());
+        }
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn parent_drop_releases_lock_while_pre_exec_child_holds_inherited_descriptor() {
+            // Keep the long-lived fork in its own test process: otherwise its
+            // descriptor table would also retain unrelated tests' journal locks.
+            let (_, module) = module_path!().split_once("::").unwrap();
+            let test = format!("{module}::inherited_descriptor_scenario_child");
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &test, "--nocapture"])
+                .env("ALLOWIT_STELLAR_LOCK_CHILD_SCENARIO", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn inherited_descriptor_scenario_child() {
+            if std::env::var_os("ALLOWIT_STELLAR_LOCK_CHILD_SCENARIO").is_none() {
+                return;
+            }
+            let directory = TestDirectory::new();
+            let store = Store::open(&directory.0).unwrap();
+            let mut ready = [-1; 2];
+            let mut release = [-1; 2];
+            assert_eq!(unsafe { libc::pipe(ready.as_mut_ptr()) }, 0);
+            assert_eq!(unsafe { libc::pipe(release.as_mut_ptr()) }, 0);
+            assert_ne!(
+                unsafe { libc::fcntl(store.lock.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+                0,
+                "The inherited lock is already CLOEXEC; the regression is the pre-exec window"
+            );
+            // The files own these newly-created descriptors in the parent. The
+            // forked child uses raw syscalls and _exit only, never Rust teardown.
+            let mut ready_read = unsafe { File::from_raw_fd(ready[0]) };
+            let ready_write = unsafe { File::from_raw_fd(ready[1]) };
+            let release_read = unsafe { File::from_raw_fd(release[0]) };
+            let release_write = unsafe { File::from_raw_fd(release[1]) };
+            let pid = unsafe { libc::fork() };
+            assert!(pid >= 0);
+            if pid == 0 {
+                unsafe {
+                    libc::close(ready[0]);
+                    libc::close(release[1]);
+                    let ready_byte = [1u8];
+                    if libc::write(ready[1], ready_byte.as_ptr().cast(), 1) != 1 {
+                        libc::_exit(1);
+                    }
+                    let mut release_byte = [0u8];
+                    loop {
+                        let result = libc::read(release[0], release_byte.as_mut_ptr().cast(), 1);
+                        if result >= 0 {
+                            break;
+                        }
+                        if *libc::__errno_location() != libc::EINTR {
+                            libc::_exit(1);
+                        }
+                    }
+                    libc::_exit(0);
+                }
+            }
+            struct WaitingChild {
+                pid: libc::pid_t,
+                release: File,
+            }
+            impl Drop for WaitingChild {
+                fn drop(&mut self) {
+                    let _ = self.release.write_all(&[1]);
+                    loop {
+                        let result = unsafe { libc::waitpid(self.pid, std::ptr::null_mut(), 0) };
+                        if result >= 0
+                            || std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR)
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+            let child = WaitingChild {
+                pid,
+                release: release_write,
+            };
+            drop(ready_write);
+            drop(release_read);
+            let mut acknowledgement = [0u8];
+            ready_read.read_exact(&mut acknowledgement).unwrap();
+            assert_eq!(acknowledgement, [1]);
+            assert!(
+                Store::open(&directory.0).is_err(),
+                "A live Store must keep exclusive ownership"
+            );
+            drop(store);
+            let reopened = Store::open(&directory.0).expect(
+                "Parent drop must release its lock before the inherited descriptor reaches exec",
+            );
+            assert!(Store::open(&directory.0).is_err());
+            drop(child);
+            // Closing the child's old descriptor cannot unlock a newly acquired
+            // independent open-file description owned by this live Store.
+            assert!(Store::open(&directory.0).is_err());
+            drop(reopened);
+            assert!(Store::open(&directory.0).is_ok());
         }
         #[test]
         fn hashed_identifiers_do_not_become_paths() {
