@@ -1,8 +1,7 @@
 name: Go reference compatibility smoke
 on:
-  push:
-    branches: [main]
-  pull_request:
+  schedule:
+    - cron: "17 4 * * *"
   workflow_dispatch:
     inputs:
       full:
@@ -36,7 +35,7 @@ jobs:
           cargo test --locked --test parity validation_and_help_match_reference -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/smoke.log"
           grep -F '1 passed; 0 failed' "$RUNNER_TEMP/smoke.log"
       - name: Full Go reference parity
-        if: github.event_name == 'workflow_dispatch' && inputs.full
+        if: github.event_name == 'schedule' || inputs.full
         run: |
           cargo test --locked --test parity
           make parity
