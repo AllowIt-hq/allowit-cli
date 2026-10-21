@@ -1,0 +1,63 @@
+name: Focused CI
+on:
+  pull_request:
+  push:
+    branches: [main, prod]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: focused-${{ github.repository }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  source-integrity:
+    name: source-integrity (${{ matrix.battery }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - battery: tempo-review-boundary
+            script: scripts/test-tempo-sdk-review.py
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the selected behavioral tests
+        shell: bash
+        env:
+          TEST_SCRIPT: ${{ matrix.script }}
+        run: |
+          set -euo pipefail
+          python3 "$TEST_SCRIPT" 2>&1 | tee "$RUNNER_TEMP/tests.log"
+          grep -Eq '^Ran [1-9][0-9]* tests? in ' "$RUNNER_TEMP/tests.log"
+  reference-flows:
+    name: Go reference (${{ matrix.flow }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flow: stellar-plan
+            selector: TestExecStellarMockPlanSendsExactRequest
+          - flow: solana-call-costs
+            selector: TestSolanaPlanWithCallsChargesCallCosts
+          - flow: uncertain-execution
+            selector: TestUncertainFailureRetriesSameRequest
+          - flow: policy-dispatch
+            selector: TestPolicyDispatchArgv
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: reference/go/go.mod
+          cache: false
+      - name: Run exactly one reference flow
+        working-directory: reference/go
+        env:
+          TEST_SELECTOR: ${{ matrix.selector }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -count=1 -timeout=35s -run "^${TEST_SELECTOR}$" -v ./internal/cli | tee "$RUNNER_TEMP/tests.log"
+          grep -F -- "--- PASS: $TEST_SELECTOR " "$RUNNER_TEMP/tests.log"

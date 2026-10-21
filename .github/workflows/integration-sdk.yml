@@ -1,8 +1,7 @@
 name: SDK integration smoke
 on:
-  push:
-    branches: [main]
-  pull_request:
+  schedule:
+    - cron: "17 4 * * *"
   workflow_dispatch:
     inputs:
       full:
@@ -41,7 +40,7 @@ jobs:
           cargo test --locked --test native generate_is_offline_native_and_preserves_policy_instance -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/smoke.log"
           grep -F "1 passed; 0 failed" "$RUNNER_TEMP/smoke.log"
       - name: Full pinned SDK regressions
-        if: github.event_name == 'workflow_dispatch' && inputs.full
+        if: github.event_name == 'schedule' || inputs.full
         run: |
           CARGO_TARGET_DIR="$PWD/target" cargo test --locked --manifest-path repos/AllowIt-hq--allowit-sdk/native-rust/Cargo.toml
           CARGO_TARGET_DIR="$PWD/target" cargo test --locked --manifest-path repos/AllowIt-hq--allowit-sdk/tempo-rust/Cargo.toml
