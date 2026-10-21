@@ -8,7 +8,7 @@ permissions:
   contents: read
 concurrency:
   group: focused-${{ github.repository }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   source-integrity:
     name: source-integrity (${{ matrix.battery }})
