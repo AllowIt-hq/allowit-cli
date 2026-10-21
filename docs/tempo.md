@@ -30,6 +30,55 @@ Owner-input requests exit 11, and settled replays exit 6.
 `status REQUEST_ID` reads the backend record.
 These commands do not implement owner lifecycle operations or change wallet interfaces.
 
+## Payment intent
+
+`execute` and `pay` read the exact policy input from the environment:
+
+```sh
+export ALLOWIT_REQUEST_ID='invoice-0001'
+export ALLOWIT_EXECUTION_ACTION='Buy one API credit pack'
+export ALLOWIT_EXECUTION_MERCHANT='api.example.com'
+export ALLOWIT_EXECUTION_CONTEXT_JSON='{"purpose":"Weekly report data"}'
+allowit tempo execute 0xRECIPIENT 0.25
+```
+
+- `ALLOWIT_REQUEST_ID` is required: 8 to 100 characters from `A-Z a-z 0-9 . _ : -`. Use a fresh ID for each new intent.
+- `ALLOWIT_EXECUTION_ACTION` defaults to `transfer`.
+- `ALLOWIT_EXECUTION_MERCHANT` defaults to an empty string.
+- `ALLOWIT_EXECUTION_CONTEXT_JSON` must be a JSON object of at most 16 KB and defaults to `{}`. It is sent to the backend as an unauthenticated claim, so never put credentials in it.
+- `RECIPIENT` is a `0x` EVM address. `AMOUNT` is a positive decimal with at most six fractional places, without sign, exponent or separators.
+
+The request ID, recipient, amount, action, merchant and context form one exact intent.
+Keep all of them unchanged when you retry, resume or recheck a request.
+A different intent under the same ID is refused.
+
+`execute` always prints the backend result as JSON.
+After an allowed decision it prints the authority-signed wallet plan and exits 10; nothing is signed or broadcast.
+`pay` signs and sends that plan itself.
+
+## Exit codes
+
+| Exit | Meaning |
+|---|---|
+| 0 | imported, settled, or help |
+| 2 | invalid usage |
+| 3 | configuration, platform or bundle error |
+| 5 | uncertain: the outcome is unknown, or the backend returned no usable record |
+| 6 | replay of an already settled request; nothing new was paid |
+| 10 | wallet plan prepared (`execute`, or `status` of a prepared request) |
+| 11 | awaiting owner input |
+| 12 | submitted, finality pending |
+| 20 | policy denial, or a finalized failure |
+
+Exits 5, 10, 11 and 12 never mean a confirmed payment.
+`status` maps the backend operation state: `settled` 0, `prepared` 10, `submitted` 12, `failed` 20, anything else 5.
+
+`status` can find only requests that reached a payment operation.
+A request the policy denied (exit 20) or paused for owner input (exit 11) has no payment record, so `status` for that ID exits 5 with "outcome is unknown".
+That exit 5 does not mean a payment may exist: no payment was authorized under that ID.
+The denial or question printed by `execute`, `pay` or `call` is the authoritative result.
+To recheck such a request, for example after the owner answers, rerun the identical command with the same ID and intent; the policy is evaluated again and cannot create a duplicate payment.
+
 ## Configuration
 
 - `ALLOWIT_TEMPO_STATE_DIR` defaults to `$XDG_STATE_HOME/allowit/tempo` or `$HOME/.local/state/allowit/tempo`, with a separate executor/chain subdirectory.

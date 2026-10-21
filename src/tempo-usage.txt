@@ -82,3 +82,7 @@ Preserve the same request ID and exact intent after an uncertain outcome.
 Exit codes: 0 imported/settled, 2 usage, 3 configuration, 5 uncertain,
 6 already-settled replay,
 10 wallet plan prepared, 11 awaiting owner input, 12 submitted, 20 denied/failed.
+
+Status finds only requests that reached a payment operation. A denied or
+owner-input request has no payment record, so status exits 5 for its ID; no
+payment was authorized. Rerun the identical command with the same ID instead.
