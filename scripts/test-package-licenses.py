@@ -96,6 +96,28 @@ class LicenseMaterial(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'release provenance'):
                 MODULE.package(self.root, pathlib.Path(self.temp.name) / 'dist')
 
+    def test_stellar_crypto_and_xdr_have_checksum_bound_notices(self):
+        index = {(r['name'], r['version']): r for r in json.loads((self.root / 'THIRD_PARTY_LICENSES/registry-index.json').read_text())}
+        packages = {p['name']: p for p in MODULE.lock_packages((self.root / 'Cargo.lock').read_text()) if p.get('source', '').startswith('registry+')}
+        for name in ['stellar-xdr', 'stellar-strkey', 'ed25519-dalek', 'curve25519-dalek']:
+            with self.subTest(package=name):
+                package = packages[name]
+                record = index[(name, package['version'])]
+                self.assertEqual(record['status'], 'covered')
+                self.assertEqual(record['crateSha256'], package['checksum'])
+                self.assertEqual(record['cargoChecksum'], package['checksum'])
+                self.assertTrue(record['files'])
+
+    def test_stellar_standalone_lock_also_requires_authentic_notices(self):
+        # A fixture-local extra dependency models a future independent SDK test input.
+        # Repin its lock so the notice check, rather than source drift, rejects it.
+        lock = self.sdk / 'stellar-rust/Cargo.lock'
+        lock.write_text(lock.read_text() + '\n[[package]]\nname="unknown-stellar-example"\nversion="1.0.0"\nsource="registry+https://github.com/rust-lang/crates.io-index"\nchecksum="' + '0' * 64 + '"\n')
+        FIXTURE.commit(self.sdk, 'stellar test dependency')
+        MODULE.native_sdk.pin(self.root)
+        with self.assertRaisesRegex(ValueError, 'SDK Stellar lockfile'):
+            MODULE.validate(self.root)
+
     def test_tempo_standalone_lock_also_requires_authentic_notices(self):
         parent = {(p['name'], p['version']) for p in MODULE.lock_packages((self.root / 'Cargo.lock').read_text())}
         standalone = MODULE.lock_packages((self.sdk / 'tempo-rust/Cargo.lock').read_text())

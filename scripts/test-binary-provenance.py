@@ -188,6 +188,59 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(sorted(policy["files"]), sorted(fixture.git(self.sdk, "ls-files", "--", "Cargo.toml", "src").split("\n")))
         self.assertEqual(result["payshInterface"]["src/lib.rs"], blob("crates/paysh-interface/src/lib.rs"))
 
+    def test_records_published_stellar_sources_without_changing_native_release(self):
+        result = self.manifest()
+        self.assertIn("stellarSdk", result["sdk"])
+        stellar = result["sdk"]["stellarSdk"]
+        self.assertEqual({key: value for key, value in stellar.items() if key != "files"}, {
+            "path": "stellar-rust", "package": "allowit-stellar", "defaultFeatures": True, "features": []})
+        commit = fixture.git(self.sdk, "rev-parse", "HEAD")
+        blobs = provenance.native_sdk.crate_blobs(self.sdk, commit, "stellar-rust")
+        self.assertEqual(stellar["files"], {name: provenance.native_sdk.digest(raw) for name, raw in blobs.items()})
+        self.assertTrue({"Cargo.toml", "Cargo.lock", "src/lib.rs"}.issubset(stellar["files"]))
+        self.assertTrue({"src/http_binding.rs", "src/bin/allowit-stellar-http.rs", "merchant/index.mjs", "merchant/package-lock.json"}.issubset(stellar["files"]))
+        release = json.loads((self.sdk / "native-rust/src/release.json").read_text())
+        self.assertEqual(result["nativeRelease"]["sourceBundle"], release["sourceBundle"])
+
+    def test_refuses_hidden_stellar_source_and_lock_changes(self):
+        for name in ["stellar-rust/src/lib.rs", "stellar-rust/Cargo.lock", "stellar-rust/src/http_binding.rs", "stellar-rust/merchant/index.mjs"]:
+            with self.subTest(name=name):
+                path = self.sdk / name
+                original = path.read_bytes()
+                fixture.hide(self.repo, name, original + b"\nchanged\n", "--assume-unchanged")
+                with self.assertRaisesRegex(ValueError, "checkout differs from its pinned commit"):
+                    self.manifest()
+                fixture.git(self.sdk, "update-index", "--no-assume-unchanged", "--", name)
+                path.write_bytes(original)
+
+    def test_refuses_stellar_identity_and_notice_hash_drift(self):
+        original = (self.repo / "vendor/native-sdk.json").read_bytes()
+        for change in [lambda value: value.pop("stellarSdk"),
+                       lambda value: value["stellarSdk"].update(package="other-stellar"),
+                       lambda value: value["stellarSdk"].update(path="../stellar-rust"),
+                       lambda value: value["stellarSdk"].update(features=["injected"]),
+                       lambda value: value["stellarSdk"].update(defaultFeatures=1)]:
+            with self.subTest(change=change):
+                (self.repo / "vendor/native-sdk.json").write_bytes(original)
+                self.metadata(change)
+                with self.assertRaisesRegex(ValueError, "Stellar crate identity"):
+                    self.manifest()
+        (self.repo / "vendor/native-sdk.json").write_bytes(original)
+        self.metadata(lambda value: value["stellarSdk"]["files"].update({"src/lib.rs": "0" * 64}))
+        with self.assertRaisesRegex(ValueError, "Stellar crate differs from its pin"):
+            self.manifest()
+
+    def test_refuses_unrecorded_stellar_build_inputs(self):
+        for name in ["build.rs", ".cargo/config.toml", "src/unreviewed.rs"]:
+            with self.subTest(name=name):
+                path = self.sdk / "stellar-rust" / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("unreviewed")
+                fixture.exclude(self.repo, "stellar-rust/" + name)
+                with self.assertRaisesRegex(ValueError, "SDK submodule must be clean"):
+                    self.manifest()
+                path.unlink()
+
     def test_records_published_tempo_sources_without_changing_native_release(self):
         result = self.manifest()
         tempo = result["sdk"]["tempoSdk"]
@@ -721,9 +774,9 @@ class ResolvedTests(unittest.TestCase):
         sdk = fixture.ROOT / fixture.SDK
         with tempfile.TemporaryDirectory() as tmp:
             # Same names and versions outside the submodule, as an untrusted parent config could name.
-            for name in ["native-rust", "crates/paysh-interface", "tempo-rust"]:
+            for name in ["native-rust", "crates/paysh-interface", "tempo-rust", "stellar-rust"]:
                 shutil.copytree(sdk / name, Path(tmp) / name, ignore=shutil.ignore_patterns("target"))
-            for crate, package in [("native-rust", "allowit-native"), ("crates/paysh-interface", "allowit-paysh-interface"), ("tempo-rust", "allowit-tempo")]:
+            for crate, package in [("native-rust", "allowit-native"), ("crates/paysh-interface", "allowit-paysh-interface"), ("tempo-rust", "allowit-tempo"), ("stellar-rust", "allowit-stellar")]:
                 with self.subTest(package=package):
                     with self.assertRaisesRegex(ValueError, "does not build " + package):
                         provenance.native_sdk.resolved(fixture.ROOT, f'paths=["{(Path(tmp) / crate).as_posix()}"]')
@@ -760,24 +813,25 @@ class ResolvedTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     provenance.native_sdk.resolved(fixture.ROOT)
 
-    def test_refuses_tempo_resolution_identity_and_execution_inputs(self):
-        def tempo(value):
-            return next(p for p in value["packages"] if p["name"] == "allowit-tempo")
-        def feature(value):
-            package = tempo(value)
-            next(n for n in value["resolve"]["nodes"] if n["id"] == package["id"])["features"].append("injected")
-        def build(value):
-            tempo(value)["targets"].append({"kind": ["custom-build"], "src_path": "/tmp/build.rs"})
-        def links(value):
-            tempo(value)["links"] = "injected"
-        def manifest(value):
-            tempo(value)["manifest_path"] = "/tmp/Cargo.toml"
-        def library(value):
-            next(t for t in tempo(value)["targets"] if {"lib", "rlib"} & set(t["kind"]))["src_path"] = "/tmp/lib.rs"
-        for change in [feature, build, links, manifest, library]:
-            with self.subTest(change=change.__name__), self.mutated(change):
-                with self.assertRaisesRegex(ValueError, "unpinned features of allowit-tempo" if change == feature else "does not build allowit-tempo"):
-                    provenance.native_sdk.resolved(fixture.ROOT)
+    def test_refuses_execution_sdk_resolution_identity_and_inputs(self):
+        for name in ["allowit-tempo", "allowit-stellar"]:
+            def package(value):
+                return next(p for p in value["packages"] if p["name"] == name)
+            def feature(value):
+                target = package(value)
+                next(n for n in value["resolve"]["nodes"] if n["id"] == target["id"])["features"].append("injected")
+            def build(value):
+                package(value)["targets"].append({"kind": ["custom-build"], "src_path": "/tmp/build.rs"})
+            def links(value):
+                package(value)["links"] = "injected"
+            def manifest(value):
+                package(value)["manifest_path"] = "/tmp/Cargo.toml"
+            def library(value):
+                next(t for t in package(value)["targets"] if {"lib", "rlib"} & set(t["kind"]))["src_path"] = "/tmp/lib.rs"
+            for change in [feature, build, links, manifest, library]:
+                with self.subTest(package=name, change=change.__name__), self.mutated(change):
+                    with self.assertRaisesRegex(ValueError, "unpinned features of " + name if change == feature else "does not build " + name):
+                        provenance.native_sdk.resolved(fixture.ROOT)
 
 
 if __name__ == "__main__":
