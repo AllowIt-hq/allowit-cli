@@ -4,7 +4,7 @@
 
 ## Build from source
 
-Use Rust 1.88 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
+Use Rust 1.98 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
 
 Native `policy` commands require a local POSIX filesystem for private, durable journals.
 On Windows, use Linux/WSL and keep state in the Linux filesystem, not `/mnt/c` or `/mnt/d`.
@@ -156,7 +156,7 @@ An expired unsigned server approval exits 3 with its original request ID and nev
 
 **Local configuration.** `ALLOWIT_POLICY_DIR` defaults to `.allowit`; `ALLOWIT_POLICY_FILE` may select another policy file. `ALLOWIT_NETWORK`, `ALLOWIT_RPC_URL`, `ALLOWIT_MINT`, `ALLOWIT_EXECUTOR`, `ALLOWIT_AUTHORITY`, and `ALLOWIT_DEPLOYMENT_FILE` configure the native profile. Import persists a public context and refuses conflicting configuration. `ALLOWIT_OWNER_KEYPAIR` is used for owner operations, `ALLOWIT_EXECUTOR_KEYPAIR` for execution, and `ALLOWIT_OWNER` supplies the public owner for execution/status. Keys are private local files. `ALLOWIT_REQUEST_ID` is required for execution and is the durable operation ID. `ALLOWIT_EXECUTION_ACTION` defaults to `transfer`; `ALLOWIT_EXECUTION_MERCHANT` and one of `ALLOWIT_EXECUTION_CONTEXT_JSON` or `ALLOWIT_EXECUTION_CONTEXT_FILE` supply the exact policy input. Context is sent to the trusted backend, so do not put credentials in it. Only an explicitly additional fund/withdraw uses both a fresh ID and `ALLOWIT_ADDITIONAL_OWNER_OPERATION=1` after an expired uncertain operation.
 
-**SDK source pin.** One Git submodule, `repos/AllowIt-hq--allowit-sdk` from `https://github.com/AllowIt-hq/allowit-sdk.git`, supplies four Cargo path dependencies: `allowit-native` (`native-rust/`), its `allowit-paysh-interface` (`crates/paysh-interface/`), the root `allowit-sdk` policy crate as `allowit-policy-sdk` with `default-features = false, features = ["std", "typed-workflow"]` for the canonical typed workflow types and host evaluator, without the compiler, and `allowit-tempo` (`tempo-rust/`) with no enabled features. The parent gitlink pins the exact SDK commit. `vendor/native-sdk.json` records that commit, the submodule path and URL, SHA-256 hashes of the consumed files of each crate (the policy crate's `Cargo.toml` and `src/` and the Tempo crate's complete input inventory), the native crate's unconsumed tooling, and the SDK root license files. The repository keeps no copies of SDK source or license text.
+**SDK source pin.** One Git submodule, `repos/AllowIt-hq--allowit-sdk` from `https://github.com/AllowIt-hq/allowit-sdk.git`, supplies the native wallet, PaySH interface, policy, Tempo and Stellar Cargo dependencies. The Stellar verifier enables the policy compiler to check exact authored source before agent signing. `vendor/native-sdk.json` binds the exact commit, source files, discovery inputs, resolved features and licenses. The repository keeps no copies of SDK source or license text.
 
 The published Tempo SDK is verified from the same exact Git submodule commit as the native and policy libraries. Its complete crate inputs and enabled features are bound into release provenance. A separate local `ALLOWIT_TEMPO_REVIEW_MANIFEST` mode can review a new, uncommitted Tempo crate on the earlier supported SDK base; it binds that crate and the parent Cargo inputs to explicit SHA256 values. This local mode cannot replace a published Tempo crate or produce release provenance and license packages.
 
@@ -234,3 +234,19 @@ The [integration checks](integration/README.md) retain pinned Go gateways and th
 First-party code is licensed under [MIT](LICENSE). Dependency licenses remain their own; [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES/README.md) contains the exact dependency notices and runtime attribution for current and historical workflow binaries. Keep this companion directory with downloaded binaries. New workflow artifacts include it with `LICENSE`, the checksum and provenance manifest. The SDK's own notices are copied unchanged from the verified submodule into `THIRD_PARTY_LICENSES/AllowIt-sdk/` at packaging time.
 
 Skill format: [Agent Skills specification](https://agentskills.io/specification) and [best practices](https://agentskills.io/skill-creation/best-practices).
+
+## Stellar execution
+
+Export the installed Stellar policy from the owner's existing native-wallet handoff. Keep its bundle in a private local file (0600). Set `ALLOWIT_URL` to the trusted service origin, `ALLOWIT_STELLAR_BUNDLE` to that file and `ALLOWIT_STELLAR_SIGNER` to the agent's private Stellar S-seed file (0600). The bundle contains a scoped executor capability. It contains no signer seed.
+
+Run `allowit exec POLICY --request-file request.json --wait 0s`. The file uses the canonical typed request envelope:
+
+```json
+{"requestId":"stable-request-001","input":{"kind":"execution-request","request":{}}}
+```
+
+Replace `request` with the complete installed-profile `ExecutionRequest`. Its operation nonce is SHA-256 of UTF-8 `allowit-workflow-operation-v1`, NUL, the exact policy ID, NUL and the exact request ID. Amounts use native Stellar base units. The CLI checks the bundle, request, policy source and prepared transaction before it signs as the agent. The existing execute endpoint supplies the engine authorization and submits the exact transaction.
+
+`allowit status POLICY REQUEST_ID --wait 60s` recovers the original transaction. Repeating `exec` with the same ID also queries status; it does not sign or submit again. Keep the private journal in `.allowit/stellar-journal`, or set `ALLOWIT_STELLAR_STATE_DIR` to a private directory. Preserve it after a timeout. A confirmed chain transaction does not establish delivery of an external service.
+
+This mode activates only when `ALLOWIT_STELLAR_BUNDLE` is set. Scalar request flags and curl requests are not part of this Stellar transfer profile.
