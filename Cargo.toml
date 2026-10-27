@@ -11,6 +11,7 @@ name = "allowit"
 path = "src/main.rs"
 
 [dependencies]
+allowit-stellar-wallet = { path = "repos/AllowIt-hq--allowit-sdk/stellar-rust" }
 allowit-native = { path = "repos/AllowIt-hq--allowit-sdk/native-rust" }
 allowit-tempo = { path = "repos/AllowIt-hq--allowit-sdk/tempo-rust" }
 # Canonical typed workflow types from the same pinned SDK submodule.

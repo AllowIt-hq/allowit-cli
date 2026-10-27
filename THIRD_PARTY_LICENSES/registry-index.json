@@ -5425,5 +5425,136 @@
     "repository": "https://github.com/time-rs/time",
     "status": "covered",
     "cargoChecksum": "7e689342a48d2ea927c87ea50cabf8594854bf940e9310208848d680d668ed85"
+  },
+  {
+    "name": "crate-git-revision",
+    "version": "0.0.6",
+    "url": "https://static.crates.io/crates/crate-git-revision/crate-git-revision-0.0.6.crate",
+    "files": [
+      {
+        "path": "crate-git-revision/0.0.6/LICENSE",
+        "sha256": "1d8e79dfd4c7a8702e6fa49e45a2f1b4b553a9507b29b2dc14d3656b7c47862f",
+        "bytes": 11361
+      }
+    ],
+    "crateSha256": "c521bf1f43d31ed2f73441775ed31935d77901cb3451e44b38a1c1612fcbaf98",
+    "licenseExpression": "Apache-2.0",
+    "licenseFile": null,
+    "repository": null,
+    "status": "covered",
+    "cargoChecksum": "c521bf1f43d31ed2f73441775ed31935d77901cb3451e44b38a1c1612fcbaf98",
+    "noticeBasis": [
+      "checksum-verified published crate"
+    ]
+  },
+  {
+    "name": "crate-git-revision",
+    "version": "0.0.9",
+    "url": "https://static.crates.io/crates/crate-git-revision/crate-git-revision-0.0.9.crate",
+    "files": [
+      {
+        "path": "crate-git-revision/0.0.9/LICENSE",
+        "sha256": "1d8e79dfd4c7a8702e6fa49e45a2f1b4b553a9507b29b2dc14d3656b7c47862f",
+        "bytes": 11361
+      }
+    ],
+    "crateSha256": "54851b5b3f24621804b1cded2820975623c205e3055d2d44031cdb1237339ac8",
+    "licenseExpression": "Apache-2.0",
+    "licenseFile": null,
+    "repository": null,
+    "status": "covered",
+    "cargoChecksum": "54851b5b3f24621804b1cded2820975623c205e3055d2d44031cdb1237339ac8",
+    "noticeBasis": [
+      "checksum-verified published crate"
+    ]
+  },
+  {
+    "name": "escape-bytes",
+    "version": "0.1.1",
+    "url": "https://static.crates.io/crates/escape-bytes/escape-bytes-0.1.1.crate",
+    "files": [
+      {
+        "path": "escape-bytes/0.1.1/LICENSE",
+        "sha256": "83f026c35279e4c64ee246483ecce7742b71a965025c22effad69b2c3ae357b5",
+        "bytes": 11361
+      }
+    ],
+    "crateSha256": "2bfcf67fea2815c2fc3b90873fae90957be12ff417335dfadc7f52927feb03b2",
+    "licenseExpression": "Apache-2.0",
+    "licenseFile": null,
+    "repository": null,
+    "status": "covered",
+    "cargoChecksum": "2bfcf67fea2815c2fc3b90873fae90957be12ff417335dfadc7f52927feb03b2",
+    "noticeBasis": [
+      "checksum-verified published crate"
+    ]
+  },
+  {
+    "name": "hex",
+    "version": "0.4.3",
+    "url": "https://static.crates.io/crates/hex/hex-0.4.3.crate",
+    "files": [
+      {
+        "path": "hex/0.4.3/LICENSE-APACHE",
+        "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+        "bytes": 11358
+      },
+      {
+        "path": "hex/0.4.3/LICENSE-MIT",
+        "sha256": "f7bdb3426d045cd50efd4953026e3eb5a83d0199f458a075602611b9344da5b9",
+        "bytes": 1125
+      }
+    ],
+    "crateSha256": "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "licenseFile": null,
+    "repository": null,
+    "status": "covered",
+    "cargoChecksum": "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70",
+    "noticeBasis": [
+      "checksum-verified published crate"
+    ]
+  },
+  {
+    "name": "stellar-strkey",
+    "version": "0.0.13",
+    "url": "https://static.crates.io/crates/stellar-strkey/stellar-strkey-0.0.13.crate",
+    "files": [
+      {
+        "path": "stellar-strkey/0.0.13/LICENSE",
+        "sha256": "1d8e79dfd4c7a8702e6fa49e45a2f1b4b553a9507b29b2dc14d3656b7c47862f",
+        "bytes": 11361
+      }
+    ],
+    "crateSha256": "ee1832fb50c651ad10f734aaf5d31ca5acdfb197a6ecda64d93fcdb8885af913",
+    "licenseExpression": "Apache-2.0",
+    "licenseFile": null,
+    "repository": null,
+    "status": "covered",
+    "cargoChecksum": "ee1832fb50c651ad10f734aaf5d31ca5acdfb197a6ecda64d93fcdb8885af913",
+    "noticeBasis": [
+      "checksum-verified published crate"
+    ]
+  },
+  {
+    "name": "stellar-xdr",
+    "version": "28.0.0",
+    "url": "https://static.crates.io/crates/stellar-xdr/stellar-xdr-28.0.0.crate",
+    "files": [
+      {
+        "path": "stellar-xdr/28.0.0/LICENSE",
+        "sha256": "1d8e79dfd4c7a8702e6fa49e45a2f1b4b553a9507b29b2dc14d3656b7c47862f",
+        "bytes": 11361
+      }
+    ],
+    "crateSha256": "f93d09ff8b9f919b084f664003c4c546ac66a76affd5429460dbe29f4b326f8e",
+    "licenseExpression": "Apache-2.0",
+    "licenseFile": null,
+    "repository": null,
+    "status": "covered",
+    "cargoChecksum": "f93d09ff8b9f919b084f664003c4c546ac66a76affd5429460dbe29f4b326f8e",
+    "noticeBasis": [
+      "checksum-verified published crate"
+    ]
   }
 ]

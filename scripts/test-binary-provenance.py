@@ -295,6 +295,29 @@ class ProvenanceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "release provenance"):
                 self.manifest()
 
+    def test_stellar_complete_inputs_and_hidden_source_drift_are_bound(self):
+        identity = self.manifest()["sdk"]["stellarSdk"]
+        self.assertEqual(identity["package"], "allowit-stellar-wallet")
+        self.assertTrue({"Cargo.toml", "Cargo.lock", "src/lib.rs", "src/rpc.rs", "README.md"}.issubset(identity["files"]))
+        original = (self.sdk / "stellar-rust/src/lib.rs").read_bytes()
+        fixture.hide(self.repo, "stellar-rust/src/lib.rs", original + b"// changed", "--skip-worktree")
+        with self.assertRaisesRegex(ValueError, "checkout differs"):
+            self.manifest()
+
+    def test_stellar_metadata_identity_and_hash_drift_are_refused(self):
+        original = (self.repo / "vendor/native-sdk.json").read_text()
+        changes = [lambda v: v.pop("stellarSdk"), lambda v: v["stellarSdk"].update(package="other"),
+                   lambda v: v["stellarSdk"].update(features=["compiler"]),
+                   lambda v: v["stellarSdk"].update(defaultFeatures=1),
+                   lambda v: v["stellarSdk"]["files"].update({"src/rpc.rs":"0" * 64})]
+        for change in changes:
+            with self.subTest(change=change):
+                self.metadata(change)
+                with self.assertRaisesRegex(ValueError, "Stellar crate"):
+                    self.manifest()
+                (self.repo / "vendor/native-sdk.json").write_text(original)
+                fixture.commit(self.repo, "restore metadata")
+
     def test_refuses_policy_sdk_change_committed_and_repinned(self):
         typed = self.sdk / "src/typed_workflow.rs"
         typed.write_text(typed.read_text() + "\n// drift\n")
@@ -742,7 +765,7 @@ class ResolvedTests(unittest.TestCase):
         def feature(value):
             for node in value["resolve"]["nodes"]:
                 if "#allowit-sdk@" in node["id"]:
-                    node["features"].append("compiler")
+                    node["features"].append("oracle-ledger")
         def missing(value):
             for node in value["resolve"]["nodes"]:
                 if "#allowit-sdk@" in node["id"]:
@@ -777,6 +800,26 @@ class ResolvedTests(unittest.TestCase):
         for change in [feature, build, links, manifest, library]:
             with self.subTest(change=change.__name__), self.mutated(change):
                 with self.assertRaisesRegex(ValueError, "unpinned features of allowit-tempo" if change == feature else "does not build allowit-tempo"):
+                    provenance.native_sdk.resolved(fixture.ROOT)
+
+
+    def test_refuses_stellar_resolution_identity_and_execution_inputs(self):
+        def stellar(value):
+            return next(p for p in value["packages"] if p["name"] == "allowit-stellar-wallet")
+        def feature(value):
+            package = stellar(value)
+            next(n for n in value["resolve"]["nodes"] if n["id"] == package["id"])["features"].append("injected")
+        def build(value):
+            stellar(value)["targets"].append({"kind": ["custom-build"], "src_path": "/tmp/build.rs"})
+        def links(value):
+            stellar(value)["links"] = "injected"
+        def manifest(value):
+            stellar(value)["manifest_path"] = "/tmp/Cargo.toml"
+        def library(value):
+            next(t for t in stellar(value)["targets"] if {"lib", "rlib"} & set(t["kind"]))["src_path"] = "/tmp/lib.rs"
+        for change in [feature, build, links, manifest, library]:
+            with self.subTest(change=change.__name__), self.mutated(change):
+                with self.assertRaisesRegex(ValueError, "unpinned features of allowit-stellar-wallet" if change == feature else "does not build allowit-stellar-wallet"):
                     provenance.native_sdk.resolved(fixture.ROOT)
 
 
