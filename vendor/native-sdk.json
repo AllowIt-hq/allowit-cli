@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-  "commit": "2e1c9d3271b9f655156844bc10fed9cd9e3bfbc7",
+  "commit": "f813de6bccd3f7b048f403624a61e83d01bdbd1f",
   "crate": "native-rust",
   "submodule": {
     "path": "repos/AllowIt-hq--allowit-sdk",
@@ -101,8 +101,8 @@
       "Cargo.toml": "6e5aec009731e681c2657a680e1b3c6772d79c29c86237bb119065f06a46b037",
       "README.md": "bcf3e33382b30941d850a183852091c2c1168941e62a805682c1b7372b2601f7",
       "src/lib.rs": "ee83b6956d44830b54431d9ecd6b7b3c28c3da8c4fa30fe21d0d2537b8941ba3",
-      "src/rpc.rs": "d3fd1ff96af7b6c84a66f6def5d40cdea3e4dd0153feea00ca7e4de1cbcefeef",
-      "tests/lifecycle.rs": "c80637ab9c71d9efb6eeaaefac05d8a18bbd992cecc3b8e0876be36e954249b0"
+      "src/rpc.rs": "272c5551d6d1f20f77601d17f74a0bfb3c6070c48e03d1ac0d3472a99fa9ec35",
+      "tests/lifecycle.rs": "18084e3ad57f14a4309ebbd862552f101c0d54626770d7bc4d0d585932484e36"
     }
   },
   "licenses": {

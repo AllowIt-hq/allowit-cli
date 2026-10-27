@@ -183,7 +183,7 @@ class ProvenanceTests(unittest.TestCase):
         digest = provenance.native_sdk.digest
         blob = lambda name: digest(provenance.native_sdk.pinned(self.sdk, commit, name)[name])
         policy = result["policySdk"]
-        self.assertEqual({k: v for k, v in policy.items() if k != "files"}, {"path": ".", "package": "allowit-sdk", "defaultFeatures": False, "features": ["std", "typed-workflow"]})
+        self.assertEqual({k: v for k, v in policy.items() if k != "files"}, {"path": ".", "package": "allowit-sdk", "defaultFeatures": False, "features": ["std", "typed-workflow"], "resolvedFeatures": ["compiler", "std", "typed-workflow"]})
         self.assertEqual(policy["files"]["src/typed_workflow.rs"], blob("src/typed_workflow.rs"))
         self.assertEqual(sorted(policy["files"]), sorted(fixture.git(self.sdk, "ls-files", "--", "Cargo.toml", "src").split("\n")))
         self.assertEqual(result["payshInterface"]["src/lib.rs"], blob("crates/paysh-interface/src/lib.rs"))

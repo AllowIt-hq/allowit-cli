@@ -14,8 +14,9 @@ use allowit_stellar_wallet::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+#[cfg(unix)]
+use std::fs::OpenOptions;
 use std::{
-    fs::OpenOptions,
     io::Read,
     path::Path,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -50,6 +51,7 @@ struct Response {
     prepared: PreparedOperation,
     operation: Operation,
     signed_operation: Option<SignedOperation>,
+    receipt: Option<sdk::rpc::VerifiedReceipt>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -224,6 +226,22 @@ impl Client {
             return Err(Error::uncertain(
                 "Stellar response changed the original operation identity",
             ));
+        }
+        if let Some(receipt) = &r.receipt {
+            checked(sdk::rpc::validate_receipt(
+                receipt,
+                &p.config.network,
+                &p.transaction_hash,
+            ))?;
+            if receipt.status != r.operation.status
+                || r.signed_operation
+                    .as_ref()
+                    .is_none_or(|v| v.transaction_xdr != receipt.envelope_xdr)
+            {
+                return Err(Error::uncertain(
+                    "Stellar receipt differs from its retained signed operation",
+                ));
+            }
         }
         // Status verifies retained bytes at their preparation time, including after expiry.
         checked(sdk::validate_prepared(p, p.created_at))?;

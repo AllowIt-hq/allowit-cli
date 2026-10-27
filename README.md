@@ -4,7 +4,7 @@
 
 ## Build from source
 
-Use Rust 1.88 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
+Use Rust 1.98 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
 
 Native `policy` commands require a local POSIX filesystem for private, durable journals.
 On Windows, use Linux/WSL and keep state in the Linux filesystem, not `/mnt/c` or `/mnt/d`.

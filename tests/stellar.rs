@@ -215,7 +215,7 @@ fn reply(s: &mut TcpStream, v: Value) {
     .unwrap();
 }
 fn response(p: &PreparedOperation, s: Option<&SignedOperation>, status: &str) -> Value {
-    json!({"prepared":p,"operation":{"id":ID,"status":status,"transactionHash":sdk::hex(&p.transaction_hash)},"signedOperation":s})
+    json!({"prepared":p,"operation":{"id":ID,"status":status,"transactionHash":sdk::hex(&p.transaction_hash)},"signedOperation":s,"receipt":null})
 }
 #[test]
 fn two_phase_exec_verifies_real_signatures_and_unknown_retry_only_recovers() {
@@ -364,5 +364,45 @@ fn unsafe_bundle_permissions_and_scalar_requests_fail_before_network() {
         listener.accept().unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock
     );
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn substituted_receipt_never_becomes_a_confirmed_cli_result() {
+    let (c, r, s, now) = fixture();
+    let path = setup(&c, &r);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut conn, _) = listener.accept().unwrap();
+        read(&mut conn);
+        let p = sdk::prepare(
+            &c,
+            &r,
+            &s,
+            now,
+            (now + 120).min((now / 86400 + 1) * 86400 - 1),
+        )
+        .unwrap();
+        let mut value = response(&p, None, "prepared");
+        value["receipt"] = json!({"transactionHash":vec![0u8;32],"status":"confirmed","ledger":777,"envelopeXdr":"substituted","resultXdr":"substituted"});
+        reply(&mut conn, value);
+    });
+    let output = run(
+        &path,
+        &url,
+        &[
+            "exec",
+            POLICY,
+            "--request-file",
+            path.join("request.json").to_str().unwrap(),
+            "--wait",
+            "0s",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("receipt"));
+    assert!(output.stdout.is_empty());
+    server.join().unwrap();
     std::fs::remove_dir_all(path).unwrap();
 }
