@@ -227,6 +227,11 @@ impl Client {
                 "Stellar response changed the original operation identity",
             ));
         }
+        if terminal(&r.operation.status) && r.receipt.is_none() {
+            return Err(Error::uncertain(
+                "Terminal Stellar status requires a verified chain receipt",
+            ));
+        }
         if let Some(receipt) = &r.receipt {
             checked(sdk::rpc::validate_receipt(
                 receipt,

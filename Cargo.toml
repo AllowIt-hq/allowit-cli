@@ -34,6 +34,9 @@ time = { version = "0.3", features = ["parsing"] }
 url = "2.5.7"
 zeroize = "1.8.2"
 
+[dev-dependencies]
+stellar-xdr = { version = "=28.0.0", features = ["std", "base64"] }
+
 [profile.release]
 lto = true
 codegen-units = 1

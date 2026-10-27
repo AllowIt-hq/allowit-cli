@@ -10,6 +10,10 @@ use std::{
     process::{Command, Output},
     time::{SystemTime, UNIX_EPOCH},
 };
+use stellar_xdr::{
+    Limits, OperationResult, OperationResultTr, PaymentResult, TransactionResult,
+    TransactionResultExt, TransactionResultResult, WriteXdr,
+};
 const POLICY: &str = "stellar-policy";
 const ID: &str = "stellar-run-0001";
 const CAP: &str = "Bearer stellar-executor.private-test-capability";
@@ -215,7 +219,31 @@ fn reply(s: &mut TcpStream, v: Value) {
     .unwrap();
 }
 fn response(p: &PreparedOperation, s: Option<&SignedOperation>, status: &str) -> Value {
-    json!({"prepared":p,"operation":{"id":ID,"status":status,"transactionHash":sdk::hex(&p.transaction_hash)},"signedOperation":s,"receipt":null})
+    let receipt = if status == "confirmed" {
+        s.map(|signed| {
+            let result = TransactionResult {
+                fee_charged: 100,
+                result: TransactionResultResult::TxSuccess(
+                    vec![OperationResult::OpInner(OperationResultTr::Payment(
+                        PaymentResult::Success,
+                    ))]
+                    .try_into()
+                    .unwrap(),
+                ),
+                ext: TransactionResultExt::V0,
+            };
+            sdk::rpc::VerifiedReceipt {
+                transaction_hash: signed.transaction_hash,
+                status: OperationStatus::Confirmed,
+                ledger: 777,
+                envelope_xdr: signed.transaction_xdr.clone(),
+                result_xdr: result.to_xdr_base64(Limits::none()).unwrap(),
+            }
+        })
+    } else {
+        None
+    };
+    json!({"prepared":p,"operation":{"id":ID,"status":status,"transactionHash":sdk::hex(&p.transaction_hash)},"signedOperation":s,"receipt":receipt})
 }
 #[test]
 fn two_phase_exec_verifies_real_signatures_and_unknown_retry_only_recovers() {
@@ -402,6 +430,46 @@ fn substituted_receipt_never_becomes_a_confirmed_cli_result() {
     );
     assert_eq!(output.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&output.stderr).contains("receipt"));
+    assert!(output.stdout.is_empty());
+    server.join().unwrap();
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn signed_packet_without_terminal_receipt_never_proves_settlement() {
+    let (c, r, s, now) = fixture();
+    let path = setup(&c, &r);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut conn, _) = listener.accept().unwrap();
+        let (head, body) = read(&mut conn);
+        assert!(head.starts_with("POST /api/native/execute/status "));
+        assert_eq!(body["requestId"], ID);
+        let prepared = sdk::prepare(
+            &c,
+            &r,
+            &s,
+            now,
+            (now + 120).min((now / 86400 + 1) * 86400 - 1),
+        )
+        .unwrap();
+        let signed = sdk::authorize(
+            &prepared,
+            &[
+                sdk::sign(&prepared, &[2; 32], now).unwrap(),
+                sdk::sign(&prepared, &[3; 32], now).unwrap(),
+            ],
+            now,
+        )
+        .unwrap();
+        let mut value = response(&prepared, Some(&signed), "confirmed");
+        value["receipt"] = Value::Null;
+        reply(&mut conn, value);
+    });
+    let output = run(&path, &url, &["status", POLICY, ID, "--wait", "0s"]);
+    assert_eq!(output.status.code(), Some(5));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("verified chain receipt"));
     assert!(output.stdout.is_empty());
     server.join().unwrap();
     std::fs::remove_dir_all(path).unwrap();
