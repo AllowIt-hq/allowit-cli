@@ -74,4 +74,7 @@ jobs:
       - name: Verify pinned SDK sources
         run: python3 scripts/sync-native-sdk.py verify
       - name: Check exact Stellar requests and retained recovery
-        run: cargo test --locked --test stellar
+        run: |
+          set -euo pipefail
+          cargo test --locked --test stellar | tee "$RUNNER_TEMP/stellar-client.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed;' "$RUNNER_TEMP/stellar-client.log"
