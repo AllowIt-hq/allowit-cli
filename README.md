@@ -237,7 +237,9 @@ Skill format: [Agent Skills specification](https://agentskills.io/specification)
 
 ## Stellar execution
 
-Export the installed Stellar policy from the owner's existing native-wallet handoff. Keep its bundle in a private local file (0600). Set `ALLOWIT_URL` to the trusted service origin, `ALLOWIT_STELLAR_BUNDLE` to that file and `ALLOWIT_STELLAR_SIGNER` to the agent's private Stellar S-seed file (0600). The bundle contains a scoped executor capability. It contains no signer seed.
+Create `ALLOWIT_TOKEN` in the owner browser from the public deployment metadata and the customer's signing key. Pass the token in the agent prompt. The CLI decodes the token and signs requests locally. It never reads the backend environment or sends the token or signing key to the server. `ALLOWIT_URL` defaults to `https://app.allowit.xyz`; set it only to use another trusted service origin.
+
+The token has no automatic expiration. The server does not store or recover it. If it is lost, use the owner account to undeploy the policy on chain. Request signatures and prepared transactions have their own short validity windows; these do not expire the customer token.
 
 Run `allowit exec POLICY --request-file request.json --wait 0s`. The file uses the canonical typed request envelope:
 
@@ -245,12 +247,12 @@ Run `allowit exec POLICY --request-file request.json --wait 0s`. The file uses t
 {"requestId":"stable-request-001","input":{"kind":"execution-request","request":{}}}
 ```
 
-Replace `request` with the complete installed-profile `ExecutionRequest`. Its operation nonce is SHA-256 of UTF-8 `allowit-workflow-operation-v1`, NUL, the exact policy ID, NUL and the exact request ID. Amounts use native Stellar base units. The CLI checks the bundle, request, policy source and prepared transaction before it signs as the agent. The existing execute endpoint supplies the engine authorization and submits the exact transaction.
+Replace `request` with the complete installed-profile `ExecutionRequest`. Its operation nonce is SHA-256 of UTF-8 `allowit-workflow-operation-v1`, NUL, the exact policy ID, NUL and the exact request ID. Amounts use native Stellar base units. The CLI checks the token metadata, request, policy source and exact prepared transaction before signing. The server checks the presented customer key against current on-chain authority together with its own signer. The CLI does not validate membership against an old server agent configuration. The existing execute endpoint supplies the engine authorization and submits the exact transaction.
 
 `allowit status POLICY REQUEST_ID --wait 60s` recovers the original transaction. After agent authorization, repeating `exec` with the same ID only queries status. It does not sign or submit again.
 
 An explicit `exec` can continue an unsigned attempt using its exact original prepared bytes. A never-prepared intent can retry preparation with the same ID and input only after status confirms no server record.
 
-Keep the private journal in `.allowit/stellar-journal`, or set `ALLOWIT_STELLAR_STATE_DIR` to a private directory. Preserve it after a timeout. A confirmed chain transaction does not establish delivery of an external service.
+Keep the private journal in `.allowit/stellar-journal` in the working directory. It contains public operation proofs, never the token or signing seed. Preserve it after a timeout. A confirmed chain transaction does not establish delivery of an external service.
 
-This mode activates only when `ALLOWIT_STELLAR_BUNDLE` is set. Scalar request flags and curl requests are not part of this Stellar transfer profile.
+This mode activates when `ALLOWIT_TOKEN` starts with `allowit-stellar-v1.`. Scalar request flags and curl requests are not part of this Stellar transfer profile.

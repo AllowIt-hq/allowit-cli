@@ -4,7 +4,7 @@ package main
 import (
 	"os"
 
-	"github.com/ackrate/allowit-cli/internal/cli"
+	"github.com/AllowIt-hq/allowit-cli/internal/cli"
 )
 
 func main() {

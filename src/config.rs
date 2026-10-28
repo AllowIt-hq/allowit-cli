@@ -77,9 +77,7 @@ impl Config {
 }
 pub(crate) fn parse_origin(raw: &str) -> Result<String> {
     if raw.is_empty() {
-        return Err(Error::config(
-            "set ALLOWIT_URL to the AllowIt service origin, e.g. https://allowit.example",
-        ));
+        return Ok("https://app.allowit.xyz".into());
     }
     let invalid = || Error::config("ALLOWIT_URL must be an origin such as https://allowit.example");
     let (scheme, rest) = raw.split_once("://").ok_or_else(invalid)?;
@@ -132,6 +130,7 @@ mod tests {
     use super::*;
     #[test]
     fn origins_are_strict() {
+        assert_eq!(parse_origin("").unwrap(), "https://app.allowit.xyz");
         assert_eq!(
             parse_origin("https://EXAMPLE.com:443/").unwrap(),
             "https://example.com"

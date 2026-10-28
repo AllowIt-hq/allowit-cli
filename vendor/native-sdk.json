@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-  "commit": "a564f46e1126337e5e979acf0caf238f6c6a544f",
+  "commit": "7dccb1e9e859fa02e035a0dd7b9a6c6e7f273fb3",
   "crate": "native-rust",
   "submodule": {
     "path": "repos/AllowIt-hq--allowit-sdk",
@@ -20,7 +20,7 @@
     "src/paysh.rs": "647aaeee90cfa190f96290e4f91ff3c7c0d49327fdd65f0bebd35aee44187ca2",
     "src/policy.rs": "4e7e546c699834077d54a33b6e0c0235b1c108c8cb7e5cdedbd5aae27e7cbe42",
     "src/release.json": "55dd01a53d3525a5997dadf2a2ae805293282d3cf7dc8f5cd63c634a4a8a6147",
-    "src/rpc.rs": "6799c2d3945eab6636047a1bf8ba63c72289d25cb73313cfb79b00728d0aebc7",
+    "src/rpc.rs": "43ccfa955a9822d0d697f0b16f39f8a2f3c76e44c84c2af65e33efa19ede38bb",
     "src/transaction.rs": "3f7700d681ec555a600575949a5951b302e33e4fecec22fe0658eda24272d5c0",
     "tests/context_identity.rs": "fa23aee3ce4e11864604991aa60e2371ca2dedb20fd17eaa52de199b07781c39",
     "tests/lifecycle.rs": "b4c57313f781179eb8b45faa0a8d76f014b276aa6177dcfe0598714f0c852d10",
@@ -99,10 +99,10 @@
       ".gitignore": "306fd52e74fca6746e12acc750f232de15e71da917756a1270d74c91f5eb7368",
       "Cargo.lock": "d001ebeb936382e681095fe4b82c7d5e4cac7dda729cb5fb60c7bbdf95117ae3",
       "Cargo.toml": "6e5aec009731e681c2657a680e1b3c6772d79c29c86237bb119065f06a46b037",
-      "README.md": "992ea360b8d0c42511d6e023ecbaf8e13108606904e7e31a3d8988707ffdb023",
-      "src/lib.rs": "93049eec32132ff5a3515a3162c70a29db1ea30c069b2df77207fa3f4c15764a",
-      "src/rpc.rs": "272c5551d6d1f20f77601d17f74a0bfb3c6070c48e03d1ac0d3472a99fa9ec35",
-      "tests/lifecycle.rs": "b383a35e90980fb15591537daaa472c79801f6c189fd2eca902f91c7fba95cc5"
+      "README.md": "88ee86b6dc38c046450e738fab7c422ec271fb6699d4cbeb4f806a475284a26c",
+      "src/lib.rs": "59c3f63b2461bd29da328137f12992e9285db4b384b40b5780666464681c0c28",
+      "src/rpc.rs": "ad0b926c88bcaf8a6640a32632cdfa601d8761bee6be8ae16154e39828ca1678",
+      "tests/lifecycle.rs": "e5777dc36543675d5cef3a549cd2ab56748275b3daf34ba72d710bb68a33c84e"
     }
   },
   "licenses": {
