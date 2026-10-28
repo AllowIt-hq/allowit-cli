@@ -2,6 +2,12 @@ mod args;
 mod client;
 mod config;
 mod error;
+mod gateway;
+mod gateway_agents;
+mod gateway_args;
+mod gateway_control;
+mod gateway_mcp;
+mod gateway_server;
 mod native_audit;
 mod output;
 mod paysh;
@@ -70,7 +76,10 @@ pub fn run(args: Vec<String>) -> i32 {
 /// Removes the harness token and the PaySH capability from any output.
 fn redact(s: String) -> String {
     output::clean(
-        output::clean(s, &env_value("ALLOWIT_TOKEN")),
+        output::clean(
+            output::clean(s, &env_value("ALLOWIT_TOKEN")),
+            &env_value(gateway::ACCOUNT_TOKEN_ENV),
+        ),
         &env_value(paysh::TOKEN_ENV),
     )
 }
@@ -83,6 +92,9 @@ fn execute(args: &[String], stdout: &mut String, stderr: &mut String) -> Result<
         stderr.push_str(USAGE);
         return Ok(2);
     }
+    if gateway_args::recognizes(args) {
+        return gateway::run(args, stdout, stderr);
+    }
     match args[0].as_str() {
         "version" | "--version" => {
             *stdout += &format!("allowit {VERSION}\n");
@@ -90,6 +102,7 @@ fn execute(args: &[String], stdout: &mut String, stderr: &mut String) -> Result<
         }
         "help" | "-h" | "--help" => {
             stdout.push_str(USAGE);
+            stdout.push_str(gateway::HELP);
             Ok(0)
         }
         "policy" => policy::run(&args[1..], stdout, stderr),

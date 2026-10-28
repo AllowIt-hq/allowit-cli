@@ -2,6 +2,9 @@
 
 `allowit` is a native Rust CLI for AllowIt policies. HTTP commands send agent requests through the AllowIt service. Native policy commands use the pinned Rust SDK for generation, signing, receipt validation and recovery. The CLI cannot bypass the policy, owner approval or server request schema.
 
+[Service commands](docs/services.md) cover direct account calls, policy revisions, HTTP tools,
+native Claude/Codex sessions, MCP, account controls and registered seller resources.
+
 ## Build from source
 
 Use Rust 1.98 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
