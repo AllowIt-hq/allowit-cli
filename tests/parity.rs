@@ -61,7 +61,8 @@ fn compare(args: &[&str], env: &BTreeMap<&str, String>) {
 #[test]
 fn validation_and_help_match_reference() {
     let _guard = SERIAL.lock().unwrap();
-    let env = BTreeMap::new();
+    // The service-origin default is intentionally new. Compare the preserved command contract with an explicit origin.
+    let env = BTreeMap::from([("ALLOWIT_URL", "https://allowit.example".into())]);
     // The native policy command set is versioned independently and covered in
     // native.rs; the remaining shared CLI validation stays byte-for-byte.
     for args in [

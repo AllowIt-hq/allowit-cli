@@ -14,8 +14,6 @@ use allowit_stellar_wallet::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-#[cfg(unix)]
-use std::fs::OpenOptions;
 use std::{
     io::Read,
     path::Path,
@@ -37,7 +35,8 @@ struct Bundle {
     route: WalletRoute,
     config: WalletConfig,
     endpoints: Endpoints,
-    authorization: String,
+    /// Customer secret. This field is decoded locally and never serialized or sent.
+    signing_seed: String,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,6 +74,7 @@ struct Client {
     http: reqwest::blocking::Client,
     origin: String,
     bundle: Bundle,
+    seed: Zeroizing<[u8; 32]>,
 }
 fn clock() -> Result<u64> {
     SystemTime::now()
@@ -88,50 +88,42 @@ fn checked<T>(v: sdk::Result<T>) -> Result<T> {
 fn journal_error(_: Error) -> Error {
     Error::config("Stellar operation journal is unsafe or unreadable; retain the original journal")
 }
-fn private_file(path: &Path, max: usize) -> Result<Zeroizing<Vec<u8>>> {
-    #[cfg(not(unix))]
-    {
-        let _ = (path, max);
-        return Err(Error::config(
-            "Stellar signer files require a local POSIX filesystem",
-        ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
-            .map_err(|_| Error::config("Cannot open the private Stellar file"))?;
-        let meta = file
-            .metadata()
-            .map_err(|_| Error::config("Cannot inspect the private Stellar file"))?;
-        if !meta.is_file()
-            || meta.uid() != unsafe { libc::geteuid() }
-            || meta.permissions().mode() & 0o077 != 0
-            || meta.len() > max as u64
-        {
-            return Err(Error::config(
-                "Stellar bundle and signer files must be owned regular files with private permissions (0600)",
-            ));
-        }
-        let mut bytes = Zeroizing::new(Vec::new());
-        file.take(max as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| Error::config("Cannot read the private Stellar file"))?;
-        if bytes.len() > max {
-            return Err(Error::config(
-                "The private Stellar file exceeds its size limit",
-            ));
-        }
-        Ok(bytes)
-    }
+fn same_policy_config(expected: &WalletConfig, actual: &WalletConfig) -> bool {
+    let mut current = actual.clone();
+    // The engine signer is checked against the prepared live chain state, not frozen token metadata.
+    current.engine = expected.engine.clone();
+    &current == expected
+}
+fn same_retained_policy_config(expected: &WalletConfig, actual: &WalletConfig) -> bool {
+    let mut original = actual.clone();
+    // Public role identities may rotate. Read-only recovery still binds the original approved source and exact packet.
+    original.agent = expected.agent.clone();
+    same_policy_config(expected, &original)
 }
 impl Client {
     fn load(policy: &str) -> Result<Self> {
-        let bytes = private_file(Path::new(&env_value("ALLOWIT_STELLAR_BUNDLE")), 65_536)?;
-        let bundle: Bundle = decode_bytes(&bytes)?;
+        let raw = Zeroizing::new(env_value("ALLOWIT_TOKEN"));
+        let encoded = raw
+            .strip_prefix("allowit-stellar-v1.")
+            .ok_or_else(|| Error::config("Set ALLOWIT_TOKEN to the customer-held Stellar token"))?;
+        if encoded.len() > 131_072
+            || encoded.len() % 2 != 0
+            || !encoded.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(Error::config("Invalid Stellar token encoding"));
+        }
+        let bytes = Zeroizing::new(
+            (0..encoded.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&encoded[i..i + 2], 16).unwrap())
+                .collect::<Vec<_>>(),
+        );
+        let mut bundle: Bundle = decode_bytes(&bytes)?;
+        let seed = Zeroizing::new(checked(sdk::decode_seed(&bundle.signing_seed))?);
+        use zeroize::Zeroize;
+        bundle.signing_seed.zeroize();
+        // Signer membership is checked against current chain authority by the service.
+        bundle.config.agent = sdk::account_for_seed(&seed);
         if bundle.version != 1
             || bundle.profile != sdk::PROFILE
             || bundle.policy_id != policy
@@ -143,13 +135,6 @@ impl Client {
             || sdk::unhex::<32>(&bundle.ir_hash).is_err()
             || bundle.endpoints.execute != "/api/native/execute"
             || bundle.endpoints.status != "/api/native/execute/status"
-            || !bundle.authorization.starts_with("Bearer stellar-executor.")
-            || bundle.authorization.len() > 512
-            || !bundle
-                .authorization
-                .bytes()
-                .all(|v| v.is_ascii_graphic() || v == b' ')
-            || bundle.authorization[7..].contains(' ')
         {
             return Err(Error::config(
                 "The Stellar bundle does not match the installed policy profile",
@@ -157,30 +142,35 @@ impl Client {
         }
         checked(sdk::validate_config(&bundle.config))?;
         let origin = parse_origin(&env_value("ALLOWIT_URL"))?;
-        let mut builder = reqwest::blocking::Client::builder()
+        let builder = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none());
-        let ca = env_value("ALLOWIT_CA_FILE");
-        if !ca.is_empty() {
-            let pem =
-                std::fs::read(ca).map_err(|_| Error::config("Cannot read ALLOWIT_CA_FILE"))?;
-            let cert = reqwest::Certificate::from_pem(&pem)
-                .map_err(|_| Error::config("Invalid ALLOWIT_CA_FILE"))?;
-            builder = builder.add_root_certificate(cert);
-        }
         Ok(Self {
             http: builder
                 .build()
                 .map_err(|_| Error::config("Cannot initialize Stellar transport"))?,
             origin,
             bundle,
+            seed,
         })
     }
     fn post(&self, path: &str, body: serde_json::Value) -> Result<Response> {
+        use ed25519_dalek::{Signer, SigningKey};
+        let issued_at = clock()?;
+        let canonical = serde_json_canonicalizer::to_vec(&body)
+            .map_err(|_| Error::config("Cannot encode Stellar request"))?;
+        let mut message = format!("allowit-stellar-request-v1\n{issued_at}\n{path}\n").into_bytes();
+        message.extend_from_slice(&canonical);
+        let signature = SigningKey::from_bytes(&self.seed).sign(&sdk::hash(message));
+        let proof = format!(
+            "Bearer stellar-proof.{}.{issued_at}.{}",
+            sdk::account_for_seed(&self.seed),
+            sdk::hex(&signature.to_bytes())
+        );
         let response = self
             .http
             .post(format!("{}{path}", self.origin))
-            .header("Authorization", &self.bundle.authorization)
+            .header("Authorization", proof)
             .json(&body)
             .send()
             .map_err(|_| {
@@ -211,15 +201,26 @@ impl Client {
             Error::uncertain("Invalid Stellar response; recover the original request ID")
         })
     }
-    fn validate(&self, r: &Response, id: &str, record: Option<&Record>) -> Result<()> {
+    fn validate(
+        &self,
+        r: &Response,
+        id: &str,
+        record: Option<&Record>,
+        read_only: bool,
+    ) -> Result<()> {
+        let config_matches = if read_only {
+            same_retained_policy_config
+        } else {
+            same_policy_config
+        };
         let p = &r.prepared;
         if r.operation.id != id
-            || p.config != self.bundle.config
+            || !config_matches(&self.bundle.config, &p.config)
             || p.request.operation.nonce != operation_nonce(&self.bundle.policy_id, id)
             || r.operation.transaction_hash != sdk::hex(&p.transaction_hash)
             || record.is_some_and(|old| {
                 old.request != p.request
-                    || old.config != p.config
+                    || !config_matches(&old.config, &p.config)
                     || old.prepared.as_ref().is_some_and(|v| v != p)
             })
         {
@@ -249,14 +250,14 @@ impl Client {
             }
         }
         // Status verifies retained bytes at their preparation time, including after expiry.
-        checked(sdk::validate_prepared(p, p.created_at))?;
+        checked(sdk::validate_retained_prepared(p))?;
         if let Some(s) = &r.signed_operation {
             if s.prepared != *p {
                 return Err(Error::uncertain(
                     "Stellar signed packet differs from the original operation",
                 ));
             }
-            checked(sdk::validate_signed(s, p.created_at))?;
+            checked(sdk::validate_retained_signed(s))?;
         }
         if matches!(
             r.operation.status,
@@ -280,7 +281,7 @@ impl Client {
             &self.bundle.endpoints.status,
             json!({"policyId":self.bundle.policy_id,"requestId":id}),
         )?;
-        self.validate(&r, id, record)?;
+        self.validate(&r, id, record, true)?;
         Ok(r)
     }
 }
@@ -291,13 +292,7 @@ pub(crate) fn run(
     stderr: &mut String,
 ) -> Result<i32> {
     let client = Client::load(&args.pos[0])?;
-    let dir = env_value("ALLOWIT_STELLAR_STATE_DIR");
-    let journal = Store::open(Path::new(if dir.is_empty() {
-        ".allowit/stellar-journal"
-    } else {
-        &dir
-    }))
-    .map_err(journal_error)?;
+    let journal = Store::open(Path::new(".allowit/stellar-journal")).map_err(journal_error)?;
     run_locked(command, args, stdout, stderr, &client, &journal)
 }
 fn run_locked(
@@ -313,7 +308,9 @@ fn run_locked(
         let name = sdk::hex(&operation_nonce(&args.pos[0], id));
         let old: Option<Record> = journal.load(&name).map_err(journal_error)?;
         if old.as_ref().is_some_and(|v| {
-            v.policy_id != args.pos[0] || v.request_id != *id || v.config != c.bundle.config
+            v.policy_id != args.pos[0]
+                || v.request_id != *id
+                || !same_retained_policy_config(&c.bundle.config, &v.config)
         }) {
             return Err(Error::config(
                 "The journal does not bind this installed Stellar policy",
@@ -353,7 +350,7 @@ fn run_locked(
     let (mut record, resumed) = if let Some(old) = old {
         if old.policy_id != args.pos[0]
             || old.request_id != id
-            || old.config != c.bundle.config
+            || !same_retained_policy_config(&c.bundle.config, &old.config)
             || old.request != request
         {
             return Err(Error::config(
@@ -364,6 +361,11 @@ fn run_locked(
             || !matches!(&old.status, None | Some(OperationStatus::Prepared))
         {
             return poll(c, &id, Some(old), journal, &name, args.wait, stdout);
+        }
+        if !same_policy_config(&c.bundle.config, &old.config) {
+            return Err(Error::uncertain(
+                "The customer key changed. Read the original operation with status; do not authorize replacement bytes.",
+            ));
         }
         let pure_intent = old.prepared.is_none() && old.status.is_none();
         let resumed = match c.status(&id, Some(&old)) {
@@ -404,7 +406,7 @@ fn run_locked(
             json!({"policyId":args.pos[0],"requestId":id,"phase":"prepare","request":request}),
         )?
     };
-    c.validate(&prepared, &id, Some(&record))?;
+    c.validate(&prepared, &id, Some(&record), false)?;
     if prepared.operation.status != OperationStatus::Prepared || prepared.signed_operation.is_some()
     {
         return Err(Error::uncertain(
@@ -416,22 +418,7 @@ fn run_locked(
     record.status = Some(OperationStatus::Prepared);
     journal.save(&name, &record).map_err(journal_error)?;
     checked(sdk::validate_prepared(&prepared.prepared, clock()?))?;
-    let seed_path = env_value("ALLOWIT_STELLAR_SIGNER");
-    if seed_path.is_empty() {
-        return Err(Error::config(
-            "Set ALLOWIT_STELLAR_SIGNER to the private local agent seed file",
-        ));
-    }
-    let bytes = private_file(Path::new(&seed_path), 256)?;
-    let text = std::str::from_utf8(&bytes)
-        .map_err(|_| Error::config("The Stellar agent seed is not UTF-8"))?;
-    let seed = Zeroizing::new(checked(sdk::decode_seed(text.trim()))?);
-    if sdk::account_for_seed(&seed) != c.bundle.config.agent {
-        return Err(Error::config(
-            "The local signer is not the installed Stellar agent",
-        ));
-    }
-    let signature = checked(sdk::sign(&prepared.prepared, &seed, clock()?))?;
+    let signature = checked(sdk::sign(&prepared.prepared, &c.seed, clock()?))?;
     record.prepared = Some(prepared.prepared);
     record.agent_signature = Some(signature.clone());
     record.status = Some(OperationStatus::SubmissionUnknown);
@@ -440,7 +427,7 @@ fn run_locked(
         &c.bundle.endpoints.execute,
         json!({"policyId":args.pos[0],"requestId":id,"phase":"submit","agentSignature":signature}),
     )?;
-    c.validate(&response, &id, Some(&record))?;
+    c.validate(&response, &id, Some(&record), false)?;
     record.status = Some(response.operation.status.clone());
     journal.save(&name, &record).map_err(journal_error)?;
     if terminal(&response.operation.status) || args.wait.is_zero() {

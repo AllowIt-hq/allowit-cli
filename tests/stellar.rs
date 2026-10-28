@@ -16,7 +16,6 @@ use stellar_xdr::{
 };
 const POLICY: &str = "stellar-policy";
 const ID: &str = "stellar-run-0001";
-const CAP: &str = "Bearer stellar-executor.private-test-capability";
 fn nonce() -> [u8; 32] {
     let mut v = b"allowit-workflow-operation-v1\0".to_vec();
     v.extend(POLICY.as_bytes());
@@ -123,8 +122,11 @@ fn fixture() -> (WalletConfig, ExecutionRequest, TrustedState, u64) {
     (c, r, s, now)
 }
 fn seed_text() -> String {
+    seed_text_for(2)
+}
+fn seed_text_for(seed: u8) -> String {
     let mut raw = vec![144];
-    raw.extend([2; 32]);
+    raw.extend([seed; 32]);
     let mut crc = 0u16;
     for b in &raw {
         crc ^= (*b as u16) << 8;
@@ -159,14 +161,37 @@ fn root() -> PathBuf {
 }
 fn setup(c: &WalletConfig, r: &ExecutionRequest) -> PathBuf {
     let p = root();
-    private(&p.join("bundle.json"),&json!({"version":1,"profile":PROFILE,"network":c.network,"policyId":POLICY,"sourceHash":sdk::hex(&c.source_hash),"irHash":sdk::hex(&[4;32]),"moduleDigest":sdk::hex(&c.module_digest),"wallet":c.wallet,"route":c.route,"config":c,"endpoints":{"execute":"/api/native/execute","status":"/api/native/execute/status"},"authorization":CAP}).to_string());
-    private(&p.join("signer"), &seed_text());
+    private(&p.join("bundle.json"),&json!({"version":1,"profile":PROFILE,"network":c.network,"policyId":POLICY,"sourceHash":sdk::hex(&c.source_hash),"irHash":sdk::hex(&[4;32]),"moduleDigest":sdk::hex(&c.module_digest),"wallet":c.wallet,"route":c.route,"config":c,"endpoints":{"execute":"/api/native/execute","status":"/api/native/execute/status"},"signingSeed":seed_text()}).to_string());
     std::fs::write(
         p.join("request.json"),
         json!({"requestId":ID,"input":{"kind":"execution-request","request":r}}).to_string(),
     )
     .unwrap();
     p
+}
+fn retain_unsigned(
+    path: &Path,
+    c: &WalletConfig,
+    r: &ExecutionRequest,
+    state: &TrustedState,
+    now: u64,
+) {
+    let prepared = sdk::prepare(
+        c,
+        r,
+        state,
+        now,
+        (now + 120).min((now / 86400 + 1) * 86400 - 1),
+    )
+    .unwrap();
+    let dir = path.join(".allowit/stellar-journal");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let name = format!(
+        "request-{}.json",
+        sdk::hex(&sdk::hash(sdk::hex(&r.operation.nonce)))
+    );
+    private(&dir.join(name),&json!({"policyId":POLICY,"requestId":ID,"config":c,"request":r,"prepared":prepared,"agentSignature":null,"status":"prepared"}).to_string());
 }
 fn run(p: &Path, url: &str, args: &[&str]) -> Output {
     let mut c = Command::new(env!("CARGO_BIN_EXE_allowit"));
@@ -177,13 +202,21 @@ fn run(p: &Path, url: &str, args: &[&str]) -> Output {
     }
     c.args(args)
         .env("ALLOWIT_URL", url)
-        .env("ALLOWIT_STELLAR_BUNDLE", p.join("bundle.json"))
-        .env("ALLOWIT_STELLAR_SIGNER", p.join("signer"))
-        .env("ALLOWIT_STELLAR_STATE_DIR", p.join("journal"))
+        .env(
+            "ALLOWIT_TOKEN",
+            format!(
+                "allowit-stellar-v1.{}",
+                sdk::hex(std::fs::read(p.join("bundle.json")).unwrap().as_slice())
+            ),
+        )
+        .current_dir(p)
         .output()
         .unwrap()
 }
 fn read(stream: &mut TcpStream) -> (String, Value) {
+    read_for(stream, &sdk::account_for_seed(&[2; 32]))
+}
+fn read_for(stream: &mut TcpStream, expected_signer: &str) -> (String, Value) {
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(10)))
         .unwrap();
@@ -194,10 +227,6 @@ fn read(stream: &mut TcpStream) -> (String, Value) {
         h.push(b[0]);
     }
     let h = String::from_utf8(h).unwrap();
-    assert!(
-        h.to_ascii_lowercase()
-            .contains(&format!("authorization: {}", CAP.to_ascii_lowercase()))
-    );
     let n = h
         .lines()
         .find_map(|l| {
@@ -208,7 +237,29 @@ fn read(stream: &mut TcpStream) -> (String, Value) {
         .unwrap();
     let mut body = vec![0; n];
     stream.read_exact(&mut body).unwrap();
-    (h, serde_json::from_slice(&body).unwrap())
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    let proof = h
+        .lines()
+        .find_map(|l| l.strip_prefix("authorization: Bearer "))
+        .unwrap();
+    let parts: Vec<_> = proof.split('.').collect();
+    assert_eq!(parts.len(), 4);
+    assert_eq!(parts[0], "stellar-proof");
+    assert_eq!(parts[1], expected_signer);
+    let path = h.lines().next().unwrap().split(' ').nth(1).unwrap();
+    let mut message = format!("allowit-stellar-request-v1\n{}\n{path}\n", parts[2]).into_bytes();
+    message.extend(serde_json_canonicalizer::to_vec(&body).unwrap());
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    VerifyingKey::from_bytes(&sdk::account_key(parts[1]).unwrap())
+        .unwrap()
+        .verify(
+            &sdk::hash(message),
+            &Signature::from_bytes(&sdk::unhex::<64>(parts[3]).unwrap()),
+        )
+        .unwrap();
+    assert!(!h.contains(&seed_text()));
+    assert!(!body.to_string().contains(&seed_text()));
+    (h, body)
 }
 fn reply(s: &mut TcpStream, v: Value) {
     let body = v.to_string();
@@ -297,7 +348,6 @@ fn two_phase_exec_verifies_real_signatures_and_unknown_retry_only_recovers() {
         "{}",
         String::from_utf8_lossy(&first.stderr)
     );
-    std::fs::remove_file(path.join("signer")).unwrap();
     let recovered = run(&path, &url, &args);
     assert_eq!(
         recovered.status.code(),
@@ -307,13 +357,11 @@ fn two_phase_exec_verifies_real_signatures_and_unknown_retry_only_recovers() {
     );
     let output = String::from_utf8_lossy(&recovered.stdout);
     assert!(output.contains("confirmed"));
-    assert!(!output.contains(CAP));
     assert!(!output.contains(&seed_text()));
-    for entry in std::fs::read_dir(path.join("journal")).unwrap() {
+    for entry in std::fs::read_dir(path.join(".allowit/stellar-journal")).unwrap() {
         let entry = entry.unwrap();
         if entry.path().is_file() {
             let text = std::fs::read_to_string(entry.path()).unwrap();
-            assert!(!text.contains(CAP));
             assert!(!text.contains(&seed_text()));
         }
     }
@@ -324,7 +372,6 @@ fn two_phase_exec_verifies_real_signatures_and_unknown_retry_only_recovers() {
 fn changed_prepared_request_never_reaches_signing_or_submit() {
     let (c, r, s, now) = fixture();
     let path = setup(&c, &r);
-    std::fs::remove_file(path.join("signer")).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || {
@@ -361,35 +408,39 @@ fn changed_prepared_request_never_reaches_signing_or_submit() {
     std::fs::remove_dir_all(path).unwrap();
 }
 #[test]
-fn unsafe_bundle_permissions_and_scalar_requests_fail_before_network() {
+fn malformed_token_and_scalar_requests_fail_before_network() {
     let (c, r, _, _) = fixture();
     let path = setup(&c, &r);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    std::fs::set_permissions(
-        path.join("bundle.json"),
-        std::fs::Permissions::from_mode(0o644),
-    )
-    .unwrap();
-    let output = run(
-        &path,
-        &url,
-        &[
-            "exec",
-            POLICY,
-            "--request-file",
-            path.join("request.json").to_str().unwrap(),
-        ],
+    let original = std::fs::read(path.join("bundle.json")).unwrap();
+    private(&path.join("bundle.json"), "{}");
+    assert_eq!(
+        run(
+            &path,
+            &url,
+            &[
+                "exec",
+                POLICY,
+                "--request-file",
+                path.join("request.json").to_str().unwrap()
+            ]
+        )
+        .status
+        .code(),
+        Some(2)
     );
-    assert_eq!(output.status.code(), Some(3));
-    std::fs::set_permissions(
-        path.join("bundle.json"),
-        std::fs::Permissions::from_mode(0o600),
-    )
-    .unwrap();
-    let output = run(&path, &url, &["exec", POLICY, "--action", "transfer"]);
-    assert_eq!(output.status.code(), Some(2));
+    private(
+        &path.join("bundle.json"),
+        std::str::from_utf8(&original).unwrap(),
+    );
+    assert_eq!(
+        run(&path, &url, &["exec", POLICY, "--action", "transfer"])
+            .status
+            .code(),
+        Some(2)
+    );
     assert_eq!(
         listener.accept().unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock
@@ -562,7 +613,7 @@ fn never_prepared_intent_retries_only_same_identity_after_status_404() {
 fn unsigned_prepared_resumes_exact_packet_only_on_explicit_exec() {
     let (c, request, state, now) = fixture();
     let path = setup(&c, &request);
-    std::fs::remove_file(path.join("signer")).unwrap();
+    retain_unsigned(&path, &c, &request, &state, now);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || {
@@ -574,10 +625,6 @@ fn unsigned_prepared_resumes_exact_packet_only_on_explicit_exec() {
             (now + 120).min((now / 86400 + 1) * 86400 - 1),
         )
         .unwrap();
-        let (mut first, _) = listener.accept().unwrap();
-        let (_, body) = read(&mut first);
-        assert_eq!(body["phase"], "prepare");
-        reply(&mut first, response(&prepared, None, "prepared"));
         for _ in 0..2 {
             let (mut status, _) = listener.accept().unwrap();
             let (head, body) = read(&mut status);
@@ -598,14 +645,12 @@ fn unsigned_prepared_resumes_exact_packet_only_on_explicit_exec() {
         "--wait",
         "0s",
     ];
-    assert_eq!(run(&path, &url, &args).status.code(), Some(3));
     assert_eq!(
         run(&path, &url, &["status", POLICY, ID, "--wait", "0s"])
             .status
             .code(),
         Some(12)
     );
-    private(&path.join("signer"), &seed_text());
     let out = run(&path, &url, &args);
     assert_eq!(
         out.status.code(),
@@ -620,21 +665,10 @@ fn unsigned_prepared_resumes_exact_packet_only_on_explicit_exec() {
 fn retained_unsigned_prepared_is_never_replaced_after_status_404() {
     let (c, request, state, now) = fixture();
     let path = setup(&c, &request);
-    std::fs::remove_file(path.join("signer")).unwrap();
+    retain_unsigned(&path, &c, &request, &state, now);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || {
-        let prepared = sdk::prepare(
-            &c,
-            &request,
-            &state,
-            now,
-            (now + 120).min((now / 86400 + 1) * 86400 - 1),
-        )
-        .unwrap();
-        let (mut first, _) = listener.accept().unwrap();
-        read(&mut first);
-        reply(&mut first, response(&prepared, None, "prepared"));
         let (mut status, _) = listener.accept().unwrap();
         let (head, _) = read(&mut status);
         assert!(head.starts_with("POST /api/native/execute/status "));
@@ -649,8 +683,6 @@ fn retained_unsigned_prepared_is_never_replaced_after_status_404() {
         "--wait",
         "0s",
     ];
-    assert_eq!(run(&path, &url, &args).status.code(), Some(3));
-    private(&path.join("signer"), &seed_text());
     assert_eq!(run(&path, &url, &args).status.code(), Some(4));
     server.join().unwrap();
     std::fs::remove_dir_all(path).unwrap();
@@ -659,21 +691,10 @@ fn retained_unsigned_prepared_is_never_replaced_after_status_404() {
 fn unsigned_resume_rejects_changed_server_packet_before_signing() {
     let (c, request, state, now) = fixture();
     let path = setup(&c, &request);
-    std::fs::remove_file(path.join("signer")).unwrap();
+    retain_unsigned(&path, &c, &request, &state, now);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || {
-        let prepared = sdk::prepare(
-            &c,
-            &request,
-            &state,
-            now,
-            (now + 120).min((now / 86400 + 1) * 86400 - 1),
-        )
-        .unwrap();
-        let (mut first, _) = listener.accept().unwrap();
-        read(&mut first);
-        reply(&mut first, response(&prepared, None, "prepared"));
         let mut changed = state;
         changed.source.sequence += 1;
         let changed = sdk::prepare(
@@ -698,8 +719,6 @@ fn unsigned_resume_rejects_changed_server_packet_before_signing() {
         "--wait",
         "0s",
     ];
-    assert_eq!(run(&path, &url, &args).status.code(), Some(3));
-    private(&path.join("signer"), &seed_text());
     let out = run(&path, &url, &args);
     assert_eq!(out.status.code(), Some(5));
     assert!(String::from_utf8_lossy(&out.stderr).contains("identity"));
@@ -711,7 +730,6 @@ fn unsigned_resume_rejects_changed_server_packet_before_signing() {
 fn imported_unknown_signed_operation_never_authorizes_from_unsigned_local_state() {
     let (c, request, state, now) = fixture();
     let path = setup(&c, &request);
-    std::fs::remove_file(path.join("signer")).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || {
@@ -805,6 +823,87 @@ fn expired_unsigned_packet_observation_prevents_repreparation_after_404() {
     assert_eq!(expired.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&expired.stderr).contains("stale"));
     assert_eq!(run(&path, &url, &args).status.code(), Some(4));
+    server.join().unwrap();
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn replacement_customer_key_recovers_original_receipt_and_exact_journal_without_signing() {
+    let (config, request, state, now) = fixture();
+    let path = setup(&config, &request);
+    let prepared = sdk::prepare(
+        &config,
+        &request,
+        &state,
+        now,
+        (now + 120).min((now / 86400 + 1) * 86400 - 1),
+    )
+    .unwrap();
+    let agent = sdk::sign(&prepared, &[2; 32], now).unwrap();
+    let signed = sdk::authorize(
+        &prepared,
+        &[agent.clone(), sdk::sign(&prepared, &[3; 32], now).unwrap()],
+        now,
+    )
+    .unwrap();
+    retain_unsigned(&path, &config, &request, &state, now);
+    let file = path.join(".allowit/stellar-journal").join(format!(
+        "request-{}.json",
+        sdk::hex(&sdk::hash(sdk::hex(&request.operation.nonce)))
+    ));
+    let mut original: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    original["agentSignature"] = json!(agent);
+    original["status"] = json!("submissionUnknown");
+    private(&file, &original.to_string());
+    let mut token: Value =
+        serde_json::from_slice(&std::fs::read(path.join("bundle.json")).unwrap()).unwrap();
+    token["signingSeed"] = json!(seed_text_for(9));
+    token["config"]["agent"] = json!(sdk::account_for_seed(&[9; 32]));
+    private(&path.join("bundle.json"), &token.to_string());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut connection, _) = listener.accept().unwrap();
+            let (head, body) = read_for(&mut connection, &sdk::account_for_seed(&[9; 32]));
+            assert!(head.starts_with("POST /api/native/execute/status "));
+            assert_eq!(body, json!({"policyId":POLICY,"requestId":ID}));
+            reply(
+                &mut connection,
+                response(&prepared, Some(&signed), "confirmed"),
+            );
+        }
+    });
+    let status = run(&path, &url, &["status", POLICY, ID, "--wait", "0s"]);
+    assert_eq!(
+        status.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let recovered = run(
+        &path,
+        &url,
+        &[
+            "exec",
+            POLICY,
+            "--request-file",
+            path.join("request.json").to_str().unwrap(),
+            "--wait",
+            "0s",
+        ],
+    );
+    assert_eq!(
+        recovered.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&recovered.stderr)
+    );
+    let after: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(after["prepared"], original["prepared"]);
+    assert_eq!(after["agentSignature"], original["agentSignature"]);
+    assert_eq!(after["config"], original["config"]);
+    assert_eq!(after["request"], original["request"]);
     server.join().unwrap();
     std::fs::remove_dir_all(path).unwrap();
 }

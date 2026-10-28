@@ -123,7 +123,9 @@ fn action(command: &str, argv: &[String], stdout: &mut String, stderr: &mut Stri
             "REQUEST_ID is the requestId printed by eval or exec",
         ));
     }
-    if !env_value("ALLOWIT_STELLAR_BUNDLE").is_empty() && matches!(command, "exec" | "status") {
+    if env_value("ALLOWIT_TOKEN").starts_with("allowit-stellar-v1.")
+        && matches!(command, "exec" | "status")
+    {
         return stellar_run::run(command, &parsed, stdout, stderr);
     }
     if parsed.flags.0.contains_key("request-file") {
