@@ -349,7 +349,8 @@ fn run_locked(
     }
     checked(sdk::transfer_from_request(&c.bundle.config, &request))?;
     let name = sdk::hex(&request.operation.nonce);
-    if let Some(old) = journal.load::<Record>(&name).map_err(journal_error)? {
+    let old = journal.load::<Record>(&name).map_err(journal_error)?;
+    let (mut record, resumed) = if let Some(old) = old {
         if old.policy_id != args.pos[0]
             || old.request_id != id
             || old.config != c.bundle.config
@@ -359,25 +360,50 @@ fn run_locked(
                 "The original request ID already binds different input",
             ));
         }
-        return poll(c, &id, Some(old), journal, &name, args.wait, stdout);
-    }
-    let mut record = Record {
-        policy_id: args.pos[0].clone(),
-        request_id: id.clone(),
-        config: c.bundle.config.clone(),
-        request: request.clone(),
-        prepared: None,
-        agent_signature: None,
-        status: None,
+        if old.agent_signature.is_some()
+            || !matches!(&old.status, None | Some(OperationStatus::Prepared))
+        {
+            return poll(c, &id, Some(old), journal, &name, args.wait, stdout);
+        }
+        let pure_intent = old.prepared.is_none() && old.status.is_none();
+        let resumed = match c.status(&id, Some(&old)) {
+            Ok(response)
+                if response.operation.status == OperationStatus::Prepared
+                    && response.signed_operation.is_none() =>
+            {
+                Some(response)
+            }
+            Ok(_) => return poll(c, &id, Some(old), journal, &name, args.wait, stdout),
+            Err(error) if error.status == Some(404) && pure_intent => None,
+            Err(error) => return Err(error),
+        };
+        (old, resumed)
+    } else {
+        (
+            Record {
+                policy_id: args.pos[0].clone(),
+                request_id: id.clone(),
+                config: c.bundle.config.clone(),
+                request: request.clone(),
+                prepared: None,
+                agent_signature: None,
+                status: None,
+            },
+            None,
+        )
     };
-    // Persist identity before prepare. After any interruption, the same ID only queries status.
+    // Preserve the original intent. Only an explicit exec can continue unsigned preparation.
     journal.save(&name, &record).map_err(journal_error)?;
     *stderr += &format!("requestId={id}\n");
     crate::flush_stderr(stderr);
-    let prepared = c.post(
-        &c.bundle.endpoints.execute,
-        json!({"policyId":args.pos[0],"requestId":id,"phase":"prepare","request":request}),
-    )?;
+    let prepared = if let Some(response) = resumed {
+        response
+    } else {
+        c.post(
+            &c.bundle.endpoints.execute,
+            json!({"policyId":args.pos[0],"requestId":id,"phase":"prepare","request":request}),
+        )?
+    };
     c.validate(&prepared, &id, Some(&record))?;
     if prepared.operation.status != OperationStatus::Prepared || prepared.signed_operation.is_some()
     {
@@ -385,6 +411,10 @@ fn run_locked(
             "Stellar prepare returned an unexpected lifecycle state",
         ));
     }
+    // Retain observed bytes even when stale. They must never become a fresh all-None intent.
+    record.prepared = Some(prepared.prepared.clone());
+    record.status = Some(OperationStatus::Prepared);
+    journal.save(&name, &record).map_err(journal_error)?;
     checked(sdk::validate_prepared(&prepared.prepared, clock()?))?;
     let seed_path = env_value("ALLOWIT_STELLAR_SIGNER");
     if seed_path.is_empty() {
@@ -442,6 +472,9 @@ fn poll(
             agent_signature: None,
             status: None,
         });
+        if old.prepared.is_none() {
+            old.prepared = Some(r.prepared.clone());
+        }
         old.status = Some(r.operation.status.clone());
         journal.save(name, &old).map_err(journal_error)?;
         record = Some(old);

@@ -247,6 +247,10 @@ Run `allowit exec POLICY --request-file request.json --wait 0s`. The file uses t
 
 Replace `request` with the complete installed-profile `ExecutionRequest`. Its operation nonce is SHA-256 of UTF-8 `allowit-workflow-operation-v1`, NUL, the exact policy ID, NUL and the exact request ID. Amounts use native Stellar base units. The CLI checks the bundle, request, policy source and prepared transaction before it signs as the agent. The existing execute endpoint supplies the engine authorization and submits the exact transaction.
 
-`allowit status POLICY REQUEST_ID --wait 60s` recovers the original transaction. Repeating `exec` with the same ID also queries status; it does not sign or submit again. Keep the private journal in `.allowit/stellar-journal`, or set `ALLOWIT_STELLAR_STATE_DIR` to a private directory. Preserve it after a timeout. A confirmed chain transaction does not establish delivery of an external service.
+`allowit status POLICY REQUEST_ID --wait 60s` recovers the original transaction. After agent authorization, repeating `exec` with the same ID only queries status. It does not sign or submit again.
+
+An explicit `exec` can continue an unsigned attempt using its exact original prepared bytes. A never-prepared intent can retry preparation with the same ID and input only after status confirms no server record.
+
+Keep the private journal in `.allowit/stellar-journal`, or set `ALLOWIT_STELLAR_STATE_DIR` to a private directory. Preserve it after a timeout. A confirmed chain transaction does not establish delivery of an external service.
 
 This mode activates only when `ALLOWIT_STELLAR_BUNDLE` is set. Scalar request flags and curl requests are not part of this Stellar transfer profile.

@@ -144,8 +144,10 @@ fn private(path: &Path, text: &str) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
 fn root() -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let p = std::env::temp_dir().join(format!(
-        "allowit-stellar-cli-{}-{}",
+        "allowit-stellar-cli-{}-{}-{}",
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -471,6 +473,338 @@ fn signed_packet_without_terminal_receipt_never_proves_settlement() {
     assert_eq!(output.status.code(), Some(5));
     assert!(String::from_utf8_lossy(&output.stderr).contains("verified chain receipt"));
     assert!(output.stdout.is_empty());
+    server.join().unwrap();
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+fn reply_error(stream: &mut TcpStream, status: u16) {
+    let body = "{\"error\":\"fixture rejected before signing\"}";
+    write!(
+        stream,
+        "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+}
+fn signed_from_submit(
+    stream: &mut TcpStream,
+    prepared: &PreparedOperation,
+    now: u64,
+) -> SignedOperation {
+    let (head, body) = read(stream);
+    assert!(head.starts_with("POST /api/native/execute "));
+    assert_eq!(body["policyId"], POLICY);
+    assert_eq!(body["requestId"], ID);
+    assert_eq!(body["phase"], "submit");
+    assert_eq!(body.as_object().unwrap().len(), 4);
+    let agent: DetachedSignature = serde_json::from_value(body["agentSignature"].clone()).unwrap();
+    sdk::authorize(
+        prepared,
+        &[agent, sdk::sign(prepared, &[3; 32], now).unwrap()],
+        now,
+    )
+    .unwrap()
+}
+#[test]
+fn never_prepared_intent_retries_only_same_identity_after_status_404() {
+    let (c, request, state, now) = fixture();
+    let path = setup(&c, &request);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut first, _) = listener.accept().unwrap();
+        let (head, original) = read(&mut first);
+        assert!(head.starts_with("POST /api/native/execute "));
+        assert_eq!(original["phase"], "prepare");
+        reply_error(&mut first, 409);
+        let (mut status, _) = listener.accept().unwrap();
+        let (head, body) = read(&mut status);
+        assert!(head.starts_with("POST /api/native/execute/status "));
+        assert_eq!(body, json!({"policyId":POLICY,"requestId":ID}));
+        reply_error(&mut status, 404);
+        let (mut retry, _) = listener.accept().unwrap();
+        let (_, body) = read(&mut retry);
+        assert_eq!(body, original);
+        let prepared = sdk::prepare(
+            &c,
+            &request,
+            &state,
+            now,
+            (now + 120).min((now / 86400 + 1) * 86400 - 1),
+        )
+        .unwrap();
+        reply(&mut retry, response(&prepared, None, "prepared"));
+        let (mut submit, _) = listener.accept().unwrap();
+        let signed = signed_from_submit(&mut submit, &prepared, now);
+        reply(&mut submit, response(&prepared, Some(&signed), "confirmed"));
+    });
+    let request = path.join("request.json");
+    let args = [
+        "exec",
+        POLICY,
+        "--request-file",
+        request.to_str().unwrap(),
+        "--wait",
+        "0s",
+    ];
+    assert_eq!(run(&path, &url, &args).status.code(), Some(4));
+    let out = run(&path, &url, &args);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    server.join().unwrap();
+    std::fs::remove_dir_all(path).unwrap();
+}
+#[test]
+fn unsigned_prepared_resumes_exact_packet_only_on_explicit_exec() {
+    let (c, request, state, now) = fixture();
+    let path = setup(&c, &request);
+    std::fs::remove_file(path.join("signer")).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let prepared = sdk::prepare(
+            &c,
+            &request,
+            &state,
+            now,
+            (now + 120).min((now / 86400 + 1) * 86400 - 1),
+        )
+        .unwrap();
+        let (mut first, _) = listener.accept().unwrap();
+        let (_, body) = read(&mut first);
+        assert_eq!(body["phase"], "prepare");
+        reply(&mut first, response(&prepared, None, "prepared"));
+        for _ in 0..2 {
+            let (mut status, _) = listener.accept().unwrap();
+            let (head, body) = read(&mut status);
+            assert!(head.starts_with("POST /api/native/execute/status "));
+            assert_eq!(body, json!({"policyId":POLICY,"requestId":ID}));
+            reply(&mut status, response(&prepared, None, "prepared"));
+        }
+        let (mut submit, _) = listener.accept().unwrap();
+        let signed = signed_from_submit(&mut submit, &prepared, now);
+        reply(&mut submit, response(&prepared, Some(&signed), "confirmed"));
+    });
+    let request = path.join("request.json");
+    let args = [
+        "exec",
+        POLICY,
+        "--request-file",
+        request.to_str().unwrap(),
+        "--wait",
+        "0s",
+    ];
+    assert_eq!(run(&path, &url, &args).status.code(), Some(3));
+    assert_eq!(
+        run(&path, &url, &["status", POLICY, ID, "--wait", "0s"])
+            .status
+            .code(),
+        Some(12)
+    );
+    private(&path.join("signer"), &seed_text());
+    let out = run(&path, &url, &args);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    server.join().unwrap();
+    std::fs::remove_dir_all(path).unwrap();
+}
+#[test]
+fn retained_unsigned_prepared_is_never_replaced_after_status_404() {
+    let (c, request, state, now) = fixture();
+    let path = setup(&c, &request);
+    std::fs::remove_file(path.join("signer")).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let prepared = sdk::prepare(
+            &c,
+            &request,
+            &state,
+            now,
+            (now + 120).min((now / 86400 + 1) * 86400 - 1),
+        )
+        .unwrap();
+        let (mut first, _) = listener.accept().unwrap();
+        read(&mut first);
+        reply(&mut first, response(&prepared, None, "prepared"));
+        let (mut status, _) = listener.accept().unwrap();
+        let (head, _) = read(&mut status);
+        assert!(head.starts_with("POST /api/native/execute/status "));
+        reply_error(&mut status, 404);
+    });
+    let request = path.join("request.json");
+    let args = [
+        "exec",
+        POLICY,
+        "--request-file",
+        request.to_str().unwrap(),
+        "--wait",
+        "0s",
+    ];
+    assert_eq!(run(&path, &url, &args).status.code(), Some(3));
+    private(&path.join("signer"), &seed_text());
+    assert_eq!(run(&path, &url, &args).status.code(), Some(4));
+    server.join().unwrap();
+    std::fs::remove_dir_all(path).unwrap();
+}
+#[test]
+fn unsigned_resume_rejects_changed_server_packet_before_signing() {
+    let (c, request, state, now) = fixture();
+    let path = setup(&c, &request);
+    std::fs::remove_file(path.join("signer")).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let prepared = sdk::prepare(
+            &c,
+            &request,
+            &state,
+            now,
+            (now + 120).min((now / 86400 + 1) * 86400 - 1),
+        )
+        .unwrap();
+        let (mut first, _) = listener.accept().unwrap();
+        read(&mut first);
+        reply(&mut first, response(&prepared, None, "prepared"));
+        let mut changed = state;
+        changed.source.sequence += 1;
+        let changed = sdk::prepare(
+            &c,
+            &request,
+            &changed,
+            now,
+            (now + 120).min((now / 86400 + 1) * 86400 - 1),
+        )
+        .unwrap();
+        let (mut status, _) = listener.accept().unwrap();
+        let (head, _) = read(&mut status);
+        assert!(head.starts_with("POST /api/native/execute/status "));
+        reply(&mut status, response(&changed, None, "prepared"));
+    });
+    let request = path.join("request.json");
+    let args = [
+        "exec",
+        POLICY,
+        "--request-file",
+        request.to_str().unwrap(),
+        "--wait",
+        "0s",
+    ];
+    assert_eq!(run(&path, &url, &args).status.code(), Some(3));
+    private(&path.join("signer"), &seed_text());
+    let out = run(&path, &url, &args);
+    assert_eq!(out.status.code(), Some(5));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("identity"));
+    server.join().unwrap();
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn imported_unknown_signed_operation_never_authorizes_from_unsigned_local_state() {
+    let (c, request, state, now) = fixture();
+    let path = setup(&c, &request);
+    std::fs::remove_file(path.join("signer")).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let prepared = sdk::prepare(
+            &c,
+            &request,
+            &state,
+            now,
+            (now + 120).min((now / 86400 + 1) * 86400 - 1),
+        )
+        .unwrap();
+        let signed = sdk::authorize(
+            &prepared,
+            &[
+                sdk::sign(&prepared, &[2; 32], now).unwrap(),
+                sdk::sign(&prepared, &[3; 32], now).unwrap(),
+            ],
+            now,
+        )
+        .unwrap();
+        for status in ["submissionUnknown", "confirmed"] {
+            let (mut conn, _) = listener.accept().unwrap();
+            let (head, body) = read(&mut conn);
+            assert!(head.starts_with("POST /api/native/execute/status "));
+            assert_eq!(body, json!({"policyId":POLICY,"requestId":ID}));
+            reply(&mut conn, response(&prepared, Some(&signed), status));
+        }
+    });
+    assert_eq!(
+        run(&path, &url, &["status", POLICY, ID, "--wait", "0s"])
+            .status
+            .code(),
+        Some(5)
+    );
+    let request = path.join("request.json");
+    let out = run(
+        &path,
+        &url,
+        &[
+            "exec",
+            POLICY,
+            "--request-file",
+            request.to_str().unwrap(),
+            "--wait",
+            "0s",
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    server.join().unwrap();
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn expired_unsigned_packet_observation_prevents_repreparation_after_404() {
+    let (c, request, mut state, now) = fixture();
+    let path = setup(&c, &request);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let created = (now / 86400 - 1) * 86400 + 1;
+        state.spent_day = created / 86400;
+        let prepared = sdk::prepare(&c, &request, &state, created, created + 120).unwrap();
+        let (mut first, _) = listener.accept().unwrap();
+        read(&mut first);
+        drop(first);
+        let (mut status, _) = listener.accept().unwrap();
+        let (head, _) = read(&mut status);
+        assert!(head.starts_with("POST /api/native/execute/status "));
+        reply(&mut status, response(&prepared, None, "prepared"));
+        let (mut status, _) = listener.accept().unwrap();
+        let (head, _) = read(&mut status);
+        assert!(head.starts_with("POST /api/native/execute/status "));
+        reply_error(&mut status, 404);
+    });
+    let request = path.join("request.json");
+    let args = [
+        "exec",
+        POLICY,
+        "--request-file",
+        request.to_str().unwrap(),
+        "--wait",
+        "0s",
+    ];
+    assert_eq!(run(&path, &url, &args).status.code(), Some(5));
+    let expired = run(&path, &url, &args);
+    assert_eq!(expired.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&expired.stderr).contains("stale"));
+    assert_eq!(run(&path, &url, &args).status.code(), Some(4));
     server.join().unwrap();
     std::fs::remove_dir_all(path).unwrap();
 }
