@@ -122,8 +122,11 @@ fn fixture() -> (WalletConfig, ExecutionRequest, TrustedState, u64) {
     (c, r, s, now)
 }
 fn seed_text() -> String {
+    seed_text_for(2)
+}
+fn seed_text_for(seed: u8) -> String {
     let mut raw = vec![144];
-    raw.extend([2; 32]);
+    raw.extend([seed; 32]);
     let mut crc = 0u16;
     for b in &raw {
         crc ^= (*b as u16) << 8;
@@ -211,6 +214,9 @@ fn run(p: &Path, url: &str, args: &[&str]) -> Output {
         .unwrap()
 }
 fn read(stream: &mut TcpStream) -> (String, Value) {
+    read_for(stream, &sdk::account_for_seed(&[2; 32]))
+}
+fn read_for(stream: &mut TcpStream, expected_signer: &str) -> (String, Value) {
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(10)))
         .unwrap();
@@ -239,7 +245,7 @@ fn read(stream: &mut TcpStream) -> (String, Value) {
     let parts: Vec<_> = proof.split('.').collect();
     assert_eq!(parts.len(), 4);
     assert_eq!(parts[0], "stellar-proof");
-    assert_eq!(parts[1], sdk::account_for_seed(&[2; 32]));
+    assert_eq!(parts[1], expected_signer);
     let path = h.lines().next().unwrap().split(' ').nth(1).unwrap();
     let mut message = format!("allowit-stellar-request-v1\n{}\n{path}\n", parts[2]).into_bytes();
     message.extend(serde_json_canonicalizer::to_vec(&body).unwrap());
@@ -817,6 +823,87 @@ fn expired_unsigned_packet_observation_prevents_repreparation_after_404() {
     assert_eq!(expired.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&expired.stderr).contains("stale"));
     assert_eq!(run(&path, &url, &args).status.code(), Some(4));
+    server.join().unwrap();
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn replacement_customer_key_recovers_original_receipt_and_exact_journal_without_signing() {
+    let (config, request, state, now) = fixture();
+    let path = setup(&config, &request);
+    let prepared = sdk::prepare(
+        &config,
+        &request,
+        &state,
+        now,
+        (now + 120).min((now / 86400 + 1) * 86400 - 1),
+    )
+    .unwrap();
+    let agent = sdk::sign(&prepared, &[2; 32], now).unwrap();
+    let signed = sdk::authorize(
+        &prepared,
+        &[agent.clone(), sdk::sign(&prepared, &[3; 32], now).unwrap()],
+        now,
+    )
+    .unwrap();
+    retain_unsigned(&path, &config, &request, &state, now);
+    let file = path.join(".allowit/stellar-journal").join(format!(
+        "request-{}.json",
+        sdk::hex(&sdk::hash(sdk::hex(&request.operation.nonce)))
+    ));
+    let mut original: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    original["agentSignature"] = json!(agent);
+    original["status"] = json!("submissionUnknown");
+    private(&file, &original.to_string());
+    let mut token: Value =
+        serde_json::from_slice(&std::fs::read(path.join("bundle.json")).unwrap()).unwrap();
+    token["signingSeed"] = json!(seed_text_for(9));
+    token["config"]["agent"] = json!(sdk::account_for_seed(&[9; 32]));
+    private(&path.join("bundle.json"), &token.to_string());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut connection, _) = listener.accept().unwrap();
+            let (head, body) = read_for(&mut connection, &sdk::account_for_seed(&[9; 32]));
+            assert!(head.starts_with("POST /api/native/execute/status "));
+            assert_eq!(body, json!({"policyId":POLICY,"requestId":ID}));
+            reply(
+                &mut connection,
+                response(&prepared, Some(&signed), "confirmed"),
+            );
+        }
+    });
+    let status = run(&path, &url, &["status", POLICY, ID, "--wait", "0s"]);
+    assert_eq!(
+        status.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let recovered = run(
+        &path,
+        &url,
+        &[
+            "exec",
+            POLICY,
+            "--request-file",
+            path.join("request.json").to_str().unwrap(),
+            "--wait",
+            "0s",
+        ],
+    );
+    assert_eq!(
+        recovered.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&recovered.stderr)
+    );
+    let after: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(after["prepared"], original["prepared"]);
+    assert_eq!(after["agentSignature"], original["agentSignature"]);
+    assert_eq!(after["config"], original["config"]);
+    assert_eq!(after["request"], original["request"]);
     server.join().unwrap();
     std::fs::remove_dir_all(path).unwrap();
 }

@@ -94,6 +94,12 @@ fn same_policy_config(expected: &WalletConfig, actual: &WalletConfig) -> bool {
     current.engine = expected.engine.clone();
     &current == expected
 }
+fn same_retained_policy_config(expected: &WalletConfig, actual: &WalletConfig) -> bool {
+    let mut original = actual.clone();
+    // Public role identities may rotate. Read-only recovery still binds the original approved source and exact packet.
+    original.agent = expected.agent.clone();
+    same_policy_config(expected, &original)
+}
 impl Client {
     fn load(policy: &str) -> Result<Self> {
         let raw = Zeroizing::new(env_value("ALLOWIT_TOKEN"));
@@ -195,15 +201,26 @@ impl Client {
             Error::uncertain("Invalid Stellar response; recover the original request ID")
         })
     }
-    fn validate(&self, r: &Response, id: &str, record: Option<&Record>) -> Result<()> {
+    fn validate(
+        &self,
+        r: &Response,
+        id: &str,
+        record: Option<&Record>,
+        read_only: bool,
+    ) -> Result<()> {
+        let config_matches = if read_only {
+            same_retained_policy_config
+        } else {
+            same_policy_config
+        };
         let p = &r.prepared;
         if r.operation.id != id
-            || !same_policy_config(&self.bundle.config, &p.config)
+            || !config_matches(&self.bundle.config, &p.config)
             || p.request.operation.nonce != operation_nonce(&self.bundle.policy_id, id)
             || r.operation.transaction_hash != sdk::hex(&p.transaction_hash)
             || record.is_some_and(|old| {
                 old.request != p.request
-                    || !same_policy_config(&old.config, &p.config)
+                    || !config_matches(&old.config, &p.config)
                     || old.prepared.as_ref().is_some_and(|v| v != p)
             })
         {
@@ -264,7 +281,7 @@ impl Client {
             &self.bundle.endpoints.status,
             json!({"policyId":self.bundle.policy_id,"requestId":id}),
         )?;
-        self.validate(&r, id, record)?;
+        self.validate(&r, id, record, true)?;
         Ok(r)
     }
 }
@@ -291,7 +308,9 @@ fn run_locked(
         let name = sdk::hex(&operation_nonce(&args.pos[0], id));
         let old: Option<Record> = journal.load(&name).map_err(journal_error)?;
         if old.as_ref().is_some_and(|v| {
-            v.policy_id != args.pos[0] || v.request_id != *id || v.config != c.bundle.config
+            v.policy_id != args.pos[0]
+                || v.request_id != *id
+                || !same_retained_policy_config(&c.bundle.config, &v.config)
         }) {
             return Err(Error::config(
                 "The journal does not bind this installed Stellar policy",
@@ -331,7 +350,7 @@ fn run_locked(
     let (mut record, resumed) = if let Some(old) = old {
         if old.policy_id != args.pos[0]
             || old.request_id != id
-            || old.config != c.bundle.config
+            || !same_retained_policy_config(&c.bundle.config, &old.config)
             || old.request != request
         {
             return Err(Error::config(
@@ -342,6 +361,11 @@ fn run_locked(
             || !matches!(&old.status, None | Some(OperationStatus::Prepared))
         {
             return poll(c, &id, Some(old), journal, &name, args.wait, stdout);
+        }
+        if !same_policy_config(&c.bundle.config, &old.config) {
+            return Err(Error::uncertain(
+                "The customer key changed. Read the original operation with status; do not authorize replacement bytes.",
+            ));
         }
         let pure_intent = old.prepared.is_none() && old.status.is_none();
         let resumed = match c.status(&id, Some(&old)) {
@@ -382,7 +406,7 @@ fn run_locked(
             json!({"policyId":args.pos[0],"requestId":id,"phase":"prepare","request":request}),
         )?
     };
-    c.validate(&prepared, &id, Some(&record))?;
+    c.validate(&prepared, &id, Some(&record), false)?;
     if prepared.operation.status != OperationStatus::Prepared || prepared.signed_operation.is_some()
     {
         return Err(Error::uncertain(
@@ -403,7 +427,7 @@ fn run_locked(
         &c.bundle.endpoints.execute,
         json!({"policyId":args.pos[0],"requestId":id,"phase":"submit","agentSignature":signature}),
     )?;
-    c.validate(&response, &id, Some(&record))?;
+    c.validate(&response, &id, Some(&record), false)?;
     record.status = Some(response.operation.status.clone());
     journal.save(&name, &record).map_err(journal_error)?;
     if terminal(&response.operation.status) || args.wait.is_zero() {
