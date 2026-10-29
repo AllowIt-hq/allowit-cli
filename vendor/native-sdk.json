@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-  "commit": "7ddacd6d6e8399419625dba5705a547faa2ba2fe",
+  "commit": "d441199601f13b41b575a5e860034d37ae4c29e1",
   "submodule": {
     "path": "repos/AllowIt-hq--allowit-sdk",
     "url": "https://github.com/AllowIt-hq/allowit-sdk.git"
@@ -11,7 +11,7 @@
       "package": "allowit-client",
       "version": "0.3.0-dev",
       "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-      "commit": "7ddacd6d6e8399419625dba5705a547faa2ba2fe",
+      "commit": "d441199601f13b41b575a5e860034d37ae4c29e1",
       "path": "client",
       "source": null,
       "features": [],
@@ -66,7 +66,7 @@
       },
       "licenses": {
         "LICENSE": "750548edc096b7599f0aa6816b3a6dfb983d75ba81bc8c4925f968ef048a4734",
-        "THIRD_PARTY_NOTICES.md": "ed885d2d84f90114c3a422a079c1e4c74effbbd4825a42cb46039d8a05fcdfa4",
+        "THIRD_PARTY_NOTICES.md": "605964077b95b42aa97db5f74483701450fa8a71b3597e1651d3d9f3c54e7a83",
         "licenses/Aeneas-Apache-2.0.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
       }
     },
@@ -104,7 +104,7 @@
       "package": "allowit-native",
       "version": "0.1.0",
       "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-      "commit": "7ddacd6d6e8399419625dba5705a547faa2ba2fe",
+      "commit": "d441199601f13b41b575a5e860034d37ae4c29e1",
       "path": "native-rust",
       "source": null,
       "features": [],
@@ -139,7 +139,7 @@
       },
       "licenses": {
         "LICENSE": "750548edc096b7599f0aa6816b3a6dfb983d75ba81bc8c4925f968ef048a4734",
-        "THIRD_PARTY_NOTICES.md": "ed885d2d84f90114c3a422a079c1e4c74effbbd4825a42cb46039d8a05fcdfa4",
+        "THIRD_PARTY_NOTICES.md": "605964077b95b42aa97db5f74483701450fa8a71b3597e1651d3d9f3c54e7a83",
         "licenses/Aeneas-Apache-2.0.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
       }
     },
@@ -147,7 +147,7 @@
       "package": "allowit-sdk",
       "version": "0.1.0",
       "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-      "commit": "7ddacd6d6e8399419625dba5705a547faa2ba2fe",
+      "commit": "d441199601f13b41b575a5e860034d37ae4c29e1",
       "path": "",
       "source": null,
       "features": [
@@ -233,7 +233,7 @@
       },
       "licenses": {
         "LICENSE": "750548edc096b7599f0aa6816b3a6dfb983d75ba81bc8c4925f968ef048a4734",
-        "THIRD_PARTY_NOTICES.md": "ed885d2d84f90114c3a422a079c1e4c74effbbd4825a42cb46039d8a05fcdfa4",
+        "THIRD_PARTY_NOTICES.md": "605964077b95b42aa97db5f74483701450fa8a71b3597e1651d3d9f3c54e7a83",
         "licenses/Aeneas-Apache-2.0.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
       }
     },
@@ -268,7 +268,7 @@
       "package": "allowit-stellar-wallet",
       "version": "0.1.0",
       "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-      "commit": "7ddacd6d6e8399419625dba5705a547faa2ba2fe",
+      "commit": "d441199601f13b41b575a5e860034d37ae4c29e1",
       "path": "stellar-rust",
       "source": null,
       "features": [],
@@ -292,7 +292,7 @@
       },
       "licenses": {
         "LICENSE": "750548edc096b7599f0aa6816b3a6dfb983d75ba81bc8c4925f968ef048a4734",
-        "THIRD_PARTY_NOTICES.md": "ed885d2d84f90114c3a422a079c1e4c74effbbd4825a42cb46039d8a05fcdfa4",
+        "THIRD_PARTY_NOTICES.md": "605964077b95b42aa97db5f74483701450fa8a71b3597e1651d3d9f3c54e7a83",
         "licenses/Aeneas-Apache-2.0.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
       }
     },
