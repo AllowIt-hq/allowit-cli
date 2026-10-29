@@ -1,7 +1,7 @@
-"""Test fixture: a local parent checkout with the pinned SDK as a real submodule.
+"""Historical schema 1 fixture with a real SDK Git submodule.
 
-The submodule is cloned from this checkout's initialized SDK submodule, so tests
-use the real pinned commit, metadata and source bytes without network access.
+Cargo discovery inputs and metadata are preserved from CLI bb5d6bc. The SDK
+object is cloned locally at that metadata's pin. No network access is needed.
 """
 import json
 import os
