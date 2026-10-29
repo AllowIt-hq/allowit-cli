@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -822,6 +823,26 @@ class ResolvedTests(unittest.TestCase):
             with self.subTest(change=change.__name__), self.mutated(change):
                 with self.assertRaisesRegex(ValueError, "unpinned features of allowit-stellar-wallet" if change == feature else "does not build allowit-stellar-wallet"):
                     provenance.native_sdk.resolved(fixture.ROOT)
+
+
+@unittest.skipUnless(provenance.native_sdk.facade(fixture.ROOT), "Schema 2 requires the SDK client facade")
+class VendorResolvedTests(unittest.TestCase):
+    def test_actual_vendor_graph_matches_recorded_sources_and_features(self):
+        provenance.native_sdk.resolved(fixture.ROOT)
+
+    def test_actual_resolution_rejects_changed_vendor_features(self):
+        real = subprocess.run
+        def run(args, **options):
+            result = real(args, **options)
+            if args[:2] == ["cargo", "metadata"] and result.returncode == 0:
+                value = json.loads(result.stdout)
+                package = next(p for p in value["packages"] if p["name"] == "allowit-tempo")
+                next(n for n in value["resolve"]["nodes"] if n["id"] == package["id"])["features"].append("injected")
+                result.stdout = json.dumps(value).encode()
+            return result
+        with patch.object(subprocess, "run", run):
+            with self.assertRaisesRegex(ValueError, "SDK vendor graph differs"):
+                provenance.native_sdk.resolved(fixture.ROOT)
 
 
 if __name__ == "__main__":
