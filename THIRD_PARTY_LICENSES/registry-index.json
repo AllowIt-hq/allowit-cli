@@ -5556,5 +5556,103 @@
     "noticeBasis": [
       "checksum-verified published crate"
     ]
+  },
+  {
+    "name": "getrandom",
+    "version": "0.3.4",
+    "url": "https://static.crates.io/crates/getrandom/getrandom-0.3.4.crate",
+    "files": [
+      {
+        "path": "getrandom/0.3.4/LICENSE-APACHE",
+        "sha256": "aaff376532ea30a0cd5330b9502ad4a4c8bf769c539c87ffe78819d188a18ebf",
+        "bytes": 10849
+      },
+      {
+        "path": "getrandom/0.3.4/LICENSE-MIT",
+        "sha256": "29e9fe5074bd27e0e5d5d110394fbbcd841baee2651a3c4b4560a632702cede4",
+        "bytes": 1130
+      }
+    ],
+    "crateSha256": "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "licenseFile": null,
+    "repository": "https://github.com/rust-random/getrandom",
+    "status": "covered",
+    "cargoChecksum": "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
+  },
+  {
+    "name": "r-efi",
+    "version": "5.3.0",
+    "url": "https://static.crates.io/crates/r-efi/r-efi-5.3.0.crate",
+    "files": [
+      {
+        "path": "r-efi/5.3.0/AUTHORS",
+        "sha256": "ff92bed461f50338dd703a9ba9aee496a425957873df1d91192776e4bdf5dda7",
+        "bytes": 3693
+      }
+    ],
+    "crateSha256": "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f",
+    "licenseExpression": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
+    "licenseFile": null,
+    "repository": "https://github.com/r-efi/r-efi",
+    "status": "covered",
+    "cargoChecksum": "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f",
+    "legalTextSource": "AUTHORS in checksum-verified original crate"
+  },
+  {
+    "name": "wasip2",
+    "version": "1.0.4+wasi-0.2.12",
+    "url": "https://static.crates.io/crates/wasip2/wasip2-1.0.4+wasi-0.2.12.crate",
+    "files": [
+      {
+        "path": "wasip2/1.0.4+wasi-0.2.12/LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+        "bytes": 10847
+      },
+      {
+        "path": "wasip2/1.0.4+wasi-0.2.12/LICENSE-Apache-2.0_WITH_LLVM-exception",
+        "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+        "bytes": 12243
+      },
+      {
+        "path": "wasip2/1.0.4+wasi-0.2.12/LICENSE-MIT",
+        "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+        "bytes": 1023
+      }
+    ],
+    "crateSha256": "b67efb37e106e55ce722a510d6b5f9c17f083e5fc79afc2badeb12cc313d9487",
+    "licenseExpression": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+    "licenseFile": null,
+    "repository": "https://github.com/bytecodealliance/wasi-rs",
+    "status": "covered",
+    "cargoChecksum": "b67efb37e106e55ce722a510d6b5f9c17f083e5fc79afc2badeb12cc313d9487"
+  },
+  {
+    "name": "wit-bindgen",
+    "version": "0.57.1",
+    "url": "https://static.crates.io/crates/wit-bindgen/wit-bindgen-0.57.1.crate",
+    "files": [
+      {
+        "path": "wit-bindgen/0.57.1/LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+        "bytes": 10847
+      },
+      {
+        "path": "wit-bindgen/0.57.1/LICENSE-Apache-2.0_WITH_LLVM-exception",
+        "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+        "bytes": 12243
+      },
+      {
+        "path": "wit-bindgen/0.57.1/LICENSE-MIT",
+        "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+        "bytes": 1023
+      }
+    ],
+    "crateSha256": "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e",
+    "licenseExpression": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+    "licenseFile": null,
+    "repository": "https://github.com/bytecodealliance/wit-bindgen",
+    "status": "covered",
+    "cargoChecksum": "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
   }
 ]

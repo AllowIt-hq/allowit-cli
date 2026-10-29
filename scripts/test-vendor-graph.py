@@ -113,6 +113,17 @@ class Sources(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'exact Git source'):
             self.describe()
 
+    def test_binds_package_local_license_without_relicensing_repository(self):
+        repo=self.repos[graph.PACKAGES['allowit-tempo'][0]]
+        (repo/'LICENSE').rename(repo/'rust/LICENSE')
+        git(repo,'add','-A');git(repo,'commit','-qm','package license')
+        commit=git(repo,'rev-parse','HEAD')
+        url=graph.PACKAGES['allowit-tempo'][0]
+        self.package('allowit-tempo')['source']=f'git+{url}?rev={commit}#{commit}'
+        record=next(p for p in self.describe() if p['package']=='allowit-tempo')
+        self.assertEqual(set(record['licenses']), {'rust/LICENSE'})
+        self.assertIn('LICENSE', record['files'])
+
     def test_rejects_extra_or_duplicate_first_party_package(self):
         for p in [copy.deepcopy(self.packages[-1]), {'id':'extra','name':'allowit-foreign','source':None}]:
             self.packages.append(p)

@@ -169,8 +169,9 @@ def graph(root, helper, *config):
     for package in sorted(vendors, key=lambda p: p['name']):
         name = package['name']
         repo, commit, directory = git_checkout(helper, package, sdk, sdk_commit)
-        legal = helper.pinned(repo, commit, *LICENSES)
-        if 'LICENSE' not in legal:
+        legal_paths = [*LICENSES, *([str(Path(directory, name)) for name in LICENSES] if directory else [])]
+        legal = helper.pinned(repo, commit, *legal_paths)
+        if 'LICENSE' not in legal and (not directory or str(Path(directory, 'LICENSE')) not in legal):
             raise ValueError('Vendor license is missing')
         helper.unchanged(repo, legal, 'Vendor license', 'its pinned commit')
         result.append({
