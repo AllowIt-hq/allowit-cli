@@ -41,8 +41,9 @@ fn fixture() -> (WalletConfig, ExecutionRequest, TrustedState, u64) {
         wallet: owner.clone(),
         owner: owner.clone(),
         agent: agent.clone(),
-        engine: engine.clone(),
+        server: engine.clone(),
         route: WalletRoute::Native,
+        policy_engine: None,
         asset: String::new(),
         asset_symbol: "XLM".into(),
         asset_issuer: None,
@@ -87,6 +88,8 @@ fn fixture() -> (WalletConfig, ExecutionRequest, TrustedState, u64) {
         .unwrap()
         .as_secs();
     let s = TrustedState {
+        contract_version: None,
+        policy_state: None,
         source: AccountState {
             address: owner.clone(),
             sequence: 40,
@@ -106,7 +109,7 @@ fn fixture() -> (WalletConfig, ExecutionRequest, TrustedState, u64) {
             ],
         },
         nonce: 9,
-        revision: 4,
+        deployment_version: 4,
         spent_daily: 0,
         spent_total: 0,
         spent_day: now / 86400,
@@ -116,7 +119,7 @@ fn fixture() -> (WalletConfig, ExecutionRequest, TrustedState, u64) {
         source_hash: c.source_hash,
         owner,
         agent,
-        engine,
+        server: engine,
         policy_instance: c.policy_instance,
     };
     (c, r, s, now)
