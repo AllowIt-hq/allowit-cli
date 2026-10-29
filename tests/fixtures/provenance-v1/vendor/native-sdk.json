@@ -1,0 +1,113 @@
+{
+  "repository": "https://github.com/AllowIt-hq/allowit-sdk",
+  "commit": "7dccb1e9e859fa02e035a0dd7b9a6c6e7f273fb3",
+  "crate": "native-rust",
+  "submodule": {
+    "path": "repos/AllowIt-hq--allowit-sdk",
+    "url": "https://github.com/AllowIt-hq/allowit-sdk.git"
+  },
+  "files": {
+    "Cargo.lock": "1fd76104e56b3d827d58937fff661838aa1d2c59d1ab9b85dd5f59e70765990f",
+    "Cargo.toml": "b6e263926f2c5c08b55d0ee16cbcb1420eaf633e60258648cce543f4df329de9",
+    "src/client.rs": "53e6b21066a87315c56d2204c492a42dad794c8322fa01313d47dd5f8185457f",
+    "src/crypto.rs": "83a9a5a8138382b387845f223128d58f0c3e0e725f836841cc086dda3a7286e9",
+    "src/error.rs": "c4b9e48e7dcfc00650ce28fd2e36d213fb986d35c4a66fbc431804899e2662a3",
+    "src/journal.rs": "ed74199d62f2597ed328c3ecb097b6f10134d4977e3ffcf2f66565dfb60d1657",
+    "src/lib.rs": "de194906b8d5701b5613b87b678600a35dbfda938d22ad9cd8dbf0ee904e9250",
+    "src/lifecycle.rs": "3077c9079fcd641bd2462a2192abde38a0f86e8386e4b75214495c74af64b43b",
+    "src/native.rs": "dd6230f2e4b36ffad946e4c48980551e54339d42876cf7212ad5bf15553393d4",
+    "src/owner_wallet.rs": "689992b030389d58e97029ac570c0a7afe103935909aa2755edb32636ef4507c",
+    "src/paysh.rs": "647aaeee90cfa190f96290e4f91ff3c7c0d49327fdd65f0bebd35aee44187ca2",
+    "src/policy.rs": "4e7e546c699834077d54a33b6e0c0235b1c108c8cb7e5cdedbd5aae27e7cbe42",
+    "src/release.json": "55dd01a53d3525a5997dadf2a2ae805293282d3cf7dc8f5cd63c634a4a8a6147",
+    "src/rpc.rs": "43ccfa955a9822d0d697f0b16f39f8a2f3c76e44c84c2af65e33efa19ede38bb",
+    "src/transaction.rs": "3f7700d681ec555a600575949a5951b302e33e4fecec22fe0658eda24272d5c0",
+    "tests/context_identity.rs": "fa23aee3ce4e11864604991aa60e2371ca2dedb20fd17eaa52de199b07781c39",
+    "tests/lifecycle.rs": "b4c57313f781179eb8b45faa0a8d76f014b276aa6177dcfe0598714f0c852d10",
+    "tests/owner_wallet.rs": "9a0ee5d5dd5fc96a68670bf612bf36e91f8173fb6ae4f9078bacf1c2339a7766",
+    "tests/paysh_budgets.rs": "ad39920578ddc5f66ea713bd90a5c91d504ff848adfbee1bcb469cf1185304c3",
+    "tests/reference.json": "6decd0974fb99ffb5633b99321a25bd524ffdb5b92c95137ffb6241b408f3378",
+    "tests/reference.rs": "f1b5ceb98634d05c080069a670f2666a134aab42baa74ae8e12b9f52388af6b2",
+    "tests/v2-codec-reference.json": "6fec810c5dab6cc8e8a2358bbeec25305160e1e857e098f9532bbe10d050ec65"
+  },
+  "unconsumed": [
+    "tests/generate-reference.mjs",
+    "tests/generate-v2-codec-reference.mjs"
+  ],
+  "payshInterface": {
+    "Cargo.lock": "a927b0df6ab0ba3a104297890ca5689cefc2d45edc95ef42cc843f43238be518",
+    "Cargo.toml": "6925312d6a60759ff14dc542b5f58ba05d33c48582217f9be9d226c780400d36",
+    "src/allowlist.rs": "3ffdfe8c3d94beca9ca7dfb0c605ce3e59584c592cda229a500479dc4cbe7a00",
+    "src/lib.rs": "c6d34515ce6d436476be52aa4090868c72e8ee8fc1171fcaa3c57e3efcbc58ac"
+  },
+  "policySdk": {
+    "path": ".",
+    "package": "allowit-sdk",
+    "defaultFeatures": false,
+    "features": [
+      "std",
+      "typed-workflow"
+    ],
+    "resolvedFeatures": [
+      "compiler",
+      "std",
+      "typed-workflow"
+    ],
+    "files": {
+      "Cargo.toml": "c0dca89b27e3598ee0593c43a9ba3be2bc86b8e5b4a116b6398d65efa65ed23e",
+      "src/bin/allowit.rs": "865ddceecadaf087b9b557f749f1e1507a5b3512c6dd2c7a51fd812327a7d516",
+      "src/compiler.rs": "26703dda2b52b68a4b786e26900608bb8e93ae961014f3fefa0fa1f7fab1935e",
+      "src/editing.rs": "e8d921bea99d9d5516843859c6b481a580e1fead9d9034677d66c87beb142cc4",
+      "src/lib.rs": "528bfc350247d52370a1f5271a892676d41e265876b7a1fc46fb70c8e63e12ff",
+      "src/lsp.rs": "2ad4b1d81c0ff93b60eba87a922d359f83fe838f76ba3acb41c95c3905b0778d",
+      "src/params.rs": "70f061e33b3017c44c0994cdc7660147edced1533ac6388e1db0183348d93acd",
+      "src/prelude.rs": "bd49bc8a4a1fe5a51c1c360a9a3d513ffca1228d7afb6e5fa861316da30316b3",
+      "src/primitives.rs": "4d4b4c1ae04b0e66066980d830e093a2781c70662e22119bb9093403ada8c20d",
+      "src/protocol.rs": "fe8aaa5c90e9f1b11105e4737bf37ae5b6ebf171f2b808035232183778e1ff13",
+      "src/readability.rs": "5432fd2bdb7e27e63f10c49787fa45d0f3d6fdab84990bae0ede363b00d2d983",
+      "src/registry.rs": "c8fe1dc0e525affc3ab000822a5af2b0da73c6a64a700c3385708a4151418a6c",
+      "src/requirements.rs": "d0a4350a9d42731c9cdc78604de3a41ee615ed4bbd28d8a91800677e152132a3",
+      "src/runtime.rs": "0788dd865a1a61d8ca4fe2e7f1b77cba68cb06e382a8bbd1209fab0e71707793",
+      "src/spending.rs": "06e6a022df74c7ad33745ea11ec97166cda1f2e059e707aecf82176a5ddac15d",
+      "src/stellar_codegen.rs": "972430e0b4043f639cfff4a0a5098fd0901c208e4e1fbb0bfc3720432ee821bc",
+      "src/trace.rs": "b8d4a89465dfc825f5a1820ddf2203bf7208c6b144e64c708a559af72331a626",
+      "src/typed_workflow.rs": "5dfda6b5002c4590c0a0963e8bcda7e8a7dfc27e79b63ee311062f6a539de574",
+      "src/types.rs": "c304d0031593715f17e6c7fcc9f81224cae3df58db8b4bcbe5913e0515b37806",
+      "src/v1.rs": "d11bcc2046d28b32f6b65b743941d54176a12940699f9adbf19f5242f41bd66e",
+      "src/validation.rs": "cc3a681160d2b5db3d4431b4faf31f43549b5dc091662dce0f51faeb71f2fe40"
+    }
+  },
+  "tempoSdk": {
+    "path": "tempo-rust",
+    "package": "allowit-tempo",
+    "defaultFeatures": true,
+    "features": [],
+    "files": {
+      "Cargo.lock": "288f5a268e0b91e980585882f586430606786462eeb1b8f1225af08372f7cb41",
+      "Cargo.toml": "2f3fb0e254abc19d7149ba735fddbf890de519ec5e94fb08b4833ec815b82f4b",
+      "README.md": "8c289ed76902b75cacf74154ece9b83161ebadce576df167c12cdd80f1ece2b4",
+      "src/lib.rs": "a7efdabafeeef25e91ec3e2c849b5582bfde58939da0e93ee1556799fd34de30",
+      "src/mpp.rs": "61f01eedc4857055b99fc4f9b671c4deff36855ec145f6eb4f4ccad1eb934060"
+    }
+  },
+  "stellarSdk": {
+    "path": "stellar-rust",
+    "package": "allowit-stellar-wallet",
+    "defaultFeatures": true,
+    "features": [],
+    "files": {
+      ".gitignore": "306fd52e74fca6746e12acc750f232de15e71da917756a1270d74c91f5eb7368",
+      "Cargo.lock": "d001ebeb936382e681095fe4b82c7d5e4cac7dda729cb5fb60c7bbdf95117ae3",
+      "Cargo.toml": "6e5aec009731e681c2657a680e1b3c6772d79c29c86237bb119065f06a46b037",
+      "README.md": "88ee86b6dc38c046450e738fab7c422ec271fb6699d4cbeb4f806a475284a26c",
+      "src/lib.rs": "59c3f63b2461bd29da328137f12992e9285db4b384b40b5780666464681c0c28",
+      "src/rpc.rs": "ad0b926c88bcaf8a6640a32632cdfa601d8761bee6be8ae16154e39828ca1678",
+      "tests/lifecycle.rs": "e5777dc36543675d5cef3a549cd2ab56748275b3daf34ba72d710bb68a33c84e"
+    }
+  },
+  "licenses": {
+    "LICENSE": "750548edc096b7599f0aa6816b3a6dfb983d75ba81bc8c4925f968ef048a4734",
+    "THIRD_PARTY_NOTICES.md": "a207e6756e8334a1b154b8ccfca2effce31f1d05673b49a9d7ce0f8231adb14c",
+    "licenses/Aeneas-Apache-2.0.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  }
+}

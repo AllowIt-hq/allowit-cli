@@ -15,10 +15,10 @@ dependencies = [
 name = "allowit-cli"
 version = "0.3.0-dev"
 dependencies = [
+ "allowit-client",
  "allowit-native",
  "allowit-sdk",
  "allowit-stellar-wallet",
- "allowit-tempo",
  "base64 0.22.1",
  "bs58",
  "data-encoding",
@@ -42,32 +42,61 @@ dependencies = [
 ]
 
 [[package]]
+name = "allowit-client"
+version = "0.3.0-dev"
+dependencies = [
+ "allowit-client-core",
+ "allowit-native",
+ "allowit-sdk",
+ "allowit-solana-vendor",
+ "allowit-stellar-wallet",
+ "allowit-tempo",
+ "base64 0.22.1",
+ "bs58",
+ "data-encoding",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "libc",
+ "num-bigint",
+ "num-traits",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_json_canonicalizer",
+ "sha2 0.10.9",
+ "time",
+ "url",
+ "zeroize",
+]
+
+[[package]]
+name = "allowit-client-core"
+version = "0.1.0"
+source = "git+https://github.com/AllowIt-hq/allowit-sdk.git?rev=d9a22d3c74667d41303f147ee4ba2e442cea3767#d9a22d3c74667d41303f147ee4ba2e442cea3767"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "url",
+]
+
+[[package]]
 name = "allowit-native"
 version = "0.1.0"
 dependencies = [
- "allowit-paysh-interface",
  "base64 0.22.1",
- "borsh",
  "bs58",
  "curve25519-dalek",
  "ed25519-dalek",
  "libc",
- "orca_whirlpools_core",
- "orca_whirlpools_macros",
  "regex",
  "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "uuid",
-]
-
-[[package]]
-name = "allowit-paysh-interface"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "sha2 0.10.9",
 ]
 
 [[package]]
@@ -83,6 +112,16 @@ dependencies = [
  "unicode-ident",
  "unicode-normalization",
  "unicode-script",
+]
+
+[[package]]
+name = "allowit-solana-vendor"
+version = "0.1.0"
+source = "git+https://github.com/AllowIt-hq/allowit-contracts-solana.git?rev=7ddb39c0c13746644dae4cfa59a3830d511bd2a5#7ddb39c0c13746644dae4cfa59a3830d511bd2a5"
+dependencies = [
+ "allowit-client-core",
+ "reqwest",
+ "serde_json",
 ]
 
 [[package]]
@@ -103,15 +142,24 @@ dependencies = [
 [[package]]
 name = "allowit-tempo"
 version = "0.1.0"
+source = "git+https://github.com/AllowIt-hq/allowit-contracts-tempo.git?rev=fac59366570b86e4ea5cedd98216a713ce9851c8#fac59366570b86e4ea5cedd98216a713ce9851c8"
 dependencies = [
+ "allowit-client-core",
  "base64 0.22.1",
  "chrono",
  "k256",
+ "libc",
+ "mpp",
+ "num-bigint",
+ "num-traits",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "sha3",
+ "time",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -175,29 +223,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "borsh"
-version = "1.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1da5ab77c1437701eeff7c88d968729e7766172279eab0676857b3d63af7a6f"
-dependencies = [
- "borsh-derive",
- "cfg_aliases",
-]
-
-[[package]]
-name = "borsh-derive"
-version = "1.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfcfdc083699101d5a7965e49925975f2f55060f94f9a05e7187be95d530ca59"
-dependencies = [
- "once_cell",
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -233,12 +258,6 @@ name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
-
-[[package]]
-name = "cfg_aliases"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
 name = "chrono"
@@ -672,13 +691,25 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "r-efi 5.3.0",
+ "wasip2",
+]
+
+[[package]]
+name = "getrandom"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
  "libc",
- "r-efi",
+ "r-efi 6.0.0",
 ]
 
 [[package]]
@@ -1165,27 +1196,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "orca_whirlpools_core"
-version = "1.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b884e3d6f39337baeb00c096b9d2d30682aeff8ead301303d039f84dcac24bec"
-dependencies = [
- "ethnum",
- "orca_whirlpools_macros",
-]
-
-[[package]]
-name = "orca_whirlpools_macros"
-version = "1.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3db647505a145cbb680f08725e0112b1691d984334cd1abe0d9f5c5a6e2ec91e"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1252,15 +1262,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a6394b9e965e73d0a289ee54f589087e2c676aedf60885baf52c76b771e4958"
 
 [[package]]
-name = "proc-macro-crate"
-version = "3.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e67ba7e9b2b56446f1d419b1d807906278ffa1a658a8a5d8a39dcb1f5a78614f"
-dependencies = [
- "toml_edit",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1277,6 +1278,12 @@ checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "r-efi"
+version = "5.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "r-efi"
@@ -1861,36 +1868,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "toml_datetime"
-version = "1.1.1+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
-dependencies = [
- "serde_core",
-]
-
-[[package]]
-name = "toml_edit"
-version = "0.25.15+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1340ea94a5856333492c9064b02c778b191dd2c853778d9609debdcdfea3a614"
-dependencies = [
- "indexmap",
- "toml_datetime",
- "toml_parser",
- "winnow",
-]
-
-[[package]]
-name = "toml_parser"
-version = "1.1.3+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
-dependencies = [
- "winnow",
-]
-
-[[package]]
 name = "tower"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2044,6 +2021,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 
 [[package]]
+name = "wasip2"
+version = "1.0.4+wasi-0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b67efb37e106e55ce722a510d6b5f9c17f083e5fc79afc2badeb12cc313d9487"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
 name = "wasm-bindgen"
 version = "0.2.129"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2125,13 +2111,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "winnow"
-version = "1.0.4"
+name = "wit-bindgen"
+version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
-dependencies = [
- "memchr",
-]
+checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "writeable"
