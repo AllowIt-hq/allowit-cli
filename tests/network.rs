@@ -7,7 +7,7 @@ use std::{
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
 fn directory() -> PathBuf {
-    std::env::temp_dir().join(format!(
+    std::env::temp_dir().canonicalize().unwrap().join(format!(
         "allowit-cli-network-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
@@ -234,5 +234,277 @@ fn imported_default_tempo_bundle_routes_only_its_policy_and_rejects_ambiguity() 
     let ambiguous = run(&policy_id);
     assert!(!ambiguous.status.success());
     assert!(String::from_utf8_lossy(&ambiguous.stderr).contains("Multiple wallet bindings"));
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+fn stellar_approval_fixture() -> Value {
+    serde_json::from_str(include_str!(
+        "../repos/AllowIt-hq--allowit-sdk/client/tests/fixtures/stellar-approval.json"
+    ))
+    .unwrap()
+}
+
+fn public_stellar_bundle(fixture: &Value) -> Value {
+    use allowit_stellar_wallet::{self as sdk, WalletConfig, WalletRoute};
+    let policy = &fixture["policy"];
+    let config = WalletConfig {
+        network: "stellar:testnet".into(),
+        policy_instance: [7; 32],
+        wallet: fixture["intent"]["owner"].as_str().unwrap().into(),
+        owner: fixture["intent"]["owner"].as_str().unwrap().into(),
+        agent: sdk::account_for_seed(&[2; 32]),
+        engine: sdk::account_for_seed(&[3; 32]),
+        route: WalletRoute::Native,
+        asset: policy["mint"].as_str().unwrap().into(),
+        asset_symbol: "XLM".into(),
+        asset_issuer: None,
+        policy_source: policy["code"].as_str().unwrap().into(),
+        source_hash: sdk::unhex(policy["sourceHash"].as_str().unwrap()).unwrap(),
+        module_digest: [5; 32],
+        max_fee_stroops: 100,
+    };
+    serde_json::json!({"version":1,"profile":sdk::PROFILE,"network":config.network,
+        "policyId":policy["id"],"sourceHash":policy["sourceHash"],"irHash":policy["irHash"],
+        "moduleDigest":sdk::hex(&config.module_digest),"wallet":config.wallet,
+        "route":"native","config":config,
+        "endpoints":{"execute":"/api/native/execute","status":"/api/native/execute/status"}})
+}
+
+fn isolated_command(dir: &std::path::Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_allowit"));
+    for (name, _) in std::env::vars() {
+        if name.starts_with("ALLOWIT_") {
+            command.env_remove(name);
+        }
+    }
+    command
+        .current_dir(dir)
+        .env("HTTPS_PROXY", "http://127.0.0.1:1")
+        .env("HTTP_PROXY", "http://127.0.0.1:1")
+        .env("ALL_PROXY", "http://127.0.0.1:1")
+        .env("NO_PROXY", "");
+    command
+}
+
+#[test]
+fn public_stellar_show_infers_network_without_signer_or_server_configuration() {
+    let d = directory();
+    std::fs::create_dir_all(&d).unwrap();
+    let fixture = stellar_approval_fixture();
+    let bundle = public_stellar_bundle(&fixture);
+    let path = d.join("public-stellar.json");
+    std::fs::write(&path, serde_json::to_vec(&bundle).unwrap()).unwrap();
+    for source in [false, true] {
+        let mut command = isolated_command(&d);
+        command
+            .args(["show", "existing-native-policy", "--json"])
+            .env("ALLOWIT_STELLAR_BUNDLE", &path)
+            .env("ALLOWIT_STELLAR_SIGNER", "/must-never-be-opened")
+            .env("ALLOWIT_URL", "not-a-server-origin");
+        if source {
+            command.arg("--source");
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let shown: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(shown["network"], "stellar:testnet");
+        assert_eq!(shown["agent"], bundle["config"]["agent"]);
+        assert_eq!(shown["wallet"], bundle["wallet"]);
+        assert!(shown.get("signingSeed").is_none());
+        assert!(shown.get("endpoints").is_none());
+        if source {
+            assert_eq!(shown["policy"], fixture["policy"]["code"]);
+        } else {
+            assert!(shown.get("policy").is_none());
+        }
+    }
+    assert!(!d.join(".allowit").exists());
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn explicit_network_conflict_and_secret_public_bundle_fail_before_transport() {
+    let d = directory();
+    std::fs::create_dir_all(&d).unwrap();
+    let fixture = stellar_approval_fixture();
+    let mut bundle = public_stellar_bundle(&fixture);
+    let path = d.join("public-stellar.json");
+    std::fs::write(&path, serde_json::to_vec(&bundle).unwrap()).unwrap();
+    let output = isolated_command(&d)
+        .args([
+            "show",
+            "existing-native-policy",
+            "--network",
+            "solana:devnet",
+            "--json",
+        ])
+        .env("ALLOWIT_STELLAR_BUNDLE", &path)
+        .env("ALLOWIT_STELLAR_SIGNER", "/must-never-be-opened")
+        .env("ALLOWIT_URL", "not-a-server-origin")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("conflicts with the public Stellar wallet binding")
+    );
+    assert!(output.stdout.is_empty());
+    bundle["signingSeed"] = serde_json::json!("must-remain-local");
+    std::fs::write(&path, serde_json::to_vec(&bundle).unwrap()).unwrap();
+    let output = isolated_command(&d)
+        .args(["show", "existing-native-policy", "--json"])
+        .env("ALLOWIT_STELLAR_BUNDLE", &path)
+        .env("ALLOWIT_URL", "not-a-server-origin")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("must not contain signing material"));
+    assert!(output.stdout.is_empty());
+    assert!(!d.join(".allowit").exists());
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn stellar_approval_commands_export_only_public_exact_intent_without_signing() {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let fixture = stellar_approval_fixture();
+    for generic in [false, true] {
+        let d = directory();
+        std::fs::create_dir_all(&d).unwrap();
+        let file = d.join("policy.json");
+        let mut policy = fixture["policy"].clone();
+        policy["signingSeed"] = serde_json::json!("must-remain-local");
+        std::fs::write(&file, serde_json::to_vec(&policy).unwrap()).unwrap();
+        let owner = fixture["intent"]["owner"].as_str().unwrap();
+        let request = fixture["intent"]["requestId"].as_str().unwrap();
+        let mut command = isolated_command(&d);
+        command
+            .env("ALLOWIT_URL", "https://app.allowit.xyz")
+            .env("ALLOWIT_OWNER_KEYPAIR", "/must-never-be-opened")
+            .env("ALLOWIT_STELLAR_SIGNER", "/must-never-be-opened")
+            .env("ALLOWIT_RPC_URL", "http://127.0.0.1:1");
+        if generic {
+            command
+                .args(["policy", "deploy", "--network", "stellar:testnet", "--json"])
+                .env("ALLOWIT_STELLAR_POLICY_FILE", &file)
+                .env("ALLOWIT_OWNER", owner)
+                .env("ALLOWIT_REQUEST_ID", request);
+        } else {
+            command.args([
+                "--network",
+                "stellar:testnet",
+                "wallet",
+                "approve",
+                "--policy-file",
+                file.to_str().unwrap(),
+                "--owner",
+                owner,
+                "--request-id",
+                request,
+            ]);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(10),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let shown: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(shown["state"], "awaiting_owner_approval");
+        assert_eq!(shown["executed"], false);
+        assert_eq!(shown["movesFunds"], false);
+        let url = shown["signingUrl"].as_str().unwrap();
+        let encoded = url.split_once("#allowit-stellar-approval=").unwrap().1;
+        let public: Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).unwrap()).unwrap();
+        assert_eq!(public, fixture["intent"]);
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("must-remain-local"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("must-never-be-opened"));
+        std::fs::remove_dir_all(d).unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn expired_stellar_setup_handoff_keeps_original_bytes_for_browser_recovery() {
+    use allowit_stellar_wallet::{self as sdk, AccountState};
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let d = directory();
+    let journal = d.join(".allowit/stellar-owner-journal");
+    std::fs::create_dir_all(&journal).unwrap();
+    for path in [d.join(".allowit"), journal.clone()] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let state = AccountState {
+        address: sdk::account_for_seed(&[1; 32]),
+        sequence: 10,
+        master_weight: 1,
+        low_threshold: 0,
+        medium_threshold: 0,
+        high_threshold: 0,
+        signers: vec![],
+    };
+    let agent = sdk::account_for_seed(&[2; 32]);
+    let engine = sdk::account_for_seed(&[3; 32]);
+    let id = "cli-expired-stellar-setup-001";
+    let original =
+        sdk::owner::prepare_native_setup(&state, &agent, &engine, id, "stellar:testnet", 100, 1)
+            .unwrap();
+    let path = journal.join(format!("request-{:x}.json", Sha256::digest(id.as_bytes())));
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .unwrap();
+    serde_json::to_writer(file, &original).unwrap();
+    let original_bytes = std::fs::read(&path).unwrap();
+    let output = isolated_command(&d)
+        .args([
+            "wallet",
+            "configure",
+            "--network",
+            "stellar:testnet",
+            "--owner",
+            &state.address,
+            "--agent",
+            &agent,
+            "--engine",
+            &engine,
+            "--request-id",
+            id,
+        ])
+        .env("ALLOWIT_URL", "https://app.allowit.xyz")
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(10),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let shown: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(shown["state"], "owner_intent_expired");
+    assert_eq!(shown["recoveryOnly"], true);
+    assert_eq!(shown["executed"], false);
+    assert_eq!(shown["transactionHash"], original.transaction_hash);
+    let encoded = shown["signingUrl"]
+        .as_str()
+        .unwrap()
+        .split_once("#allowit-stellar-owner=")
+        .unwrap()
+        .1;
+    let recovered: sdk::owner::NativeSetup =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).unwrap()).unwrap();
+    assert_eq!(recovered, original);
+    assert_eq!(std::fs::read(path).unwrap(), original_bytes);
     std::fs::remove_dir_all(d).unwrap();
 }

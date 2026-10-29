@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-  "commit": "2e572a5a9c068891aced4c584664105ba260aca9",
+  "commit": "7ddacd6d6e8399419625dba5705a547faa2ba2fe",
   "submodule": {
     "path": "repos/AllowIt-hq--allowit-sdk",
     "url": "https://github.com/AllowIt-hq/allowit-sdk.git"
@@ -11,7 +11,7 @@
       "package": "allowit-client",
       "version": "0.3.0-dev",
       "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-      "commit": "2e572a5a9c068891aced4c584664105ba260aca9",
+      "commit": "7ddacd6d6e8399419625dba5705a547faa2ba2fe",
       "path": "client",
       "source": null,
       "features": [],
@@ -27,8 +27,9 @@
         ".gitignore": "306fd52e74fca6746e12acc750f232de15e71da917756a1270d74c91f5eb7368",
         "Cargo.lock": "46d70b005ce341db94a11936ca2ed86ab777c9e9d5762f8c0422d698ff7bc029",
         "Cargo.toml": "24d895cba80ef0efc2c8bcd57f09ca2c112a6c60fdb8ffb321542304b7ada9fa",
-        "README.md": "98b66563491cf6b7d7209795325ee1302d59445111efbe5799953536a3f768e9",
+        "README.md": "5912e097a935dfa9be5abe4e27a0a37c97066adee5461e7e873d1307d3aa32a7",
         "examples/deployment_fixture.rs": "4676fbb4a3d5d53dd4937eb251f9d5e8896e401784bd2c4a67f37743b9517277",
+        "examples/stellar_approval_fixture.rs": "f6a61e4b0961adff66e7e0cd8e4488cda8e257acb95c5033aba4b0effd953b2f",
         "src/args.rs": "96f37aea356aab5e81db3857b1b6fcb7285a5c62333576d2a7d21e9168c8cc82",
         "src/client.rs": "99b9b660a0dbff5edf957f14e2ade4ec2d64f798405f6003b0e4f91b7deff38d",
         "src/config.rs": "30e6017dc5ad8a7fa14366c8bd7a10d53fe821ec3972977866b9fe94bb2a954f",
@@ -39,20 +40,23 @@
         "src/gateway_mcp.rs": "3e2a9eb830e515ecba1a9e2279cb57891087ecdaf5b338410c12368c446c6b83",
         "src/gateway_server.rs": "8aab6ee54d8d0a26c26deb4a84675d5d4b389ff5ac25aa6806492fdeadd8ac41",
         "src/handoff.rs": "808024e925d7881c4a81597f4f2f9dbfd4e55fe524ac91b045caa29b8734e9b9",
-        "src/lib.rs": "cdc7c7c17c4180dc8b787cf3c4b56ad83d2c306bf82b529f00fa703f6f1212a6",
+        "src/lib.rs": "184e4813a4c964c13e6f5e94c9952928ffcfab331b24cebe08ab86d6a7d7788d",
         "src/native_audit.rs": "e5983e2d85826dcc73f8806b72fb76d4e00cf978ca76ee3dda38637406102fa2",
         "src/output.rs": "cbd9a5e2bb3fa79fd3d87e4f0ae98060ea72d1b588eef71a5f564d6dc87f32cc",
-        "src/policy-usage.txt": "8d5fcf3a49f1a4ef0497860193cbf4e2f6deccafb14621590185a0bd5a025399",
-        "src/policy.rs": "34579b46b007a59ea137a42b6e6ef18ade1ab1d55411e108faab588aed8771dd",
+        "src/policy-usage.txt": "d650f1b641acdfeef37f57dd4ad0ba7f083476a43501a48e3862879e723ea6cd",
+        "src/policy.rs": "bc593bc0f0f7493516ec7dbac3d904de32dd0239cc6cb0ef8a62fa3672b29c3f",
         "src/policy_native.rs": "cd04bd936e524028d4ea04472dd776c6ada32b0d5abe9d4324486c887a8b561b",
         "src/request.rs": "04e7dd7d0a80a2b82bc992e34e2f7ec184a30c8044d3305fcb67ae7e55b710ad",
-        "src/routing.rs": "eebbdc27e5811752b5473bcf7096e302f6b29a51635bbe36832230d9ec34f698",
+        "src/routing.rs": "ab92d0bfd80b53bfe0f62e5f81a347a01e5ad4caac8fe3035791371db6561af4",
         "src/skill.rs": "534be51067e69535ffe154f4d1177d6434c9c0f8fd6ba36c8b819e7567b3716e",
-        "src/stellar_run.rs": "92de3b5c08da4e312cc6d3b2f6ef8956a3991fdbb2d2dfb3bd4294c7da78e2aa",
-        "src/typed_request.rs": "61144a85048e89f2461f730ec8bd0c3f642d7b8e803cd6e9aeb858c0a4227112",
+        "src/stellar_approval.rs": "b99efdfea335f2bb76daadae8f8fa9f80c117aa8ad0843f5e3780fdf09583b5f",
+        "src/stellar_owner.rs": "4db5e3b8bd1ec27225cf988567b8be06aa77d6a7622248c4674f05f95990bd2c",
+        "src/stellar_run.rs": "f4a58588e086fb2e564172915bffb8083beb76e455b116167f334076b4b27dd5",
+        "src/typed_request.rs": "f54c450c6ffe8eacbce4bb1a1b4c0670a05171da596c7efd16f00cca4a04f347",
         "src/typed_run.rs": "7008bedd79acdeca47e45b675e8b0c6310ed62f8b9957eb9c6560bb54fbba6a7",
-        "src/usage.txt": "f7a69fee0d1d9857e9ddf325a176792d479ed93e9ee42cbce7531149384626c4",
-        "src/wallet.rs": "4d0642e22644b593d810db962524be52bc9954bf264dacd9fb7da9b75c849bf0",
+        "src/usage.txt": "e211075ba0973edb2f3340d70c811a70444a1a552d66e0a61cae5b5d7224c0e5",
+        "src/wallet.rs": "e5a6b3b5fc1fe666645bef6177c969d71a8e5715f5f712d247f7db06f9073e10",
+        "tests/fixtures/stellar-approval.json": "45a58e03dd6eb7672327bea19c4a0591e28443256a9f544ddf43be3310272b5e",
         "tests/fixtures/typed/execution-envelope-v1.json": "92c8698b87e98dc18ee9ae8c2bfee726be2b25df23fcaa8d26eee8d7a5b214c8",
         "tests/fixtures/typed/operation-vector-v1.json": "30f60f931bdcdeb648164fc906132bd244823d7353731b8c3a85fc61e76d435a"
       },
@@ -62,7 +66,7 @@
       },
       "licenses": {
         "LICENSE": "750548edc096b7599f0aa6816b3a6dfb983d75ba81bc8c4925f968ef048a4734",
-        "THIRD_PARTY_NOTICES.md": "a207e6756e8334a1b154b8ccfca2effce31f1d05673b49a9d7ce0f8231adb14c",
+        "THIRD_PARTY_NOTICES.md": "ed885d2d84f90114c3a422a079c1e4c74effbbd4825a42cb46039d8a05fcdfa4",
         "licenses/Aeneas-Apache-2.0.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
       }
     },
@@ -100,7 +104,7 @@
       "package": "allowit-native",
       "version": "0.1.0",
       "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-      "commit": "2e572a5a9c068891aced4c584664105ba260aca9",
+      "commit": "7ddacd6d6e8399419625dba5705a547faa2ba2fe",
       "path": "native-rust",
       "source": null,
       "features": [],
@@ -135,7 +139,7 @@
       },
       "licenses": {
         "LICENSE": "750548edc096b7599f0aa6816b3a6dfb983d75ba81bc8c4925f968ef048a4734",
-        "THIRD_PARTY_NOTICES.md": "a207e6756e8334a1b154b8ccfca2effce31f1d05673b49a9d7ce0f8231adb14c",
+        "THIRD_PARTY_NOTICES.md": "ed885d2d84f90114c3a422a079c1e4c74effbbd4825a42cb46039d8a05fcdfa4",
         "licenses/Aeneas-Apache-2.0.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
       }
     },
@@ -143,7 +147,7 @@
       "package": "allowit-sdk",
       "version": "0.1.0",
       "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-      "commit": "2e572a5a9c068891aced4c584664105ba260aca9",
+      "commit": "7ddacd6d6e8399419625dba5705a547faa2ba2fe",
       "path": "",
       "source": null,
       "features": [
@@ -229,7 +233,7 @@
       },
       "licenses": {
         "LICENSE": "750548edc096b7599f0aa6816b3a6dfb983d75ba81bc8c4925f968ef048a4734",
-        "THIRD_PARTY_NOTICES.md": "a207e6756e8334a1b154b8ccfca2effce31f1d05673b49a9d7ce0f8231adb14c",
+        "THIRD_PARTY_NOTICES.md": "ed885d2d84f90114c3a422a079c1e4c74effbbd4825a42cb46039d8a05fcdfa4",
         "licenses/Aeneas-Apache-2.0.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
       }
     },
@@ -264,7 +268,7 @@
       "package": "allowit-stellar-wallet",
       "version": "0.1.0",
       "repository": "https://github.com/AllowIt-hq/allowit-sdk",
-      "commit": "2e572a5a9c068891aced4c584664105ba260aca9",
+      "commit": "7ddacd6d6e8399419625dba5705a547faa2ba2fe",
       "path": "stellar-rust",
       "source": null,
       "features": [],
@@ -276,7 +280,9 @@
         "Cargo.lock": "d001ebeb936382e681095fe4b82c7d5e4cac7dda729cb5fb60c7bbdf95117ae3",
         "Cargo.toml": "6e5aec009731e681c2657a680e1b3c6772d79c29c86237bb119065f06a46b037",
         "README.md": "88ee86b6dc38c046450e738fab7c422ec271fb6699d4cbeb4f806a475284a26c",
-        "src/lib.rs": "59c3f63b2461bd29da328137f12992e9285db4b384b40b5780666464681c0c28",
+        "examples/native_owner_fixture.rs": "76eb9bb887250c04a1bfd77e461c6586ab51cbfd52cd5e53ecb91ad9eea2dde0",
+        "src/lib.rs": "98209088143de75b53b8454a0636c98e29998d9a59f14eca80b7744da648bec4",
+        "src/owner.rs": "a6e3508c146648f411f5bc0faf46c077eac18ff1c930f4f41e9c7a7bb5fe2196",
         "src/rpc.rs": "ad0b926c88bcaf8a6640a32632cdfa601d8761bee6be8ae16154e39828ca1678",
         "tests/lifecycle.rs": "e5777dc36543675d5cef3a549cd2ab56748275b3daf34ba72d710bb68a33c84e"
       },
@@ -286,7 +292,7 @@
       },
       "licenses": {
         "LICENSE": "750548edc096b7599f0aa6816b3a6dfb983d75ba81bc8c4925f968ef048a4734",
-        "THIRD_PARTY_NOTICES.md": "a207e6756e8334a1b154b8ccfca2effce31f1d05673b49a9d7ce0f8231adb14c",
+        "THIRD_PARTY_NOTICES.md": "ed885d2d84f90114c3a422a079c1e4c74effbbd4825a42cb46039d8a05fcdfa4",
         "licenses/Aeneas-Apache-2.0.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
       }
     },
