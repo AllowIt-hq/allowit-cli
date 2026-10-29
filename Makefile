@@ -13,6 +13,7 @@ test:
 	python3 scripts/package-licenses.py
 	python3 scripts/test-package-licenses.py
 	python3 scripts/test-binary-provenance.py
+	python3 scripts/test-vendor-graph.py
 	python3 scripts/test-tempo-sdk-review.py
 	$(CARGO) fmt --check
 	$(CARGO) clippy --locked --all-targets -- -D warnings

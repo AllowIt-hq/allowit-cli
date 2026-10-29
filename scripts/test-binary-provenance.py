@@ -734,6 +734,7 @@ class ProvenanceTests(unittest.TestCase):
                     self.manifest()
 
 
+@unittest.skipIf(provenance.native_sdk.facade(fixture.ROOT), "Schema 1 resolution belongs to the retained historical fixture; schema 2 has graph tests")
 class ResolvedTests(unittest.TestCase):
     """Cargo's actual resolution in the real checkout, not only the bound files."""
 

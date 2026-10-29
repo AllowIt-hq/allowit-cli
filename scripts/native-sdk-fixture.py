@@ -27,10 +27,11 @@ def commit(repo, message):
 
 def create(repo, files):
     """Copy parent FILES into REPO and add the SDK submodule at its pinned commit."""
-    pin = json.loads((ROOT / 'vendor/native-sdk.json').read_text())['commit']
+    baseline = ROOT / 'tests/fixtures/provenance-v1'
+    pin = json.loads((baseline / 'vendor/native-sdk.json').read_text())['commit']
     repo.mkdir()
     for name in files:
-        source, target = ROOT / name, repo / name
+        source, target = (baseline / name if (baseline / name).exists() else ROOT / name), repo / name
         target.parent.mkdir(parents=True, exist_ok=True)
         if source.is_dir():
             shutil.copytree(source, target)

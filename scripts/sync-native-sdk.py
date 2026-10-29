@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Pin, update and verify the canonical SDK Git submodule; no credentials.
 
-One gitlink supplies five Cargo path dependencies: the native Rust crate, its
-PaySH interface crate, the root policy SDK crate with canonical typed workflow
-types, the Tempo execution verifier and the Stellar wallet verifier.
+The CLI uses one SDK client facade. Schema 2 binds its transitive SDK core and
+vendor crates to canonical exact Git revisions, immutable source inputs,
+features and notices. Historical schema 1 records remain verifiable.
 
 Builds, provenance and license packaging share `verify`. `update` checks out an
 exact SDK commit; `pin` records the checked-out commit. Both stage the gitlink
@@ -11,11 +11,13 @@ and metadata for review; neither commits.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
+from types import SimpleNamespace
 
 SUBMODULE = 'repos/AllowIt-hq--allowit-sdk'
 CRATE = 'native-rust'
@@ -315,12 +317,29 @@ def checkout(root):
     return sdk
 
 
+def graph_module():
+    spec = importlib.util.spec_from_file_location('vendor_graph', Path(__file__).with_name('vendor-graph.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def facade(root):
+    return re.search(r'^allowit-client\s*=', (Path(root) / 'Cargo.toml').read_text(), re.M) is not None
+
+
+def package_roots(root):
+    return graph_module().source_roots(Path(root).resolve(), SimpleNamespace(**globals()))
+
+
 def verify(root, allow_review=False):
     """Check the parent pin, clean submodule source, license bytes and the Cargo
     discovery inputs from the SDK root up to, not including, the CLI root; return the metadata."""
     root = Path(root).resolve()
     if os.environ.get('ALLOWIT_TEMPO_REVIEW_MANIFEST') and not allow_review:
         raise ValueError('Tempo worktree review cannot produce release provenance or packaging')
+    if json.loads((root / METADATA).read_text()).get('schemaVersion') == 2:
+        return graph_module().verify(root, SimpleNamespace(**globals()))
     sdk = json.loads((root / METADATA).read_text())
     commit = sdk.get('commit')
     review = tempo_review(root)
@@ -413,6 +432,8 @@ def describe(root):
     git status (assume-unchanged, skip-worktree) is never recorded under the
     commit's clean gitlink.
     """
+    if facade(root):
+        return graph_module().describe(root, SimpleNamespace(**globals()))
     sdk = checkout(root)
     commit = git(sdk, 'rev-parse', 'HEAD').strip()
     crate = sdk / CRATE
@@ -468,6 +489,8 @@ def resolved(root, *config):
     exactly the pinned features. CONFIG passes extra `--config` values (tests).
     """
     root = Path(root).resolve()
+    if facade(root):
+        return graph_module().resolved(root, SimpleNamespace(**globals()), *config)
     args = ['cargo', 'metadata', '--locked', '--format-version', '1']
     for value in config:
         args += ['--config', value]

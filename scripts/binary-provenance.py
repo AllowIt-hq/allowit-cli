@@ -49,7 +49,7 @@ def manifest(repo, binary, target):
     release = json.loads((repo / native_sdk.SUBMODULE / native_sdk.CRATE / "src/release.json").read_text())
     version = re.search(r'^version = "([^"]+)"$', (repo / "Cargo.toml").read_text(), re.M)[1]
     value = {
-        "schemaVersion": 1,
+        "schemaVersion": 2 if sdk.get("schemaVersion") == 2 else 1,
         "kind": "rust-native",
         "cli": {
             "repository": "https://github.com/AllowIt-hq/allowit-cli",

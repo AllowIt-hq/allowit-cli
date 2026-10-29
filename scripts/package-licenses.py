@@ -59,7 +59,10 @@ def validate(root):
             if file.is_symlink() or hashlib.sha256(file.read_bytes()).hexdigest() != item['sha256']:
                 raise ValueError('Notice file is missing or changed')
         found[identity] = record
-    for label, lock in [('Current', root / 'Cargo.lock'), ('SDK Tempo', root / native_sdk.SUBMODULE / native_sdk.TEMPO_CRATE / 'Cargo.lock')]:
+    locks = [('Current', root / 'Cargo.lock')]
+    if sdk.get('schemaVersion') != 2:
+        locks.append(('SDK Tempo', root / native_sdk.SUBMODULE / native_sdk.TEMPO_CRATE / 'Cargo.lock'))
+    for label, lock in locks:
         for package in lock_packages(lock.read_text()):
             if package.get('source', '').startswith('registry+'):
                 record = found.get((package['name'], package['version']))
@@ -83,6 +86,16 @@ def package(root, dist):
     dist.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(root / 'LICENSE', dist / 'LICENSE')
     shutil.copytree(root / 'THIRD_PARTY_LICENSES', dist / 'THIRD_PARTY_LICENSES', dirs_exist_ok=True)
+    if sdk.get('schemaVersion') == 2:
+        roots = native_sdk.package_roots(root)
+        for package in sdk['packages']:
+            # Different revisions can carry distinct notices. Keep both immutable copies.
+            destination = package['package'] + '-' + package['commit']
+            for name in package['licenses']:
+                target = dist / 'THIRD_PARTY_LICENSES' / destination / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(roots[package['package']] / name, target)
+        return
     # SDK notices come from the verified submodule's upstream root, byte for byte.
     for name in sdk['licenses']:
         target = dist / 'THIRD_PARTY_LICENSES/AllowIt-sdk' / name

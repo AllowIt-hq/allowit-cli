@@ -18,6 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - battery: vendor-graph
+            script: scripts/test-vendor-graph.py
           - battery: tempo-review-boundary
             script: scripts/test-tempo-sdk-review.py
     steps:
