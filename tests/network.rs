@@ -505,6 +505,30 @@ fn expired_stellar_setup_handoff_keeps_original_bytes_for_browser_recovery() {
     let recovered: sdk::owner::NativeSetup =
         serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).unwrap()).unwrap();
     assert_eq!(recovered, original);
-    assert_eq!(std::fs::read(path).unwrap(), original_bytes);
+    assert_eq!(std::fs::read(&path).unwrap(), original_bytes);
+    let replacement_agent = sdk::account_for_seed(&[4; 32]);
+    let conflict = isolated_command(&d)
+        .args([
+            "wallet",
+            "configure",
+            "--network",
+            "stellar:testnet",
+            "--owner",
+            &state.address,
+            "--agent",
+            &replacement_agent,
+            "--engine",
+            &engine,
+            "--request-id",
+            id,
+        ])
+        .env("ALLOWIT_URL", "https://app.allowit.xyz")
+        .output()
+        .unwrap();
+    assert!(!conflict.status.success());
+    assert_ne!(conflict.status.code(), Some(10));
+    assert!(conflict.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&conflict.stderr).contains("already binds another intent"));
+    assert_eq!(std::fs::read(&path).unwrap(), original_bytes);
     std::fs::remove_dir_all(d).unwrap();
 }
