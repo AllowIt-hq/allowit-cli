@@ -61,7 +61,15 @@ fn compare(args: &[&str], env: &BTreeMap<&str, String>) {
     } else {
         assert_eq!(old.stdout, new.stdout, "stdout {args:?}");
     }
-    assert_eq!(old.stderr, new.stderr, "stderr {args:?}");
+    if args.is_empty() {
+        assert!(
+            new.stderr.starts_with(&old.stderr),
+            "legacy usage prefix changed"
+        );
+        assert!(String::from_utf8_lossy(&new.stderr).contains("--network CAIP2"));
+    } else {
+        assert_eq!(old.stderr, new.stderr, "stderr {args:?}");
+    }
 }
 #[test]
 fn validation_and_help_match_reference() {
