@@ -1,6 +1,6 @@
 # Service commands
 
-`allowit call` uses the selected AllowIt account. The backend owns service adapters,
+`allowit call` uses the selected Allowit account. The backend owns service adapters,
 connections, credentials and payment preparation.
 
 ```sh
@@ -45,11 +45,11 @@ allowit call status OPERATION_ID --account NAME
 
 After an uncertain response, inspect that operation. Keep its original ID.
 Settlement and resource delivery have separate states. Exit 12 includes pending delivery
-after settlement. `--json` returns the complete AllowIt response.
+after settlement. `--json` returns the complete Allowit response.
 
 ## HTTP tools and agents
 
-HTTP commands normalize requests and send them to the AllowIt backend:
+HTTP commands normalize requests and send them to the Allowit backend:
 
 ```sh
 allowit curl https://api.example/data -X POST \
@@ -71,7 +71,7 @@ connection. They use subscription authentication. They preserve native model cho
 permissions, approval gates, standard streams and exit codes.
 They do not change saved native settings.
 
-Put AllowIt flags before `--` and native arguments after it:
+Put Allowit flags before `--` and native arguments after it:
 
 ```sh
 allowit --sandbox codex -- exec --sandbox read-only --model MODEL 'Inspect the project'

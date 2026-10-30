@@ -46,7 +46,7 @@ func classify(r map[string]any, command string) result {
 	case r["executed"] == true || status == "settled":
 		return result{"settled", exitOK, "The transfer is confirmed on chain."}
 	case outcome == "awaiting_input":
-		return result{"awaiting_input", exitAwaitingInput, "The owner must answer this question in AllowIt. Stop, report the prompt, then check again with `allowit status`."}
+		return result{"awaiting_input", exitAwaitingInput, "The owner must answer this question in Allowit. Stop, report the prompt, then check again with `allowit status`."}
 	case outcome == "pending":
 		return result{"pending", exitPending, "The policy is still evaluating. Check again with `allowit status`."}
 	case outcome != "pass":
@@ -56,7 +56,7 @@ func classify(r map[string]any, command string) result {
 	case status == "ready" && kind == "judgment":
 		return result{"passed", exitOK, "The policy permits this exact request. Nothing was spent or reserved."}
 	case status == "ready" && kind == "transaction":
-		return result{"owner_signature", exitOwnerSignature, "The policy passed. The owner must review and sign this transfer in AllowIt; nothing has been paid yet."}
+		return result{"owner_signature", exitOwnerSignature, "The policy passed. The owner must review and sign this transfer in Allowit; nothing has been paid yet."}
 	}
 	return result{"ready", exitOwnerSignature, "The policy passed, but this request is not complete: nothing is confirmed as recorded or paid. Check again with `allowit status`."}
 }
@@ -77,23 +77,23 @@ var knownStates = map[string]map[string]bool{
 // With netUnknown the network checks cannot run; see needsNetwork.
 func checkResult(r map[string]any, command string, net netKind) error {
 	if r == nil {
-		return errors.New("AllowIt returned an empty result")
+		return errors.New("Allowit returned an empty result")
 	}
 	outcome, ok := r["outcome"].(string)
 	if !ok {
-		return errors.New("AllowIt returned a result without an outcome")
+		return errors.New("Allowit returned a result without an outcome")
 	}
 	for _, k := range []string{"status", "kind", "requestId"} {
 		if v := r[k]; v != nil {
 			if _, ok := v.(string); !ok {
-				return fmt.Errorf("AllowIt returned a result with an invalid %s", k)
+				return fmt.Errorf("Allowit returned a result with an invalid %s", k)
 			}
 		}
 	}
 	for _, k := range []string{"executed", "localRecorded"} {
 		if v := r[k]; v != nil {
 			if _, ok := v.(bool); !ok {
-				return fmt.Errorf("AllowIt returned a result with an invalid %s", k)
+				return fmt.Errorf("Allowit returned a result with an invalid %s", k)
 			}
 		}
 	}
@@ -102,24 +102,24 @@ func checkResult(r map[string]any, command string, net netKind) error {
 	states, ok := knownStates[outcome]
 	switch {
 	case !ok:
-		return fmt.Errorf("AllowIt returned an unknown outcome %q", outcome)
+		return fmt.Errorf("Allowit returned an unknown outcome %q", outcome)
 	case !states[status]:
-		return fmt.Errorf("AllowIt returned outcome %q with status %q", outcome, status)
+		return fmt.Errorf("Allowit returned outcome %q with status %q", outcome, status)
 	// executed and localRecorded must agree with the status, never override it.
 	case executed != (status == "settled"):
-		return fmt.Errorf("AllowIt returned status %q with executed %v", status, r["executed"])
+		return fmt.Errorf("Allowit returned status %q with executed %v", status, r["executed"])
 	case recorded != (status == "recorded"):
-		return fmt.Errorf("AllowIt returned status %q with localRecorded %v", status, r["localRecorded"])
+		return fmt.Errorf("Allowit returned status %q with localRecorded %v", status, r["localRecorded"])
 	case net == netLocal && (status == "settled" || status == "submitted"):
-		return errors.New("AllowIt reported an on-chain transaction for a Local dev policy")
+		return errors.New("Allowit reported an on-chain transaction for a Local dev policy")
 	case net == netWallet && status == "recorded":
-		return errors.New("AllowIt reported a mock recording for a wallet policy")
+		return errors.New("Allowit reported a mock recording for a wallet policy")
 	case kind != "" && kind != "judgment" && kind != "transaction":
-		return fmt.Errorf("AllowIt returned an unknown kind %q", kind)
+		return fmt.Errorf("Allowit returned an unknown kind %q", kind)
 	case command == "eval" && kind == "transaction", command == "exec" && kind == "judgment":
-		return fmt.Errorf("AllowIt returned a %q result for %s", kind, command)
+		return fmt.Errorf("Allowit returned a %q result for %s", kind, command)
 	case (command == "eval" || kind == "judgment") && (status == "settled" || status == "recorded" || status == "submitted"):
-		return errors.New("AllowIt reported a spend for a permission check")
+		return errors.New("Allowit reported a spend for a permission check")
 	}
 	return nil
 }

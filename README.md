@@ -1,6 +1,6 @@
 # allowit
 
-`allowit` is a native Rust CLI for AllowIt policies. HTTP commands send agent requests through the AllowIt service. Commands use the pinned Rust SDK client facade for orchestration, vendor selection, receipt validation and recovery. Agent keys are generated and retained locally. The CLI cannot bypass the policy, owner approval or server request schema.
+`allowit` is a native Rust CLI for Allowit policies. HTTP commands send agent requests through the Allowit service. Commands use the pinned Rust SDK client facade for orchestration, vendor selection, receipt validation and recovery. Agent keys are generated and retained locally. The CLI cannot bypass the policy, owner approval or server request schema.
 
 [Service commands](docs/services.md) cover direct account calls, policy revisions, HTTP tools,
 native Claude/Codex sessions, MCP, account controls and registered seller resources.
@@ -15,7 +15,7 @@ The CLI refuses unsupported platforms before loading keys or creating policy sta
 Keep existing journals for recovery. Do not regenerate or resubmit an uncertain operation.
 
 ```sh
-git clone --recurse-submodules https://github.com/AllowIt-hq/allowit-cli.git
+git clone --recurse-submodules https://github.com/allowit-hq/allowit-cli.git
 cd allowit-cli
 python3 scripts/sync-native-sdk.py verify
 cargo build --locked --release
@@ -206,7 +206,7 @@ allowit paysh status POLICY OPERATION_ID
 
 `call` sends `POST /api/paysh/call` with `{policyId, operationId, serviceId, input}` and the capability as bearer; `status` sends `POST /api/paysh/status` with `{policyId, operationId}`; `services` sends `GET /api/paysh/catalog` without credentials and lists either the public catalog's `providers` or a cooperating backend's `{profile: "cooperating-v1", services}`; a cooperating price is shown as test-token units only on `solana:testnet`, never as USD or USDC, and a malformed list exits 3. Each request is sent once with no redirect. `ALLOWIT_URL` must be an HTTPS origin, or HTTP on loopback. `INPUT_JSON` is limited to 4096 bytes and replies to 1 MiB. Payment and delivery are printed separately; `--json` adds `state` and `exitCode` to the server reply.
 
-Exits: 0 only when the API response was delivered; 12 pending (payment or delivery not complete, including `awaiting_input`, where the owner must answer in AllowIt Requests, and `owner_approved`, a signed Yes for this original request only that establishes no payment; keep the same `OPERATION_ID`); 20 failed, denied or expired, with no delivery (`expired` means the answer-and-start deadline passed; it is not an owner denial); 5 unknown (network or server failure, redirect, unreadable or mismatched reply, HTTP 409, a `status` that finds no operation, operation status `unknown`/`settlement_unknown`, a failed, denied or expired operation with any receipt other than a swap, or an expired operation with a signature that has no receipt: the operation remains unresolved and payment may have been sent, neither failed nor delivered); 2 usage; 3 configuration or auth. After exit 5, never use a new `OPERATION_ID` for the same call: run the printed `allowit paysh status` command or rerun the identical call. The capability is redacted from all output.
+Exits: 0 only when the API response was delivered; 12 pending (payment or delivery not complete, including `awaiting_input`, where the owner must answer in Allowit Requests, and `owner_approved`, a signed Yes for this original request only that establishes no payment; keep the same `OPERATION_ID`); 20 failed, denied or expired, with no delivery (`expired` means the answer-and-start deadline passed; it is not an owner denial); 5 unknown (network or server failure, redirect, unreadable or mismatched reply, HTTP 409, a `status` that finds no operation, operation status `unknown`/`settlement_unknown`, a failed, denied or expired operation with any receipt other than a swap, or an expired operation with a signature that has no receipt: the operation remains unresolved and payment may have been sent, neither failed nor delivered); 2 usage; 3 configuration or auth. After exit 5, never use a new `OPERATION_ID` for the same call: run the printed `allowit paysh status` command or rerun the identical call. The capability is redacted from all output.
 
 ## States and exit codes
 
@@ -215,9 +215,9 @@ Exits: 0 only when the API response was delivered; 12 pending (payment or delive
 | 0 | `passed` | eval: the policy permits the request. |
 | 0 | `recorded` | Local dev exec: mock action recorded against the budget; no funds moved. |
 | 0 | `settled` | Wallet transfer confirmed on chain. |
-| 10 | `owner_signature` | Wallet transaction passed (or was submitted); the owner must sign in AllowIt or the network must confirm. |
+| 10 | `owner_signature` | Wallet transaction passed (or was submitted); the owner must sign in Allowit or the network must confirm. |
 | 10 | `ready` | Passed but the server did not say whether it is a judgment or a transaction; not complete. |
-| 11 | `awaiting_input` | The owner must answer the printed question in AllowIt. |
+| 11 | `awaiting_input` | The owner must answer the printed question in Allowit. |
 | 12 | `pending` | Still evaluating after `--wait`. |
 | 20 | `denied` | The policy refused; the reason is printed. |
 | 2 | usage | Invalid flags or input; nothing sent. |
@@ -232,7 +232,7 @@ The configured token is redacted in full from all output, whatever its length. I
 
 ## API used
 
-HTTP action commands use `GET /api/harness/{owner}/{policy}/skill` and `POST` routes for `judge`, `transactions` and `status`, with the policy-scoped bearer token. The frontend proxies this public API to the Rust backend in `AllowIt-hq/allowit-engine/crates/server/` (the engine's root `server/` is its deployment wrapper). The CLI does not link backend or engine crates.
+HTTP action commands use `GET /api/harness/{owner}/{policy}/skill` and `POST` routes for `judge`, `transactions` and `status`, with the policy-scoped bearer token. The frontend proxies this public API to the Rust backend in `allowit-hq/allowit-engine/crates/server/` (the engine's root `server/` is its deployment wrapper). The CLI does not link backend or engine crates.
 
 The HTTP commands report server states and preserve owner approval. Native `policy execute` uses the executor's local key plus the trusted server authority signature and cannot sign owner operations. Owner withdrawal and closure never depend on the executor, authority, or semantic provider.
 

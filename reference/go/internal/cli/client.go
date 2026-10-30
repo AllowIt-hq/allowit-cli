@@ -25,7 +25,7 @@ type apiError struct {
 	Message string
 }
 
-func (e *apiError) Error() string { return fmt.Sprintf("AllowIt returned HTTP %d: %s", e.Status, e.Message) }
+func (e *apiError) Error() string { return fmt.Sprintf("Allowit returned HTTP %d: %s", e.Status, e.Message) }
 
 // uncertainError means the request may or may not have been processed.
 type uncertainError struct{ Err error }
@@ -33,7 +33,7 @@ type uncertainError struct{ Err error }
 func (e *uncertainError) Error() string { return e.Err.Error() }
 
 // configError means nothing was processed because the connection itself is
-// misconfigured (TLS trust, redirect), or AllowIt described a different
+// misconfigured (TLS trust, redirect), or Allowit described a different
 // policy, owner or route than the configured ones.
 type configError struct{ Err error }
 
@@ -110,7 +110,7 @@ func (c *client) call(method, action string, body []byte, out any) error {
 			continue
 		}
 		if status >= 300 && status < 400 {
-			err := fmt.Errorf("AllowIt answered with a redirect (HTTP %d); check ALLOWIT_URL", status)
+			err := fmt.Errorf("Allowit answered with a redirect (HTTP %d); check ALLOWIT_URL", status)
 			if method != "GET" {
 				// A POST may have been processed before the redirect.
 				return &uncertainError{err}
@@ -127,7 +127,7 @@ func (c *client) call(method, action string, body []byte, out any) error {
 		d := json.NewDecoder(bytes.NewReader(data))
 		d.UseNumber()
 		if err := d.Decode(out); err != nil || d.Decode(new(any)) != io.EOF {
-			return &uncertainError{errors.New("AllowIt returned a response that is not valid JSON")}
+			return &uncertainError{errors.New("Allowit returned a response that is not valid JSON")}
 		}
 		c.resent = processed
 		return nil
@@ -148,7 +148,7 @@ func (c *client) once(method, action string, body []byte) (int, []byte, error) {
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.cfg.route(action), reader)
 	if err != nil {
-		return 0, nil, &configError{errors.New("could not build the AllowIt request")}
+		return 0, nil, &configError{errors.New("could not build the Allowit request")}
 	}
 	req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
 	req.Header.Set("Accept", "application/json")
@@ -164,15 +164,15 @@ func (c *client) once(method, action string, body []byte) (int, []byte, error) {
 		if errors.As(err, &cert) || errors.As(err, &unknown) || errors.As(err, &hostname) {
 			return 0, nil, &configError{errors.New("TLS certificate for ALLOWIT_URL is not trusted")}
 		}
-		return 0, nil, &uncertainError{fmt.Errorf("network error talking to AllowIt: %v", err)}
+		return 0, nil, &uncertainError{fmt.Errorf("network error talking to Allowit: %v", err)}
 	}
 	defer res.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(res.Body, maxResponse+1))
 	if err != nil {
-		return 0, nil, &uncertainError{fmt.Errorf("network error reading the AllowIt response: %v", err)}
+		return 0, nil, &uncertainError{fmt.Errorf("network error reading the Allowit response: %v", err)}
 	}
 	if len(data) > maxResponse {
-		return 0, nil, &uncertainError{errors.New("AllowIt response exceeded the 2 MB limit")}
+		return 0, nil, &uncertainError{errors.New("Allowit response exceeded the 2 MB limit")}
 	}
 	return res.StatusCode, data, nil
 }

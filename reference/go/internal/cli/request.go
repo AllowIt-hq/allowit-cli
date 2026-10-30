@@ -116,7 +116,7 @@ func buildBody(kind string, f requestFlags, s *Skill, stdin io.Reader) (*Body, e
 	asset := m[1]
 	rails := s.rails()
 	if len(rails) == 0 {
-		return nil, usagef("AllowIt published no rails for this policy; send a plain USDC request with --amount and --action, without --rail and --op")
+		return nil, usagef("Allowit published no rails for this policy; send a plain USDC request with --amount and --action, without --rail and --op")
 	}
 	assets, ok := rails[f.rail]
 	if !ok {
@@ -313,7 +313,7 @@ func runtimeContext(raw []byte) (json.RawMessage, error) {
 					return fmt.Errorf("repeats the field %q", key)
 				}
 				if top && key == "allowitExecution" {
-					return errors.New("must not contain allowitExecution; AllowIt supplies it")
+					return errors.New("must not contain allowitExecution; Allowit supplies it")
 				}
 				seen[key] = true
 				if count++; count > 128 {

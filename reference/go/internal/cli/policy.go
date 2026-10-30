@@ -13,7 +13,7 @@ import (
 	"syscall"
 )
 
-const policyUsage = `allowit policy runs the owner's policy lifecycle through the AllowIt SDK CLI.
+const policyUsage = `allowit policy runs the owner's policy lifecycle through the Allowit SDK CLI.
 
 The SDK CLI (Node 22) does the work: it generates the pinned Rust policy and its parameters,
 signs with the owner's key, keeps its journal and talks to the network. This
@@ -184,7 +184,7 @@ func (a App) sdkCLI() (string, error) {
 	}
 	p := filepath.Join(filepath.Dir(self), "native-sdk", "cli.mjs")
 	if !regularFile(p) {
-		return "", &configError{fmt.Errorf("the AllowIt SDK CLI is not installed at %s; set ALLOWIT_SDK_CLI to the absolute path of the SDK's native/cli.mjs", p)}
+		return "", &configError{fmt.Errorf("the Allowit SDK CLI is not installed at %s; set ALLOWIT_SDK_CLI to the absolute path of the SDK's native/cli.mjs", p)}
 	}
 	return p, nil
 }
@@ -276,7 +276,7 @@ func (a App) policy(args []string, out, errOut printer) (int, error) {
 	}
 	code, err := run(Command{Path: node, Args: argv, Stdin: a.Stdin, Stdout: a.Stdout, Stderr: a.Stderr})
 	if err != nil {
-		return 0, &configError{fmt.Errorf("cannot run the AllowIt SDK CLI with %s (set ALLOWIT_NODE to a Node 22 executable): %v", node, err)}
+		return 0, &configError{fmt.Errorf("cannot run the Allowit SDK CLI with %s (set ALLOWIT_NODE to a Node 22 executable): %v", node, err)}
 	}
 	if code != 0 {
 		errOut.printf("allowit: policy %s: the SDK CLI exited with status %d\n", name, code)

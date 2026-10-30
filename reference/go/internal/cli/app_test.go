@@ -28,7 +28,7 @@ const (
 	solanaAccount   = "11111111111111111111111111111111"
 )
 
-// fakeHarness mimics the AllowIt harness routes: bearer binding, strict body
+// fakeHarness mimics the Allowit harness routes: bearer binding, strict body
 // decoding, requestId idempotency (409 on changed details) and status lookups.
 // Foreign-process parity runs have no Go transport channel to establish the
 // fixture setup/response happens-before edge. Serialize fixture requests and
@@ -186,7 +186,7 @@ func (f *fakeHarness) skill(base string) map[string]any {
 		endpoints[a] = base + "/api/harness/" + owner + "/" + policyID + "/" + a
 	}
 	s := map[string]any{
-		"name": "AllowIt policy Research budget", "title": "Research budget", "policyId": policyID, "owner": owner, "status": "active",
+		"name": "Allowit policy Research budget", "title": "Research budget", "policyId": policyID, "owner": owner, "status": "active",
 		"network": f.network, "revision": 3 + f.revision, "sourceHash": fmt.Sprintf("abcdef0123456789abcdef%d", f.revision), "language": "allowit-rust-v1",
 		"originalIntent": "Buy original research datasets.\n\nRevision request:\nNever above 5 USDC.",
 		"policy":         "pub async fn evaluate(ctx:&Context)->PolicyResult{Ok(())}",
@@ -574,7 +574,7 @@ func TestAcceptedExecWithUnreadableStatusIsUncertain(t *testing.T) {
 		srv := harnessWith(t, f, func(action string) (int, string, bool) { return status.code, status.body, action == "status" })
 		for _, extra := range [][]string{nil, {"--json"}} {
 			r := runCLI(t, env(srv), append([]string{"exec", policyID, "--amount", "1", "--action", "research", "--request-id", "order-0007"}, extra...)...)
-			if r.code != exitUncertain || strings.Contains(r.stdout, "state:") || !strings.Contains(r.stderr, "AllowIt accepted exec request order-0007 (server requestId srv-pending-7)") ||
+			if r.code != exitUncertain || strings.Contains(r.stdout, "state:") || !strings.Contains(r.stderr, "Allowit accepted exec request order-0007 (server requestId srv-pending-7)") ||
 				!strings.Contains(r.stderr, "allowit status --wait 60s -- "+policyID+" srv-pending-7") || !strings.Contains(r.stderr, "--request-id order-0007") || !strings.Contains(r.stderr, "Do not retry with a new request ID") {
 				t.Fatalf("%d %s: %+v", status.code, status.body, r)
 			}
@@ -1059,7 +1059,7 @@ func TestCustomerSkillShape(t *testing.T) {
 	f, srv := newFake(t, "solana:devnet")
 	f.editSkill = customerSkill
 	s := runCLI(t, env(srv), "show", policyID)
-	for _, want := range []string{"AllowIt policy: Customer research\n", "Policy:     " + policyID + " (from ALLOWIT_TOKEN; AllowIt did not report the policy ID)", "solana:devnet (every transfer needs the owner's wallet signature)", "Rails:      solana (USDC)"} {
+	for _, want := range []string{"Allowit policy: Customer research\n", "Policy:     " + policyID + " (from ALLOWIT_TOKEN; Allowit did not report the policy ID)", "solana:devnet (every transfer needs the owner's wallet signature)", "Rails:      solana (USDC)"} {
 		if s.code != 0 || !strings.Contains(s.stdout, want) {
 			t.Fatalf("missing %q in %+v", want, s)
 		}

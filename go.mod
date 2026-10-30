@@ -1,3 +1,3 @@
-module github.com/AllowIt-hq/allowit-cli
+module github.com/allowit-hq/allowit-cli
 
 go 1.24

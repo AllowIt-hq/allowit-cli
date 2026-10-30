@@ -1,10 +1,10 @@
-// Command allowit sends actions through an AllowIt policy.
+// Command allowit sends actions through an Allowit policy.
 package main
 
 import (
 	"os"
 
-	"github.com/AllowIt-hq/allowit-cli/internal/cli"
+	"github.com/allowit-hq/allowit-cli/internal/cli"
 )
 
 func main() {

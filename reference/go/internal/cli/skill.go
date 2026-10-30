@@ -93,7 +93,7 @@ var (
 	executions = map[string]netKind{"mock": netLocal, "owner_signed": netWallet}
 )
 
-// unsupportedError means AllowIt described the policy in a way this CLI cannot
+// unsupportedError means Allowit described the policy in a way this CLI cannot
 // act on safely (unknown network, profile or contract version). Nothing was sent.
 type unsupportedError struct{ Err error }
 
@@ -108,20 +108,20 @@ func unsupportedf(format string, a ...any) error {
 // configError; an unknown network or profile is an unsupportedError.
 func (s *Skill) check(cfg *Config) error {
 	if s.Owner != "" && s.Owner != cfg.Owner || s.PolicyID != "" && s.PolicyID != cfg.Policy {
-		return &configError{fmt.Errorf("AllowIt described policy %s of owner %s, not the policy in ALLOWIT_TOKEN", orUnset(s.PolicyID), orUnset(s.Owner))}
+		return &configError{fmt.Errorf("Allowit described policy %s of owner %s, not the policy in ALLOWIT_TOKEN", orUnset(s.PolicyID), orUnset(s.Owner))}
 	}
 	for _, action := range []string{"judge", "transactions", "status", "skill"} {
 		raw, ok := s.Endpoints[action]
 		if ok && !cfg.isRoute(action, raw) {
-			return &configError{fmt.Errorf("AllowIt reported the %s endpoint %q, which is not %s; check ALLOWIT_URL", action, raw, cfg.route(action))}
+			return &configError{fmt.Errorf("Allowit reported the %s endpoint %q, which is not %s; check ALLOWIT_URL", action, raw, cfg.route(action))}
 		}
 	}
 	if s.Network == "" {
-		return unsupportedf("AllowIt did not report the policy's network")
+		return unsupportedf("Allowit did not report the policy's network")
 	}
 	net, ok := networks[s.Network]
 	if !ok {
-		return unsupportedf("AllowIt reports network %q, which this CLI does not support", s.Network)
+		return unsupportedf("Allowit reports network %q, which this CLI does not support", s.Network)
 	}
 	labels := []struct {
 		name, value string
@@ -133,10 +133,10 @@ func (s *Skill) check(cfg *Config) error {
 	}
 	if c := s.Contract; c != nil {
 		if c.Version != 1 {
-			return unsupportedf("AllowIt published skill contract version %d; this CLI supports version 1", c.Version)
+			return unsupportedf("Allowit published skill contract version %d; this CLI supports version 1", c.Version)
 		}
 		if c.Binding.SourceHash != "" && s.SourceHash != "" && c.Binding.SourceHash != s.SourceHash {
-			return unsupportedf("AllowIt published a contract bound to source %s for policy source %s", short(c.Binding.SourceHash), short(s.SourceHash))
+			return unsupportedf("Allowit published a contract bound to source %s for policy source %s", short(c.Binding.SourceHash), short(s.SourceHash))
 		}
 		labels = append(labels, []struct {
 			name, value string
@@ -148,7 +148,7 @@ func (s *Skill) check(cfg *Config) error {
 			continue // not published by this service
 		}
 		if k, ok := l.known[l.value]; !ok || k != net {
-			return unsupportedf("AllowIt reports %s %q for network %q, which this CLI does not support", l.name, l.value, s.Network)
+			return unsupportedf("Allowit reports %s %q for network %q, which this CLI does not support", l.name, l.value, s.Network)
 		}
 	}
 	return nil
@@ -194,11 +194,11 @@ func (s *Skill) planSupport(memoData, calls bool) error {
 	case c == nil:
 		return nil
 	case !c.Capabilities.ExecutionPlans:
-		return errors.New("AllowIt does not accept execution plans for this policy; send a plain request with --amount and --action")
+		return errors.New("Allowit does not accept execution plans for this policy; send a plain request with --amount and --action")
 	case memoData && !c.Capabilities.MemoData:
-		return errors.New("AllowIt does not accept --memo or --data for this policy")
+		return errors.New("Allowit does not accept --memo or --data for this policy")
 	case calls && !c.Capabilities.ContractCalls:
-		return errors.New("AllowIt does not accept --before or --after contract calls for this policy")
+		return errors.New("Allowit does not accept --before or --after contract calls for this policy")
 	}
 	return nil
 }

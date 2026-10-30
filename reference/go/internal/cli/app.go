@@ -1,5 +1,5 @@
 // Package cli implements the allowit command: a thin, strict client for an
-// AllowIt policy's harness API. Policy enforcement stays on the server.
+// Allowit policy's harness API. Policy enforcement stays on the server.
 package cli
 
 import (
@@ -16,7 +16,7 @@ import (
 
 const Version = "0.3.0-dev"
 
-const usage = `allowit sends actions through an AllowIt policy and runs the
+const usage = `allowit sends actions through an Allowit policy and runs the
 owner's policy lifecycle.
 
 Configuration (environment only):
@@ -30,7 +30,7 @@ Commands:
   allowit exec   POLICY [request flags]     submit the request
   allowit status POLICY REQUEST_ID [--wait 60s] [--json]
   allowit policy generate|deploy|fund|execute|status|revoke|withdraw|tune ...
-                 owner lifecycle through the AllowIt SDK CLI; no token
+                 owner lifecycle through the Allowit SDK CLI; no token
                  needed (see allowit policy help)
   allowit version
 
@@ -219,7 +219,7 @@ func (c *client) skill() (*Skill, map[string]any, error) {
 	}
 	var s Skill
 	if err := remarshal(raw, &s); err != nil {
-		return nil, nil, unsupportedf("AllowIt returned a policy description this CLI cannot read: %v", err)
+		return nil, nil, unsupportedf("Allowit returned a policy description this CLI cannot read: %v", err)
 	}
 	if err := s.check(c.cfg); err != nil {
 		return nil, nil, err
@@ -278,13 +278,13 @@ func (a App) show(args []string, out, errOut printer) (int, error) {
 	return exitOK, nil
 }
 
-// showPolicy prints what AllowIt published; fields a service omits are left
+// showPolicy prints what Allowit published; fields a service omits are left
 // out or marked, never shown empty.
 func showPolicy(p printer, s *Skill, policy string, source bool) {
-	p.printf("AllowIt policy: %s\n", s.title())
+	p.printf("Allowit policy: %s\n", s.title())
 	switch {
 	case s.PolicyID == "":
-		p.printf("Policy:     %s (from ALLOWIT_TOKEN; AllowIt did not report the policy ID)\n", policy)
+		p.printf("Policy:     %s (from ALLOWIT_TOKEN; Allowit did not report the policy ID)\n", policy)
 	case s.Revision > 0 || s.SourceHash != "":
 		p.printf("Policy:     %s (revision %d, source %s)\n", s.PolicyID, s.Revision, short(s.SourceHash))
 	default:
@@ -407,7 +407,7 @@ func (a App) request(kind string, args []string, out, errOut printer) (int, erro
 	if err := c.call("POST", action, encodeJSON(body), &r); err != nil {
 		var un *uncertainError
 		if errors.As(err, &un) {
-			return 0, fmt.Errorf("%w\nThe request may have reached AllowIt. Do not retry with a new request ID. Retry only by rerunning the same command with --request-id %s: AllowIt applies a request ID at most once", err, body.RequestID)
+			return 0, fmt.Errorf("%w\nThe request may have reached Allowit. Do not retry with a new request ID. Retry only by rerunning the same command with --request-id %s: Allowit applies a request ID at most once", err, body.RequestID)
 		}
 		// 409: this ID already names a request with other details, which
 		// may have been applied. That is never "nothing happened".
@@ -421,10 +421,10 @@ func (a App) request(kind string, args []string, out, errOut printer) (int, erro
 	// Replay metadata belongs to the submission, not the later status reads.
 	// Keep it even when polling replaces the response with the current state.
 	replayed, createdAt := r["replayed"] == true, r["createdAt"]
-	// From here AllowIt has accepted the request: any failure to read its
+	// From here Allowit has accepted the request: any failure to read its
 	// result is uncertain, never a rejection.
 	unknown := func(err error) error {
-		msg := fmt.Sprintf("%v\nAllowIt accepted %s request %s", err, kind, body.RequestID)
+		msg := fmt.Sprintf("%v\nAllowit accepted %s request %s", err, kind, body.RequestID)
 		next := ""
 		if id := str(r["requestId"]); requestIDPattern.MatchString(id) {
 			msg += " (server requestId " + id + ")"
@@ -438,7 +438,7 @@ func (a App) request(kind string, args []string, out, errOut printer) (int, erro
 	if str(r["outcome"]) == "pending" {
 		id := str(r["requestId"])
 		if !requestIDPattern.MatchString(id) {
-			return 0, unknown(errors.New("AllowIt returned a pending result without a valid requestId"))
+			return 0, unknown(errors.New("Allowit returned a pending result without a valid requestId"))
 		}
 		next, err := a.poll(c, id, *wait, r, kind, s.net())
 		if err != nil {
@@ -524,7 +524,7 @@ func (a App) status(args []string, out, errOut printer) (int, error) {
 		}
 	}
 	if net == netUnknown && needsNetwork(r) {
-		return 0, &uncertainError{fmt.Errorf("AllowIt reported outcome %q with status %q for request %s, but the policy's network could not be established, so the CLI cannot tell a Local dev mock recording from a wallet transfer. Nothing is confirmed as recorded, signed or paid. Check again with allowit status once allowit show works", str(r["outcome"]), str(r["status"]), pos[1])}
+		return 0, &uncertainError{fmt.Errorf("Allowit reported outcome %q with status %q for request %s, but the policy's network could not be established, so the CLI cannot tell a Local dev mock recording from a wallet transfer. Nothing is confirmed as recorded, signed or paid. Check again with allowit status once allowit show works", str(r["outcome"]), str(r["status"]), pos[1])}
 	}
 	res := classify(r, "status")
 	if *asJSON {
@@ -568,9 +568,9 @@ func checkStatus(r map[string]any, id string, net netKind) error {
 		return err
 	}
 	if got := str(r["requestId"]); got == "" {
-		return errors.New("AllowIt returned a status without its requestId")
+		return errors.New("Allowit returned a status without its requestId")
 	} else if got != id && str(r["clientRequestId"]) != id {
-		return fmt.Errorf("AllowIt returned the status of a different request (%s)", got)
+		return fmt.Errorf("Allowit returned the status of a different request (%s)", got)
 	}
 	return nil
 }
@@ -588,7 +588,7 @@ func (c *client) lookup(policy, id string) (map[string]any, error) {
 	r = nil
 	err = c.call("POST", "status", encodeJSON(map[string]string{"clientRequestId": id}), &r)
 	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
-		return nil, &uncertainError{fmt.Errorf("AllowIt has no request %s for this policy yet. If an exec with --request-id %s may have been sent, rerun that identical command: AllowIt applies a request ID at most once", id, id)}
+		return nil, &uncertainError{fmt.Errorf("Allowit has no request %s for this policy yet. If an exec with --request-id %s may have been sent, rerun that identical command: Allowit applies a request ID at most once", id, id)}
 	}
 	return r, err
 }

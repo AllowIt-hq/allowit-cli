@@ -125,7 +125,7 @@ func TestPolicyStartFailureIsConfigError(t *testing.T) {
 	env, _ := sdkEnv(t)
 	env["ALLOWIT_NODE"] = "/opt/node22/bin/node"
 	r := runPolicy(t, env, func(Command) (int, error) { return 0, errors.New("executable file not found") }, "policy", "status")
-	if r.code != exitConfig || r.commands[0].Path != "/opt/node22/bin/node" || !strings.Contains(r.stderr, "cannot run the AllowIt SDK CLI with /opt/node22/bin/node") {
+	if r.code != exitConfig || r.commands[0].Path != "/opt/node22/bin/node" || !strings.Contains(r.stderr, "cannot run the Allowit SDK CLI with /opt/node22/bin/node") {
 		t.Fatalf("%+v", r)
 	}
 }

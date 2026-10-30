@@ -14,7 +14,7 @@ Commands read `GET …/skill` before sending to `judge` or `transactions`.
 
 Omitted `title`, `policyId`, `owner`, `endpoints`, `capabilities` and `contract` remain valid.
 `show` falls back from `title` to `name`.
-Without a reported policy ID, it prints the token's policy ID marked as not reported by AllowIt.
+Without a reported policy ID, it prints the token's policy ID marked as not reported by Allowit.
 
 ## Response validation
 

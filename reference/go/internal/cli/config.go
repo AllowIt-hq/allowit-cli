@@ -19,7 +19,7 @@ type Config struct {
 	CAFile string
 }
 
-// AllowIt issues 32-character URL-safe secrets; 16 is a floor that keeps the
+// Allowit issues 32-character URL-safe secrets; 16 is a floor that keeps the
 // secret-part redaction in scrubber from matching ordinary short words.
 var (
 	idPattern     = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
@@ -42,7 +42,7 @@ func loadConfig(getenv func(string) string) (*Config, error) {
 // for loopback hosts, which exist only for local development and tests.
 func parseOrigin(raw string) (string, error) {
 	if raw == "" {
-		return "", errors.New("set ALLOWIT_URL to the AllowIt service origin, e.g. https://allowit.example")
+		return "", errors.New("set ALLOWIT_URL to the Allowit service origin, e.g. https://allowit.example")
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Opaque != "" || u.Host == "" || u.Hostname() == "" {
