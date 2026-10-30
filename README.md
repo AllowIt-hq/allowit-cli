@@ -25,7 +25,7 @@ allowit status my-policy pay-001-exec --wait 60s
 
 An agent that can pay for things needs a careful tool between itself and the money. `allowit` is that tool.
 
-- **One static binary.** Written in Rust, no Node or Python runtime needed. The CLI is a thin adapter over the pinned [Allowit SDK](https://github.com/AllowIt-hq/allowit-sdk) client facade, which owns command orchestration, receipt validation and recovery.
+- **One static binary.** Written in Rust, no Node or Python runtime needed. The CLI is a thin adapter over the pinned [Allowit SDK](https://github.com/allowit-hq/allowit-sdk) client facade, which owns command orchestration, receipt validation and recovery.
 - **Policy first.** `eval` asks "may I?" and spends nothing. `exec` submits the request. `status` recovers whatever happened. Every answer comes with a stable state and exit code your agent can branch on.
 - **Secrets stay put.** Tokens are read from the environment only, never from flags or URLs. They are scrubbed from everything the CLI prints. Agent keys are generated locally with private file modes and never leave the machine.
 - **Safe by default on the wire.** HTTPS origins only (plain HTTP just for localhost), no redirects, a 60 s timeout, and bounded request and response sizes.
@@ -130,7 +130,7 @@ When the CLI exits **5 (uncertain)**, payment may have happened. Never pick a ne
 | 2 | usage | Invalid flags or input. Nothing was sent. |
 | 3 | config/auth | Bad configuration, policy mismatch, untrusted TLS or an unsupported policy description. Nothing was sent. |
 | 4 | rejected | The server rejected the request (400/429) before accepting it. |
-| 5 | uncertain | Network or server failure, an unreadable result, or an ID reused with other details. Retry only as printed. |
+| 5 | uncertain | Network or server failure, an unreadable result, an ID reused with other details, or a `status` that finds no request. Retry only as printed. |
 | 6 | `replayed` | A derived request ID matched an identical earlier request. Nothing new was submitted. |
 | 10 | `owner_signature`, `ready` | Passed, but the owner must sign or the network must confirm. |
 | 11 | `awaiting_input` | The owner must answer the printed question in Allowit. |
@@ -154,7 +154,7 @@ The parent directory must be private (`0700`). New key files are `0600` and neve
 
 ### Owner policy lifecycle
 
-`allowit policy` drives a policy vault through the pinned native Rust SDK. It needs no `ALLOWIT_TOKEN` and does not read `ALLOWIT_URL`.
+`allowit policy` drives a policy vault through the pinned native Rust SDK. It needs no `ALLOWIT_TOKEN`; `deploy` reads `ALLOWIT_URL` only to build the owner's browser signing link.
 
 ```sh
 allowit policy generate "Spend up to 5 test tokens per day"   # prints the generated Rust policy source
@@ -224,8 +224,8 @@ make dist                                   # static Linux/musl distribution wit
 
 `allowit-cli` is one piece of the Allowit system:
 
-- [allowit-sdk](https://github.com/AllowIt-hq/allowit-sdk): the restricted Rust policy language, compiler, evaluator and the client facade this CLI wraps.
-- [allowit-contracts-solana](https://github.com/AllowIt-hq/allowit-contracts-solana), [allowit-contracts-stellar](https://github.com/AllowIt-hq/allowit-contracts-stellar) and [allowit-contracts-tempo](https://github.com/AllowIt-hq/allowit-contracts-tempo): the on-chain policy vaults.
+- [allowit-sdk](https://github.com/allowit-hq/allowit-sdk): the restricted Rust policy language, compiler, evaluator and the client facade this CLI wraps.
+- [allowit-contracts-solana](https://github.com/allowit-hq/allowit-contracts-solana), [allowit-contracts-stellar](https://github.com/allowit-hq/allowit-contracts-stellar) and [allowit-contracts-tempo](https://github.com/allowit-hq/allowit-contracts-tempo): the on-chain policy vaults.
 - The Allowit engine and the app at [app.allowit.xyz](https://app.allowit.xyz): where owners write policies, approve requests and issue tokens.
 
 Learn more at [allowit.xyz](https://allowit.xyz).
@@ -242,7 +242,7 @@ Learn more at [allowit.xyz](https://allowit.xyz).
 
 ## Contributing
 
-Issues and pull requests are welcome. Run `make test` before opening a pull request, keep `cargo fmt` and `clippy` clean, and keep the SDK pin verified with `python3 scripts/sync-native-sdk.py verify`. Plans, reviews and run evidence live in the project knowledge repository, not here.
+Issues and pull requests are welcome. Run `make test` before opening a pull request, keep `cargo fmt` and `clippy` clean, and keep the SDK pin verified with `python3 scripts/sync-native-sdk.py verify`.
 
 ## License
 

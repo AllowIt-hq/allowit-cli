@@ -4,7 +4,7 @@ Owner policy lifecycle, local agent wallets, Stellar execution and hosted execut
 
 ## Owner policy lifecycle
 
-`allowit policy` calls the pinned `allowit-native` Rust SDK library. The SDK generates policy parameters, signs locally, keeps its durable journal and talks to the network. These commands need no `ALLOWIT_TOKEN` and do not read `ALLOWIT_URL`. The CLI has no Node runtime or subprocess adapter.
+`allowit policy` calls the pinned `allowit-native` Rust SDK library. The SDK generates policy parameters, signs locally, keeps its durable journal and talks to the network. These commands need no `ALLOWIT_TOKEN`. Only `deploy` reads `ALLOWIT_URL`, to build the owner's browser signing link (default `https://app.allowit.xyz`). The CLI has no Node runtime or subprocess adapter.
 
 Native `policy` commands require a local POSIX filesystem for private, durable journals. On Windows, use Linux/WSL and keep state in the Linux filesystem, not `/mnt/c` or `/mnt/d`. The CLI refuses unsupported platforms before loading keys or creating policy state. Keep existing journals for recovery. Do not regenerate or resubmit an uncertain operation.
 
