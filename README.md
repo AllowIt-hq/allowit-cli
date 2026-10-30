@@ -1,18 +1,40 @@
+<div align="center">
+
 # allowit
 
-`allowit` is a native Rust CLI for Allowit policies. HTTP commands send agent requests through the Allowit service. Commands use the pinned Rust SDK client facade for orchestration, vendor selection, receipt validation and recovery. Agent keys are generated and retained locally. The CLI cannot bypass the policy, owner approval or server request schema.
+*The command line your AI agent uses to spend within the policy you set.*
 
-[Service commands](docs/services.md) cover direct account calls, policy revisions, HTTP tools,
-native Claude/Codex sessions, MCP, account controls and registered seller resources.
+[![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-1.98-orange?style=flat-square&logo=rust)](Cargo.toml)
 
-## Build from source
+**Go on. On your terms.**
 
-Use Rust 1.98 or later; CI pins Rust 1.98.0. Go is needed only for reference and integration tests.
+[What it is](#what-it-is) • [Install](#install) • [First run](#first-run) • [Core commands](#core-commands) • [Wallets and policies](#wallets-and-policies) • [How it talks to the backend](#how-it-talks-to-the-backend) • [Documentation](#documentation)
 
-Native `policy` commands require a local POSIX filesystem for private, durable journals.
-On Windows, use Linux/WSL and keep state in the Linux filesystem, not `/mnt/c` or `/mnt/d`.
-The CLI refuses unsupported platforms before loading keys or creating policy state.
-Keep existing journals for recovery. Do not regenerate or resubmit an uncertain operation.
+</div>
+
+Allowit lets your AI agents spend and invest, within a policy you set. `allowit` is the small native binary that an agent runs to do that: it asks the Allowit service whether an action is allowed, submits it, and reports back with a clear state and exit code. The policy, the owner's approval and the service's request schema always have the final say. The CLI cannot talk its way around any of them.
+
+```sh
+allowit eval  my-policy --request-id pay-001-eval --action transfer --rail solana --op transferUSDC --addr SOLANA_ADDRESS --amount 1
+allowit exec  my-policy --request-id pay-001-exec --action transfer --rail solana --op transferUSDC --addr SOLANA_ADDRESS --amount 1
+allowit status my-policy pay-001-exec --wait 60s
+```
+
+## What it is
+
+An agent that can pay for things needs a careful tool between itself and the money. `allowit` is that tool.
+
+- **One static binary.** Written in Rust, no Node or Python runtime needed. The CLI is a thin adapter over the pinned [Allowit SDK](https://github.com/AllowIt-hq/allowit-sdk) client facade, which owns command orchestration, receipt validation and recovery.
+- **Policy first.** `eval` asks "may I?" and spends nothing. `exec` submits the request. `status` recovers whatever happened. Every answer comes with a stable state and exit code your agent can branch on.
+- **Secrets stay put.** Tokens are read from the environment only, never from flags or URLs. They are scrubbed from everything the CLI prints. Agent keys are generated locally with private file modes and never leave the machine.
+- **Safe by default on the wire.** HTTPS origins only (plain HTTP just for localhost), no redirects, a 60 s timeout, and bounded request and response sizes.
+- **Built for retries.** Every operation carries a request ID. Retry with the same ID and you get the stored result back, never a second payment.
+- **Owner lifecycle too.** `allowit policy` generates, deploys, funds, tunes and closes a policy vault through the native Rust SDK, with owner keys staying on the owner's device.
+
+## Install
+
+You need Rust 1.98 or later (CI pins 1.98.0) and Python 3 for the pinned-SDK check. Go is needed only for the reference and integration tests.
 
 ```sh
 git clone --recurse-submodules https://github.com/allowit-hq/allowit-cli.git
@@ -22,271 +44,206 @@ cargo build --locked --release
 ./target/release/allowit version
 ```
 
-The SDK is the `repos/AllowIt-hq--allowit-sdk` Git submodule. In an existing clone, or after switching to a revision with another SDK pin, run:
+Copy `target/release/allowit` anywhere on your `PATH`. The lockfile pins the complete dependency graph, so `--locked` builds are reproducible.
+
+If you already have a clone, or you switch to a revision that pins another SDK commit, refresh the submodule first:
 
 ```sh
 git submodule update --init --recursive
 ```
 
-Validation and distribution builds:
+> [!NOTE]
+> Native `policy` commands keep private, durable journals on disk and need a local POSIX filesystem. On Windows, use WSL and keep state in the Linux filesystem rather than `/mnt/c`.
+
+## First run
+
+Allowit gives each policy a harness token for its agent. Put the service origin and that token in the environment:
 
 ```sh
-make test                             # Rust tests + Go reference regressions
-make parity                           # original harness cases against Rust
-make integration APP_REPO=/path/to/AllowIt-app
-make dist                             # static Linux/musl distribution
-```
-
-`make dist` requires the `x86_64-unknown-linux-musl` target and a suitable musl linker. CI installs both and uploads `dist/allowit-linux-amd64` with its SHA-256. The lockfile pins the complete dependency graph.
-
-The **Native binaries** workflow validates PRs and supports manual builds of Linux x64 (static musl), macOS Apple Silicon and macOS Intel, with checksums and a source-free smoke test whose PATH has no Node installation. It uploads workflow artifacts; it does not publish a GitHub Release. Windows is not yet validated. Distribution checks must pass for the exact release revision before a release is accepted.
-
-The CLI is independent of the optional hosted-agent runtime. A host can install the same binary used by an external agent; this repository contains no sandbox launcher, supervisor or model proxy.
-
-Each **Native binaries** artifact also includes `allowit-PLATFORM.provenance.json` (schema version 1, kind `rust-native`). It records the binary target and SHA-256, exact CLI commit and source tree, the SDK submodule path, canonical URL, pinned commit and consumed file hashes, and native contract release identity. It is written only after the shared SDK verifier passes and the CLI root's Cargo inputs match the committed source (see **SDK source pin**). Staging consumers should select a trusted workflow run, verify the binary checksum against this manifest, and compare the release identity with their backend before executing a downloaded skill. The manifest describes the workflow build; it is not a signature or a standalone attestation from an arbitrary download.
-
-All commands call Rust modules directly. The binary needs no Node runtime. The Go implementation under `reference/go/` is a differential test oracle; the default command and distribution build use Rust. Its historical Go module path remains unchanged.
-
-Main contains the untagged `0.3.0-dev` implementation. No native Rust GitHub Release has been published. The existing `v0.1.0` and `v0.1.1` tags identify earlier Go releases.
-
-## Configure
-
-Environment only; the token is never accepted as a flag or URL parameter.
-
-```sh
-export ALLOWIT_URL='https://allowit.example'   # exact service origin
-export ALLOWIT_TOKEN='owner.policy.secret'     # the policy's harness token
+export ALLOWIT_URL='https://app.allowit.xyz'    # exact service origin (this is also the default)
+export ALLOWIT_TOKEN='owner.policy.secret'      # the policy's harness token
 # optional: export ALLOWIT_CA_FILE=/path/extra-roots.pem
 ```
 
-The generated `SKILL.md` for a policy contains exactly these two lines.
+Then look at what the policy lets you do:
 
-- `ALLOWIT_URL` must be `https://host[:port]` with no path, query, fragment or credentials. Plain `http` is accepted only for `localhost`/loopback (local development and tests).
+```sh
+allowit show my-policy            # policy, network, budget, rails, checks, original request
+allowit show my-policy --json     # the same as a machine contract, credentials removed
+```
+
+A few rules keep this safe:
+
+- `ALLOWIT_URL` must be `https://host[:port]` with no path, query, fragment or credentials. Plain `http` is accepted only for `localhost` and loopback addresses.
+- The `POLICY` argument must match the token's policy, or the CLI stops before sending anything.
 - Redirects are never followed, so the `Authorization` header cannot leave the origin.
-- The `POLICY` argument must match the token's policy; otherwise the CLI stops before any request.
-- The token and its secret are scrubbed from everything the CLI prints, along with terminal control characters.
-- Requests time out after 60 s; responses are capped at 2 MB, requests at 64 KB.
+- Requests time out after 60 s. Requests are capped at 64 KB and responses at 2 MB.
 
-## Use
+Run `allowit help` at any time for the full command summary.
 
-```sh
-allowit show POLICY                      # policy, network, budget, rails, checks, original request
-allowit show POLICY --json               # machine contract (credentials removed); --source adds the Rust policy
+## Core commands
 
-allowit eval POLICY --request-id dataset-001-eval --rail stellar --op transferXLM --addr G... --amount 5 --action research \
-  --context '{"decision":"Buy dataset","evidence":{"source":"https://...","observed_at":"2026-09-28T12:00:00Z"}}'
-allowit exec POLICY --request-id dataset-001-exec --rail stellar --op transferXLM --addr G... --amount 5 --action research \
-  --context '{"decision":"Buy dataset","evidence":{"source":"https://...","observed_at":"2026-09-28T12:00:00Z"}}'
+| Command | What it does | Spends? |
+|---|---|---|
+| `allowit show POLICY [--json] [--source]` | Describe the policy and the execution profile the service supports. | No |
+| `allowit eval POLICY [request flags]` | Ask whether the policy permits a request. Calls `/judge`. | No |
+| `allowit exec POLICY [request flags]` | Submit the request. Calls `/transactions`. | Yes, if allowed |
+| `allowit status POLICY REQUEST_ID [--wait 60s] [--json]` | Read the stored result of an earlier request. | No |
+| `allowit version` | Print the CLI version. | No |
 
-allowit status POLICY REQUEST_ID [--wait 60s]
-```
+### Request flags
 
-For IDs beginning with `-`, place `--` before `POLICY` (and `REQUEST_ID` for `status`). Flags may follow these identifiers.
-
-USDC transfer with the customer-workspace template (`transfer` and `research` actions):
+`eval` and `exec` take the same flags. `--action` is required; everything else describes the transfer.
 
 ```sh
-allowit eval POLICY --request-id pay-001-eval --rail solana --op transferUSDC --addr SOLANA_ADDRESS --amount 1 --action transfer
-allowit exec POLICY --request-id pay-001-exec --rail solana --op transferUSDC --addr SOLANA_ADDRESS --amount 1 --action transfer
+allowit eval my-policy --request-id dataset-001-eval \
+  --action research --rail stellar --op transferXLM --addr G... --amount 5 \
+  --context '{"decision":"Buy dataset","evidence":{"source":"https://...","observed_at":"2026-09-28T12:00:00Z"}}'
 ```
-
-`eval` calls `/judge`: it checks permission and never spends or reserves budget. `exec` calls `/transactions`.
 
 | Flag | Meaning |
 |---|---|
-| `--action` | **Required.** The action the policy evaluates, sent exactly as given (e.g. `transfer`, `research`). |
-| `--rail solana\|stellar`, `--op transferSOL\|transferXLM\|transferUSDC` | Transport only: the transfer on a rail. `--rail` and `--op` are always given together. `--op` is never sent as the action. Local dev: the rails the service publishes (Solana SOL/USDC, Stellar XLM/USDC; mock plan). Wallet networks: `--rail solana --op transferUSDC` only (enforced by the CLI, whatever the service advertises). |
-| `--addr` | Recipient (Solana base58 or Stellar G/M/C strkey), checked offline and again by the server. |
-| `--amount` | Exact decimal. Without `--rail` and `--op`, the USDC amount. With them, the transferred asset's quantity: the USDC amount for `transferUSDC`, and for a Local dev SOL or XLM plan the quantity the CLI converts to the USDC charge. |
-| `--merchant` | Optional merchant. |
-| `--context JSON\|@file\|-` | Runtime context object. Forwarded as the exact JSON value; numbers are never converted. |
-| `--memo`, `--data TEXT\|@file` | Local dev plan memo and payload bytes (base64-encoded by the CLI). |
-| `--before`, `--after JSON\|@file` | Local dev contract calls: `[{"type":"contract_call","contract":"...","method":"...","args":{},"maxCostUSDC":"0"}]`. |
-| `--request-id` | Explicit client request ID (8–100 chars). |
-| `--budget` | Assert the computed USDC charge. |
+| `--action NAME` | **Required.** The action the policy evaluates, sent exactly as given, for example `transfer` or `research`. |
+| `--rail solana\|stellar --op transferSOL\|transferXLM\|transferUSDC` | The transfer on a rail. Always given together. `--op` is transport only and is never sent as the action. |
+| `--addr ADDRESS` | Recipient: Solana base58 or Stellar G/M/C strkey. Checked offline, then again by the server. |
+| `--amount DECIMAL` | Exact decimal quantity of the transferred asset. Without `--rail` and `--op`, the USDC amount. |
+| `--merchant NAME` | Optional merchant. |
+| `--context JSON\|@file\|-` | Runtime context object, forwarded as the exact JSON value. At most 16 KB, depth 8 and 128 values. |
+| `--request-id ID` | Explicit client request ID, 8 to 100 characters. Strongly recommended. |
+| `--budget DECIMAL` | Assert the computed USDC charge before sending. |
+| `--wait DURATION` | How long to wait for a pending evaluation. Default `60s` for `eval`/`exec`, `0s` for `status`. |
 | `--json` | Machine-readable output. |
 
-**Budget charge.** Local dev uses integer arithmetic: `ceil_to_0.000001(quantity × rate) + Σ maxCostUSDC`. `/skill` publishes test rates: SOL 100, XLM 0.1, USDC 1.
+For an ID that begins with `-`, put `--` before `POLICY` (and before `REQUEST_ID` for `status`).
 
-**Actions.** Missing `--action` exits 2 before sending. To retry a 0.1.1 request that omitted it, set `--action` to its original `--op`. Keep every other flag. Explicit actions retain the same request body and derived ID.
+### Request IDs and retries
 
-**Request IDs.** Give each operation its own `--request-id`, including separate IDs for `eval` and `exec`. Retry unchanged with the same ID. The server returns the stored result and rejects changed details. Without this flag, identical purchases share a derived ID. It hashes owner, policy, command and exact request (plan, not rate-derived charge, for Local dev). Policy revision, source hash and test rates do not affect it. The CLI prints the ID and budget charge on stderr before sending. Network failures and HTTP 502/503/504 retry twice with the same body.
+Give each intended operation its own `--request-id`, with separate IDs for `eval` and `exec`. Retrying with the same ID and the same details returns the stored result; changed details are rejected. Network failures and HTTP 502/503/504 are retried twice with the same body.
 
-**Uncertain results (exit 5).** Payment may have occurred. Never choose a new ID. Follow the printed retry or status command:
+When the CLI exits **5 (uncertain)**, payment may have happened. Never pick a new ID. Rerun the identical command, or check it with `allowit status`, which accepts either the server `requestId` or your `--request-id`.
 
-- Without an answer, rerun unchanged with the printed `--request-id`. Changed details, including a changed charge, leave the original unresolved. Check `status`.
-- After acceptance, an unreadable result prints both client and server IDs. Run `allowit status --wait 60s -- POLICY ID` with either ID, or retry with the client ID. If neither ID resolves, the exec may still be in flight. Rerun that identical exec.
-
-**Replays.** Stored results carry `replayed: true`. Explicit-ID retries retain the stored state and exit code. Derived-ID repeats return `state: replayed`, exit 6 and `replayedState`. Neither submits anything new.
-
-**Input and output.** Duplicate request flags exit 2. Multiline server text prints as one quoted value. `--context` requires one JSON object: maximum 16 KB, depth 8 and 128 values. Repeated keys and top-level `allowitExecution` are forbidden. The server applies the same limits.
-
-**Protocol checks.** The CLI checks `/skill`, canonical routes, networks and response states. Inconsistent responses remain uncertain. `status` can recover without a usable policy description, subject to authentication, routing and state checks. It never resends `judge` or `transactions`. See [HTTP API contract](docs/http-api.md) for exact validation and recovery rules.
-
-## Owner policy lifecycle
-
-`allowit policy` calls the pinned `allowit-native` Rust SDK library. The SDK generates policy parameters, signs locally, keeps its durable journal and talks to the network. These commands need no `ALLOWIT_TOKEN` and do not read `ALLOWIT_URL`. The CLI has no Node runtime or subprocess adapter.
-
-```sh
-allowit policy generate "Spend up to 5 test tokens per day"   # prints the generated Rust source
-allowit policy deploy 25                    # print the owner browser signing link
-allowit policy fund 25                      # prints the transaction's explorer link
-allowit policy execute RECIPIENT_TOKEN_ACCOUNT 1.5
-allowit policy status
-allowit policy revoke
-allowit policy withdraw 10
-allowit policy close
-allowit policy tune 0.5
-allowit policy tune-action 0.25
-allowit policy help                         # or: allowit policy COMMAND --help
-```
-
-| Command | Arguments |
-|---|---|
-| `generate` | Exactly one `PROMPT`. Quote it; several words unquoted are refused. Put `--` before a prompt that begins with `-`. |
-| `status`, `revoke`, `close` | None. |
-| `deploy`, `fund`, `withdraw` | One positive decimal `AMOUNT` (e.g. `5`, `0.25`). `deploy` binds this initial funding in the browser signing intent. |
-| `execute` | `RECIPIENT` (a Solana token account address, checked offline) and a positive decimal `AMOUNT`. |
-| `tune`, `tune-action` | One non-negative daily or per-action limit `VALUE`. |
-
-Decimals are plain digits with an optional fraction: no sign, exponent, separator, leading zero or bare `.`, at most 40 characters. The SDK checks precision and limits. Every command accepts `--json`, which asks the SDK for a machine-readable result on stdout; any other flag is refused. Invalid arguments exit 2 before anything runs.
-
-**Network.** Testnet by default. `ALLOWIT_NETWORK=solana:devnet` selects Devnet explicitly; configure its RPC as well. Mainnet is refused. Generate never signs. Execute needs `ALLOWIT_OWNER` (public key), the executor key, and the imported scoped server capability; the authority key remains server-side. Status needs no secret signing key. Owner keys stay on the owner device.
-
-**Native lifecycle exits.** 0 settled/new generation or status, 5 uncertain, 6 replay of an earlier settled operation, 20 policy denial or finalized failure, 3 configuration. `ALLOWIT_REQUEST_ID` identifies a new intended operation; keep it unchanged for retries.
-
-An expired unsigned server approval exits 3 with its original request ID and never requests an executor signature. The scoped executor endpoint returns that same stored approval on a retry; it cannot refresh it. Retain the original ID and approval, then have the owner authorize an explicit replacement before selecting a fresh ID. A settled `close` retry verifies and replays the saved receipt (exit 6) after the vault accounts disappear. A new close ID still requires a live vault, and a recreated vault uses its current instance instead of the old close receipt.
-
-**Local configuration.** `ALLOWIT_POLICY_DIR` defaults to `.allowit`; `ALLOWIT_POLICY_FILE` may select another policy file. `ALLOWIT_NETWORK`, `ALLOWIT_RPC_URL`, `ALLOWIT_MINT`, `ALLOWIT_EXECUTOR`, `ALLOWIT_AUTHORITY`, and `ALLOWIT_DEPLOYMENT_FILE` configure the native profile. Import persists a public context and refuses conflicting configuration. `ALLOWIT_OWNER_KEYPAIR` is used for local owner operations other than deployment. `ALLOWIT_EXECUTOR_KEYPAIR` is used for execution. `ALLOWIT_OWNER` supplies the public owner for browser deployment and execution/status. Deployment never loads an owner private key. Keys are private local files. `ALLOWIT_REQUEST_ID` is required for execution and is the durable operation ID. `ALLOWIT_EXECUTION_ACTION` defaults to `transfer`; `ALLOWIT_EXECUTION_MERCHANT` and one of `ALLOWIT_EXECUTION_CONTEXT_JSON` or `ALLOWIT_EXECUTION_CONTEXT_FILE` supply the exact policy input. Context is sent to the trusted backend, so do not put credentials in it. Only an explicitly additional fund/withdraw uses both a fresh ID and `ALLOWIT_ADDITIONAL_OWNER_OPERATION=1` after an expired uncertain operation.
-
-**SDK source pin.** The CLI has one runtime dependency, `allowit-client`, from the pinned SDK submodule.
-The facade links Tempo and Solana vendor crates at exact Git revisions. Vendors depend on shared core functions.
-The Tempo implementation lives in `allowit-contracts-tempo/rust`; PaySH lives in `allowit-contracts-solana/crates/solana-vendor`.
-`vendor/native-sdk.json` binds the resolved first-party graph, source files, features and licenses.
-
-The published Tempo vendor is verified at its exact canonical Git revision. The SDK's `tempo-rust` compatibility
-package reexports that vendor. Current schema 2 attests the resolved facade, vendors and core package graph.
-The `ALLOWIT_TEMPO_REVIEW_MANIFEST` mode applies only to the historical schema 1 fixture and earlier SDK base.
-It cannot produce current release provenance or license packages.
-
-```sh
-python3 scripts/sync-native-sdk.py verify              # run by make test/parity/build/dist, CI, provenance and license packaging
-python3 scripts/sync-native-sdk.py update FULL_COMMIT  # check out an exact SDK commit, record and stage it
-python3 scripts/sync-native-sdk.py pin                 # record and stage the checked-out submodule commit
-```
-
-`verify` checks the canonical SDK gitlink and immutable first-party Cargo graph. The CLI's only runtime dependency
-is the SDK facade. The graph includes the facade, shared client core, policy core, native Solana library,
-Stellar library, Tempo vendor and Solana vendor. Each package resolves to its recorded canonical repository,
-exact revision, source inventory, enabled features and license text. First-party build scripts, `links`,
-Cargo path overrides, discovery changes and source substitutions fail verification.
-
-Checked-out files must match immutable Git blobs. The verifier rejects hidden source changes, local Git filters,
-index flags and replacement refs. Cargo discovery inputs between the CLI root and SDK remain bound.
-`pin` records the checked-out clean SDK revision and stages the gitlink and graph metadata together.
-License packaging includes the unchanged first-party and registry notices.
-
-Binary provenance additionally requires a clean parent status and binds the CLI root's Cargo inputs to committed `HEAD`, including ignored files and changes hidden by index flags. Generated `target/` and `dist/` stay ignored. These checks cover Cargo discovery from the SDK crate through the CLI root. Directories above the CLI checkout, `CARGO_HOME`, environment variables and the Rust toolchain are trusted build context; they are neither checked nor recorded.
-
-**Hosted execution authorization.** A backend-exported executor bundle contains `audit: {origin, token}`. Import saves this policy-scoped capability in the private local journal. The CLI sends only the high-level action, merchant, context, recipient and amount to `POST /api/native/execute`; the backend evaluates the owner-bound policy and returns an authority-only signature over its exact prepared transaction. The CLI reconstructs and checks the approval commitment, signer set, instructions and message, adds only the executor signature, persists the complete proof, then requires a durable `POST /api/native/report` acknowledgment before chain broadcast. Identical retries reconcile the saved proof without obtaining another approval or allocating another payment. Missing, redirected or inconsistent responses block broadcast or produce exit 5. `policy status` retries reporting without signing or broadcasting. The token is never printed; the executor bundle and journal contain this private capability and must not be shared publicly. Denial, unresolved owner input, or a required provider failure produces no execution signature. Owner operations remain independent of the provider and authority.
-
-## Tempo payments and API calls
-
-Use `allowit tempo` with an owner-exported executor bundle for native vault payments and paid API requests. See [Tempo usage](docs/tempo.md) for configuration, commands and recovery.
-
-## PaySH agent calls
-
-`allowit paysh` serves operations recorded under an existing PaySH policy and its scoped capability. Do not deploy a separate PaySH policy or export a new capability for it. The backend journal keeps each original operation; recovery uses the same `POLICY`, `OPERATION_ID` and, for `call`, the identical `SERVICE_ID` and input. The agent sets `ALLOWIT_URL` and `ALLOWIT_PAYSH_TOKEN`; no signing key is read.
-
-```sh
-allowit paysh services
-allowit paysh call POLICY OPERATION_ID SERVICE_ID '{"location":{"latitude":43.6532,"longitude":-79.3832},"universalAqi":true}'
-allowit paysh status POLICY OPERATION_ID
-```
-
-`call` sends `POST /api/paysh/call` with `{policyId, operationId, serviceId, input}` and the capability as bearer; `status` sends `POST /api/paysh/status` with `{policyId, operationId}`; `services` sends `GET /api/paysh/catalog` without credentials and lists either the public catalog's `providers` or a cooperating backend's `{profile: "cooperating-v1", services}`; a cooperating price is shown as test-token units only on `solana:testnet`, never as USD or USDC, and a malformed list exits 3. Each request is sent once with no redirect. `ALLOWIT_URL` must be an HTTPS origin, or HTTP on loopback. `INPUT_JSON` is limited to 4096 bytes and replies to 1 MiB. Payment and delivery are printed separately; `--json` adds `state` and `exitCode` to the server reply.
-
-Exits: 0 only when the API response was delivered; 12 pending (payment or delivery not complete, including `awaiting_input`, where the owner must answer in Allowit Requests, and `owner_approved`, a signed Yes for this original request only that establishes no payment; keep the same `OPERATION_ID`); 20 failed, denied or expired, with no delivery (`expired` means the answer-and-start deadline passed; it is not an owner denial); 5 unknown (network or server failure, redirect, unreadable or mismatched reply, HTTP 409, a `status` that finds no operation, operation status `unknown`/`settlement_unknown`, a failed, denied or expired operation with any receipt other than a swap, or an expired operation with a signature that has no receipt: the operation remains unresolved and payment may have been sent, neither failed nor delivered); 2 usage; 3 configuration or auth. After exit 5, never use a new `OPERATION_ID` for the same call: run the printed `allowit paysh status` command or rerun the identical call. The capability is redacted from all output.
-
-## States and exit codes
+### Exit codes
 
 | Exit | State | Meaning |
 |---|---|---|
-| 0 | `passed` | eval: the policy permits the request. |
-| 0 | `recorded` | Local dev exec: mock action recorded against the budget; no funds moved. |
-| 0 | `settled` | Wallet transfer confirmed on chain. |
-| 10 | `owner_signature` | Wallet transaction passed (or was submitted); the owner must sign in Allowit or the network must confirm. |
-| 10 | `ready` | Passed but the server did not say whether it is a judgment or a transaction; not complete. |
+| 0 | `passed`, `recorded`, `settled` | Allowed, mock-recorded, or confirmed on chain. |
+| 2 | usage | Invalid flags or input. Nothing was sent. |
+| 3 | config/auth | Bad configuration, policy mismatch, untrusted TLS or an unsupported policy description. Nothing was sent. |
+| 4 | rejected | The server rejected the request (400/429) before accepting it. |
+| 5 | uncertain | Network or server failure, an unreadable result, or an ID reused with other details. Retry only as printed. |
+| 6 | `replayed` | A derived request ID matched an identical earlier request. Nothing new was submitted. |
+| 10 | `owner_signature`, `ready` | Passed, but the owner must sign or the network must confirm. |
 | 11 | `awaiting_input` | The owner must answer the printed question in Allowit. |
 | 12 | `pending` | Still evaluating after `--wait`. |
-| 20 | `denied` | The policy refused; the reason is printed. |
-| 2 | usage | Invalid flags or input; nothing sent. |
-| 3 | config/auth/unsupported | Bad configuration, policy mismatch, untrusted TLS, redirect on `GET /skill`, HTTP 401/403 before a request is accepted, or a policy description that names another owner, policy or route, or an unknown network, profile or contract version. Nothing was sent to `judge` or `transactions`. |
-| 4 | rejected | Server rejected the request (400/429) before accepting it; its message is printed. |
-| 5 | uncertain | Network or server failure, an accepted request whose result could not be read, a `--request-id` already used with other details (HTTP 409), or a `status` that finds no request; follow the printed retry (same `--request-id`) or `allowit status` command. |
-| 6 | `replayed` | exec/eval without `--request-id` matched an identical earlier request; nothing new was submitted. `replayedState` is its stored state. |
+| 20 | `denied` | The policy refused. The reason is printed. |
 
-`status` reads by the server `requestId`, then by the client `--request-id` (`clientRequestId`); the returned request must carry the requested ID as one of them. It uses the server's `kind`: a ready `judgment` is `passed`, a ready `transaction` is `owner_signature`. All fields the server returns (reason, prompt, `decisionCode`, `workflowNodeId`, revision, source hash, receipt steps) are printed.
+The full validation and recovery rules are in [Commands](docs/commands.md) and the [HTTP API contract](docs/http-api.md).
 
-The configured token is redacted in full from all output, whatever its length. Its secret part must be 16–128 URL-safe characters.
+## Wallets and policies
 
-## API used
+### Local agent wallets
 
-HTTP action commands use `GET /api/harness/{owner}/{policy}/skill` and `POST` routes for `judge`, `transactions` and `status`, with the policy-scoped bearer token. The frontend proxies this public API to the Rust backend in `allowit-hq/allowit-engine/crates/server/` (the engine's root `server/` is its deployment wrapper). The CLI does not link backend or engine crates.
-
-The HTTP commands report server states and preserve owner approval. Native `policy execute` uses the executor's local key plus the trusted server authority signature and cannot sign owner operations. Owner withdrawal and closure never depend on the executor, authority, or semantic provider.
-
-The [integration checks](integration/README.md) retain pinned Go gateways and their Rust SDK runtimes as compatibility fixtures. They do not represent a production deployment. Run `make integration APP_REPO=/path/to/AllowIt-app` alongside `make test` when both fixture commits are available locally.
-
-## License and binary notices
-
-First-party code is licensed under [MIT](LICENSE). Dependency licenses remain their own; [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES/README.md) contains the exact dependency notices and runtime attribution for current and historical workflow binaries. Keep this companion directory with downloaded binaries. New workflow artifacts include it with `LICENSE`, the checksum and provenance manifest. The SDK's own notices are copied unchanged from the verified submodule into `THIRD_PARTY_LICENSES/AllowIt-sdk/` at packaging time.
-
-Skill format: [Agent Skills specification](https://agentskills.io/specification) and [best practices](https://agentskills.io/skill-creation/best-practices).
-
-## Stellar execution
-
-Create `ALLOWIT_TOKEN` in the owner browser from the public deployment metadata and the customer's signing key. Pass the token in the agent prompt. The CLI decodes the token and signs requests locally. It never reads the backend environment or sends the token or signing key to the server. `ALLOWIT_URL` defaults to `https://app.allowit.xyz`; set it only to use another trusted service origin.
-
-The token has no automatic expiration. The server does not store or recover it. If it is lost, use the owner account to undeploy the policy on chain. Request signatures and prepared transactions have their own short validity windows; these do not expire the customer token.
-
-Run `allowit exec POLICY --request-file request.json --wait 0s`. The file uses the canonical typed request envelope:
-
-```json
-{"requestId":"stable-request-001","input":{"kind":"execution-request","request":{}}}
-```
-
-Replace `request` with the complete installed-profile `ExecutionRequest`. Its operation nonce is SHA-256 of UTF-8 `allowit-workflow-operation-v1`, NUL, the exact policy ID, NUL and the exact request ID. Amounts use native Stellar base units. The CLI checks the token metadata, request, policy source and exact prepared transaction before signing. The server checks the presented customer key against current on-chain authority together with its own signer. The CLI does not validate membership against an old server agent configuration. The existing execute endpoint supplies the engine authorization and submits the exact transaction.
-
-`allowit status POLICY REQUEST_ID --wait 60s` recovers the original transaction. After agent authorization, repeating `exec` with the same ID only queries status. It does not sign or submit again.
-
-An explicit `exec` can continue an unsigned attempt using its exact original prepared bytes. A never-prepared intent can retry preparation with the same ID and input only after status confirms no server record.
-
-Keep the private journal in `.allowit/stellar-journal` in the working directory. It contains public operation proofs, never the token or signing seed. Preserve it after a timeout. A confirmed chain transaction does not establish delivery of an external service.
-
-This mode activates when `ALLOWIT_TOKEN` starts with `allowit-stellar-v1.`. Scalar request flags and curl requests are not part of this Stellar transfer profile.
-
-## Local agent wallet preparation
+Agents hold their own keys. `allowit wallet` creates and inspects them without ever printing a secret:
 
 ```sh
 allowit wallet generate --network solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1 --output /private/path/agent.json
 allowit wallet show --network solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1 /private/path/agent.json
 ```
 
-The parent directory is private (0700). New secret files are 0600 and never replace existing keys.
-Solana uses its native JSON keypair, Tempo uses hex and Stellar uses a StrKey seed. Output contains public metadata only.
-Use that metadata for `setup`; remote account key generation, secret import and secret export are refused.
-Server validation and the server's independent authority do not require the agent's private key.
+The parent directory must be private (`0700`). New key files are `0600` and never overwrite an existing key. Solana uses its native JSON keypair, Tempo a hex key and Stellar a StrKey seed. Output contains public metadata only, which is what `setup` registers with the server. Remote key generation, secret import and secret export are refused. `--network` takes an x402 CAIP-2 identifier.
 
-`--network` accepts x402 CAIP-2 identifiers and must match the wallet or deployment.
-An ambiguous address cannot select a network. Tempo generic execution accepts only its bound token-transfer operation.
+### Owner policy lifecycle
 
-Solana Devnet `policy deploy` requires the public owner and configured public wallet roles, plus `ALLOWIT_REQUEST_ID`.
-It prints a browser link and the intent fingerprint, then exits 10. Compare that fingerprint in the browser before signing.
-The browser requires the exact source, network, amount, deployment, mint, executor and authority.
-The backend's configured executor public key must match the CLI agent key. A mismatch fails before signing.
-A signing link does not establish a finalized deployment. Other rail lifecycle restrictions remain explicit.
+`allowit policy` drives a policy vault through the pinned native Rust SDK. It needs no `ALLOWIT_TOKEN` and does not read `ALLOWIT_URL`.
 
-For an authoritatively expired unsigned browser preparation, choose a new `ALLOWIT_REQUEST_ID` and set
-`ALLOWIT_RETRY_PREPARATION_OF` to the original preparation ID. The browser checks explicit replacement permission.
-Signed uncertain transactions retain their original proof and are never replaced through this option.
+```sh
+allowit policy generate "Spend up to 5 test tokens per day"   # prints the generated Rust policy source
+allowit policy deploy 25           # prints the owner browser signing link
+allowit policy fund 25             # prints the transaction's explorer link
+allowit policy execute RECIPIENT_TOKEN_ACCOUNT 1.5
+allowit policy status
+allowit policy tune 0.5            # daily limit
+allowit policy tune-action 0.25    # per-action limit
+allowit policy withdraw 10
+allowit policy revoke
+allowit policy close
+allowit policy help
+```
+
+Testnet is the default; `ALLOWIT_NETWORK=solana:devnet` selects Devnet and mainnet is refused. `generate` never signs. Deployment opens a browser handoff so the owner signs on their own device; the CLI never loads an owner key for it. Every command accepts `--json`. See [Policies](docs/policy.md) for configuration, Stellar execution and hosted execution authorization.
+
+### More rails and services
+
+- **Tempo** vault payments and paid API calls: `allowit tempo`, documented in [Tempo usage](docs/tempo.md).
+- **PaySH** operations on Solana: `allowit paysh`, documented in [PaySH](docs/paysh.md).
+- **Account and service commands** (`call`, `curl`, `mcp`, `claude`, `codex`, `whoami`, `skills`, `catalog` and friends): [Service commands](docs/services.md).
+
+## How it talks to the backend
+
+Every action command speaks to the Allowit service over a small, policy-scoped HTTP API:
+
+```
+GET  /api/harness/{owner}/{policy}/skill          describe the policy
+POST /api/harness/{owner}/{policy}/judge          eval: check permission, spend nothing
+POST /api/harness/{owner}/{policy}/transactions   exec: bind the request ID, evaluate, reserve, create an owner review
+POST /api/harness/{owner}/{policy}/status         status: return the existing request
+```
+
+The bearer token is the policy's harness token. The CLI reads `/skill` first and checks that the published owner, policy ID, routes, network and execution profile all agree with the token before it sends anything that could spend. The frontend at [app.allowit.xyz](https://app.allowit.xyz) proxies this public API to the Rust backend, the Allowit engine. The CLI does not link engine crates; it only speaks HTTP.
+
+Owner approval lives on the server side of that line. The CLI reports server states and preserves them. Native `policy execute` combines the executor's local key with the trusted server authority signature, and cannot sign owner operations. Owner withdrawal and closure never depend on the executor or the authority.
+
+When `ALLOWIT_TOKEN` starts with `allowit-stellar-v1.`, the CLI switches to the Stellar execution profile: it decodes the token, signs requests locally and submits a typed request file with `allowit exec POLICY --request-file request.json`. Details are in [Policies](docs/policy.md#stellar-execution).
+
+## Project structure
+
+```
+src/                 Thin executable adapter; the SDK client facade owns the commands
+repos/AllowIt-hq--allowit-sdk/   Pinned Allowit SDK Git submodule (the only runtime dependency)
+docs/                Command, policy, HTTP API, Tempo, PaySH, service and build reference
+tests/               Rust integration tests (native, network, Stellar, PaySH, parity, vendor)
+reference/go/        Earlier Go implementation, kept as a differential test oracle
+integration/         Gateway compatibility checks against pinned backend fixtures
+scripts/             SDK pin verification, license packaging and provenance tooling
+vendor/              Recorded first-party dependency graph for the SDK pin
+THIRD_PARTY_LICENSES/   Dependency notices shipped with every binary
+```
+
+## Development
+
+```sh
+make test                                   # Rust tests, lints and Go reference regressions
+make parity                                 # original harness cases against the Rust binary
+make integration APP_REPO=/path/to/AllowIt-app
+make dist                                   # static Linux/musl distribution with checksum and licenses
+```
+
+`make dist` needs the `x86_64-unknown-linux-musl` target and a musl linker. Build, distribution, binary provenance and the SDK source pin are described in [Build and distribution](docs/build.md).
+
+## Allowit
+
+`allowit-cli` is one piece of the Allowit system:
+
+- [allowit-sdk](https://github.com/AllowIt-hq/allowit-sdk): the restricted Rust policy language, compiler, evaluator and the client facade this CLI wraps.
+- [allowit-contracts-solana](https://github.com/AllowIt-hq/allowit-contracts-solana), [allowit-contracts-stellar](https://github.com/AllowIt-hq/allowit-contracts-stellar) and [allowit-contracts-tempo](https://github.com/AllowIt-hq/allowit-contracts-tempo): the on-chain policy vaults.
+- The Allowit engine and the app at [app.allowit.xyz](https://app.allowit.xyz): where owners write policies, approve requests and issue tokens.
+
+Learn more at [allowit.xyz](https://allowit.xyz).
+
+## Documentation
+
+- [Commands](docs/commands.md): request flags, budget charges, replays, uncertain results and exit codes in full.
+- [Policies](docs/policy.md): owner lifecycle configuration, Stellar execution, wallets and hosted execution authorization.
+- [HTTP API contract](docs/http-api.md): exactly what the CLI validates in every response.
+- [Tempo usage](docs/tempo.md) and [PaySH](docs/paysh.md).
+- [Service commands](docs/services.md).
+- [Build and distribution](docs/build.md): toolchains, workflows, provenance, the SDK source pin and licenses.
+- [Gateway compatibility checks](integration/README.md).
+
+## Contributing
+
+Issues and pull requests are welcome. Run `make test` before opening a pull request, keep `cargo fmt` and `clippy` clean, and keep the SDK pin verified with `python3 scripts/sync-native-sdk.py verify`. Plans, reviews and run evidence live in the project knowledge repository, not here.
+
+## License
+
+First-party code is licensed under [MIT](LICENSE). Dependency licenses remain their own; [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES/README.md) carries the exact notices for every binary built from this repository. Keep that directory with any binary you redistribute.

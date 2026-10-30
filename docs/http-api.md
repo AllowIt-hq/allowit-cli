@@ -1,6 +1,6 @@
 # HTTP API contract
 
-See [CLI usage](../README.md#use) for commands and retry rules.
+See [Commands](commands.md) for commands and retry rules.
 
 ## Policy description
 

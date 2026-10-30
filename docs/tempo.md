@@ -1,6 +1,6 @@
 # Tempo usage
 
-See [Build from source](../README.md#build-from-source) to install the CLI.
+See [Install](../README.md#install) to build the CLI.
 
 ## Vault payments
 
